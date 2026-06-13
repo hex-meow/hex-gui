@@ -1,0 +1,122 @@
+# Cross-platform build & release for the Tauri app.
+#
+#   • push to main / PRs    → build all platforms, upload artifacts to the run
+#   • push a tag `v*`       → build all platforms, create a DRAFT GitHub Release
+#                             with every bundle attached
+#   • manual (Run workflow) → build all platforms, upload artifacts
+#
+# Bundles produced per platform (bundle.targets = "all" in tauri.conf.json):
+#   • Linux (ubuntu-22.04) → .deb + .AppImage   (x86-64)
+#   • Windows (windows-latest) → .msi + .exe NSIS installer  (x86-64)
+#   • macOS (macos-latest) → .dmg + .app, built `universal` (Intel + Apple Silicon)
+#
+# ⚠️ PREREQUISITE: src-tauri/Cargo.toml currently uses path deps + a
+# [patch.crates-io] block pointing at sibling crates that live OUTSIDE this
+# repo (../../hex-motor, ../../can-transport, ../../canopen-sdo). A fresh CI
+# checkout cannot resolve them, so this workflow will NOT go green until those
+# are switched to crates.io sources (publish hex-motor, then drop the path deps
+# and the patch block). See the chat notes / README for the exact edits.
+#
+# ⚠️ Bundles here are UNSIGNED. macOS users hit Gatekeeper (right-click → Open);
+# Windows users hit SmartScreen. Add code signing later via tauri-action env.
+
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Needed for the tag-triggered GitHub Release.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest # Apple Silicon runner; builds a universal binary
+            args: "--target universal-apple-darwin"
+            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+          - platform: ubuntu-22.04 # oldest target → forward-compatible glibc / WebKitGTK
+            args: ""
+            rust-targets: ""
+          - platform: windows-latest
+            args: ""
+            rust-targets: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tauri v2 Linux runtime/build deps: WebKitGTK 4.1, GTK3, libsoup3, etc.
+      # libfuse2 lets the AppImage tooling run. (gs_usb uses pure-Rust nusb, so
+      # no libusb/libudev needed.)
+      - name: Install system dependencies (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            build-essential pkg-config libssl-dev \
+            libfuse2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.platform }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # tauri-action runs `npm run build` (beforeBuildCommand) + `tauri build`,
+      # using the local @tauri-apps/cli devDependency. On a tag it creates (or
+      # appends to) the GitHub Release and uploads this platform's bundles.
+      - name: Build Tauri bundles
+        id: tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: ${{ matrix.args }}
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: "hex-motor-gui ${{ github.ref_name }}"
+          releaseDraft: true
+          releaseBody: |
+            Unsigned builds for Linux / Windows / macOS.
+
+            - **Linux** — `.deb` (`sudo apt install ./hex-motor-gui_*.deb`) or `.AppImage` (`chmod +x` then run).
+            - **Windows** — `.msi` or the NSIS `.exe` installer.
+            - **macOS** — `.dmg` (universal, Intel + Apple Silicon). Unsigned: right-click → Open the first time to get past Gatekeeper.
+
+      # For non-tag runs there is no Release, so attach the bundles to the run.
+      - name: Upload artifacts
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: hex-motor-gui-${{ matrix.platform }}
+          path: |
+            src-tauri/target/release/bundle/**/*
+            src-tauri/target/*/release/bundle/**/*
+          if-no-files-found: warn

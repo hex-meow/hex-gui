@@ -1,0 +1,238 @@
+import { useCallback, useEffect, useState } from "react";
+import { App as AntdApp, Button, Card, Empty, Layout, Space, theme, Tooltip, Typography } from "antd";
+import { TranslationOutlined } from "@ant-design/icons";
+import { api, errMsg } from "./api";
+import { useI18n } from "./i18n";
+import { ConnectBar } from "./components/ConnectBar";
+import { Sidebar } from "./components/Sidebar";
+import { MotorDetail } from "./components/MotorDetail";
+import { ChangeIdTool } from "./components/ChangeIdTool";
+import { ZeroTool } from "./components/ZeroTool";
+import { TutorialModal } from "./components/Tutorial";
+import type { MotorInfo } from "./types";
+
+type Tool = "control" | "changeId" | "zero";
+
+const DEVICE_POLL_MS = 700;
+
+export default function App() {
+  const { message } = AntdApp.useApp();
+  const { t } = useI18n();
+  // null = landing page (pick a tool before anything else).
+  const [tool, setTool] = useState<Tool | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [devices, setDevices] = useState<MotorInfo[]>([]);
+  const [selectedNid, setSelectedNid] = useState<number | null>(null);
+  // nid -> csv path (presence means logging is on for that motor)
+  const [logging, setLogging] = useState<Record<number, string>>({});
+
+  // Poll the device list while connected.
+  useEffect(() => {
+    if (!connected) {
+      setDevices([]);
+      return;
+    }
+    let alive = true;
+    const tick = async () => {
+      try {
+        const list = await api.listDevices();
+        if (alive) setDevices(list);
+      } catch {
+        /* ignore transient */
+      }
+    };
+    tick();
+    const h = window.setInterval(tick, DEVICE_POLL_MS);
+    return () => {
+      alive = false;
+      window.clearInterval(h);
+    };
+  }, [connected]);
+
+  // Auto-select the first motor once one appears (control mode only).
+  useEffect(() => {
+    if (tool === "control" && selectedNid == null && devices.length > 0) {
+      setSelectedNid(devices[0].node_id);
+    }
+  }, [devices, selectedNid, tool]);
+
+  const onConnChange = useCallback((c: boolean) => {
+    setConnected(c);
+    if (!c) {
+      setSelectedNid(null);
+      setLogging({});
+    }
+  }, []);
+
+  const switchTool = useCallback(async () => {
+    try {
+      await api.disconnect();
+    } catch {
+      /* ignore */
+    }
+    setConnected(false);
+    setSelectedNid(null);
+    setLogging({});
+    setDevices([]);
+    setTool(null);
+  }, []);
+
+  const onToggleLog = useCallback(
+    async (nid: number, on: boolean) => {
+      try {
+        if (on) {
+          const path = await api.startLog(nid);
+          setLogging((m) => ({ ...m, [nid]: path }));
+          message.success(t("startedLog"));
+        } else {
+          await api.stopLog(nid);
+          setLogging((m) => {
+            const next = { ...m };
+            delete next[nid];
+            return next;
+          });
+          message.info(t("stoppedLog"));
+        }
+      } catch (e) {
+        message.error(`${t("logFailed")}: ${errMsg(e)}`);
+      }
+    },
+    [message, t]
+  );
+
+  if (tool == null) return <ToolPicker onPick={setTool} />;
+
+  const selected = devices.find((d) => d.node_id === selectedNid) ?? null;
+
+  return (
+    <Layout style={{ height: "100vh" }}>
+      <Layout.Header
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          paddingInline: 16,
+          gap: 16,
+        }}
+      >
+        <Space size={12}>
+          <Typography.Title level={4} style={{ margin: 0, color: "#e6e8eb" }}>
+            {t("appTitle")}
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            {tool === "control" ? t("toolControl") : tool === "changeId" ? t("toolChangeId") : t("toolZero")}
+          </Typography.Text>
+          <Button size="small" onClick={switchTool}>
+            {t("switchTool")}
+          </Button>
+        </Space>
+        <ConnectBar
+          connected={connected}
+          onChange={onConnChange}
+          broadcastHeartbeat={tool === "control"}
+        />
+      </Layout.Header>
+      <Layout>
+        <Layout.Sider width={280} theme="dark" style={{ borderRight: "1px solid #262b35" }}>
+          <Sidebar
+            devices={devices}
+            selectedNid={selectedNid}
+            onSelect={setSelectedNid}
+            connected={connected}
+            tool={tool}
+          />
+        </Layout.Sider>
+        <Layout.Content style={{ padding: 16, overflow: "auto" }}>
+          {tool === "changeId" ? (
+            <ChangeIdTool devices={devices} selectedNid={selectedNid} connected={connected} />
+          ) : tool === "zero" ? (
+            <ZeroTool devices={devices} selectedNid={selectedNid} connected={connected} />
+          ) : selected ? (
+            <MotorDetail
+              key={selected.node_id}
+              info={selected}
+              connected={connected}
+              logging={logging[selected.node_id] != null}
+              logPath={logging[selected.node_id] ?? null}
+              onToggleLog={(on) => onToggleLog(selected.node_id, on)}
+            />
+          ) : (
+            <div style={{ paddingTop: 80 }}>
+              <Empty description={connected ? t("selectMotor") : t("connectFirst")} />
+            </div>
+          )}
+        </Layout.Content>
+      </Layout>
+    </Layout>
+  );
+}
+
+function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
+  const { t, lang, toggle } = useI18n();
+  const { token } = theme.useToken();
+  const [tutorialOpen, setTutorialOpen] = useState(false);
+  return (
+    <div
+      style={{
+        height: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 24,
+        position: "relative",
+        background: token.colorBgLayout,
+        color: token.colorText,
+      }}
+    >
+      <Tooltip title={lang === "en" ? "切换到中文" : "Switch to English"}>
+        <Button
+          icon={<TranslationOutlined />}
+          onClick={toggle}
+          style={{ position: "absolute", top: 16, right: 16 }}
+        >
+          {lang === "en" ? "中文" : "English"}
+        </Button>
+      </Tooltip>
+
+      <Typography.Title level={2} style={{ margin: 0 }}>
+        {t("appTitle")}
+      </Typography.Title>
+      <Typography.Text type="secondary">{t("pickTool")}</Typography.Text>
+
+      <Space size={16} wrap style={{ justifyContent: "center", maxWidth: 920 }}>
+        <ToolCard
+          title={t("toolControl")}
+          desc={t("toolControlDesc")}
+          onClick={() => onPick("control")}
+        />
+        <ToolCard
+          title={t("toolChangeId")}
+          desc={t("toolChangeIdDesc")}
+          onClick={() => onPick("changeId")}
+        />
+        <ToolCard
+          title={t("toolZero")}
+          desc={t("toolZeroDesc")}
+          onClick={() => onPick("zero")}
+        />
+        <ToolCard
+          title={t("toolTutorial")}
+          desc={t("toolTutorialDesc")}
+          onClick={() => setTutorialOpen(true)}
+        />
+      </Space>
+
+      <TutorialModal open={tutorialOpen} onClose={() => setTutorialOpen(false)} />
+    </div>
+  );
+}
+
+function ToolCard({ title, desc, onClick }: { title: string; desc: string; onClick: () => void }) {
+  return (
+    <Card hoverable style={{ width: 280, height: 180 }} onClick={onClick}>
+      <Typography.Title level={4}>{title}</Typography.Title>
+      <Typography.Paragraph type="secondary">{desc}</Typography.Paragraph>
+    </Card>
+  );
+}

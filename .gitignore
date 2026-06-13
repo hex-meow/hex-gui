@@ -1,0 +1,13 @@
+/src-tauri/target/
+/src-tauri/gen/
+**/*.rs.bk
+.DS_Store
+
+# frontend (Vite + npm)
+/node_modules/
+/dist/
+npm-debug.log*
+
+# CSV recordings
+/logs/
+*.csv
