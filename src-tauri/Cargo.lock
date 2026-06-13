@@ -306,6 +306,8 @@ dependencies = [
 [[package]]
 name = "can-transport"
 version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9e1ac22559cc4816d9c23ba4d2b59aef6d271b8b22dbb766904ce514fbf96f4"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -319,6 +321,8 @@ dependencies = [
 [[package]]
 name = "canopen-sdo"
 version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f153c4983575599c97a26942c55aae2b06db5617fe7bea27082a7da236fb69f"
 dependencies = [
  "can-transport",
  "log",
@@ -1392,6 +1396,8 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 [[package]]
 name = "hex-motor"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d140697485321c9893ecaa5cc4d234986796bd41a46be66a37b863bc19a3172"
 dependencies = [
  "arc-swap",
  "async-trait",

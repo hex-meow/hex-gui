@@ -21,23 +21,16 @@ log = "0.4"
 env_logger = "0.11"
 anyhow = "1"
 chrono = "0.4"
-hex-motor = { path = "../../hex-motor" }
+hex-motor = "0.1"
 
 # The `gs_usb` backend (candleLight over USB, CAN-FD) is cross-platform, so
 # it's enabled on every target. On Linux we additionally build `socketcan`.
 # Adding another backend is a single arm in src/backend.rs; the rest of the
 # GUI keeps holding an `Arc<dyn CanBus>` and never knows the difference.
+# can-transport comes from crates.io (same source hex-motor uses), so the
+# `CanBus` trait is a single type across the graph — no [patch] needed.
 [target.'cfg(target_os = "linux")'.dependencies]
-can-transport = { path = "../../can-transport", features = ["socketcan", "gs_usb"] }
+can-transport = { version = "0.1.1", features = ["socketcan", "gs_usb"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-can-transport = { path = "../../can-transport", features = ["gs_usb"] }
-
-# hex-motor / canopen-sdo pull `can-transport` and `canopen-sdo` from crates.io,
-# but the GUI uses the local path checkouts. Without this patch Cargo links two
-# separate copies of each crate, so their `CanBus` traits become distinct types
-# and `Cia402Manager::new(bus, ...)` fails to typecheck. The patch redirects the
-# registry references onto the same local paths, unifying the graph.
-[patch.crates-io]
-can-transport = { path = "../../can-transport" }
-canopen-sdo = { path = "../../canopen-sdo" }
+can-transport = { version = "0.1.1", features = ["gs_usb"] }
