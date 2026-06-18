@@ -1395,7 +1395,9 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hex-motor"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "508039992494fea8c77f91de7c19884199c96a56c226854d587d4b4ee93c94e9"
 dependencies = [
  "arc-swap",
  "async-trait",

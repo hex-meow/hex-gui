@@ -23,7 +23,8 @@ anyhow = "1"
 chrono = "0.4"
 # Local path while we add Robot Application support (bus() accessor + RPDO
 # config builder). Switch back to a crates.io version once published.
-hex-motor = { path = "../../hex-motor" }
+# hex-motor = { path = "../../hex-motor" }
+hex-motor = "0.1.1"
 
 # The `gs_usb` backend (candleLight over USB, CAN-FD) is cross-platform, so
 # it's enabled on every target. On Linux we additionally build `socketcan`.
