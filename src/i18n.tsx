@@ -151,6 +151,8 @@ const STRINGS = {
   hopeLimits: { en: "Limits", zh: "限幅" },
   hopeMaxLinear: { en: "Max linear (m/s)", zh: "最大线速度 (m/s)" },
   hopeMaxAngular: { en: "Max angular (rad/s)", zh: "最大角速度 (rad/s)" },
+  hopeAccLinear: { en: "Max accel (m/s², 0=off)", zh: "最大加速度 (m/s², 0=关)" },
+  hopeAccAngular: { en: "Max ang. accel (rad/s², 0=off)", zh: "最大角加速度 (rad/s², 0=关)" },
   hopeMaxTorque: { en: "Max torque per motor (‰)", zh: "各电机最大力矩 (‰)" },
   hopeKd: { en: "MIT KD per motor (Nm·s/rad)", zh: "各电机 MIT KD (Nm·s/rad)" },
   hopeMeasTwist: { en: "Measured velocity", zh: "实测速度" },

@@ -47,6 +47,8 @@ export function Hopea3Panel({ connected }: { connected: boolean }) {
   // Limits + torque (applied on button).
   const [maxLinear, setMaxLinear] = useState(3);
   const [maxAngular, setMaxAngular] = useState(3);
+  const [accLin, setAccLin] = useState(2);
+  const [accAng, setAccAng] = useState(6);
   const [torque, setTorque] = useState<[number, number, number]>([800, 800, 800]);
   const [kd, setKd] = useState<[number, number, number]>([0.1, 0.1, 0.1]);
 
@@ -227,6 +229,19 @@ export function Hopea3Panel({ connected }: { connected: boolean }) {
     }
   }, [message, t]);
 
+  const [reinitNid, setReinitNid] = useState<number | null>(null);
+  const reinitMotor = useCallback(async (nid: number) => {
+    setReinitNid(nid);
+    try {
+      await api.hopea3ReinitMotor(nid);
+      message.success(t("hopeCleared"));
+    } catch (e) {
+      message.error(errMsg(e));
+    } finally {
+      setReinitNid(null);
+    }
+  }, [message, t]);
+
   const pushCmd = useCallback((nvx: number, nvy: number, nwz: number) => {
     api.hopea3SetCmd(nvx, nvy, nwz).catch(() => {});
   }, []);
@@ -239,6 +254,7 @@ export function Hopea3Panel({ connected }: { connected: boolean }) {
   const applyLimits = async () => {
     try {
       await api.hopea3SetLimits(maxLinear, maxAngular);
+      await api.hopea3SetAccelLimits(accLin, accAng);
     } catch (e) {
       message.error(errMsg(e));
     }
@@ -334,6 +350,12 @@ export function Hopea3Panel({ connected }: { connected: boolean }) {
                   <Labeled label={t("hopeMaxAngular")}>
                     <InputNumber min={0} step={0.1} value={maxAngular} onChange={(v) => setMaxAngular(v ?? 0)} />
                   </Labeled>
+                  <Labeled label={t("hopeAccLinear")}>
+                    <InputNumber min={0} step={0.5} value={accLin} onChange={(v) => setAccLin(v ?? 0)} />
+                  </Labeled>
+                  <Labeled label={t("hopeAccAngular")}>
+                    <InputNumber min={0} step={0.5} value={accAng} onChange={(v) => setAccAng(v ?? 0)} />
+                  </Labeled>
                   <Button onClick={applyLimits}>{t("apply")}</Button>
                 </Space>
                 <div style={{ marginTop: 12 }}>
@@ -410,7 +432,7 @@ export function Hopea3Panel({ connected }: { connected: boolean }) {
           </Row>
 
           <Card title={t("hopeMotorsHdr")} size="small">
-            <MotorTable motors={state?.motors ?? []} t={t} />
+            <MotorTable motors={state?.motors ?? []} t={t} onReinit={reinitMotor} busyNid={reinitNid} />
           </Card>
         </>
       )}
@@ -445,7 +467,14 @@ function Labeled({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-function MotorTable({ motors, t }: { motors: Hopea3Motor[]; t: (k: any) => string }) {
+function MotorTable({
+  motors, t, onReinit, busyNid,
+}: {
+  motors: Hopea3Motor[];
+  t: (k: any) => string;
+  onReinit: (nid: number) => void;
+  busyNid: number | null;
+}) {
   return (
     <Table<Hopea3Motor>
       dataSource={motors}
@@ -469,6 +498,19 @@ function MotorTable({ motors, t }: { motors: Hopea3Motor[]; t: (k: any) => strin
         { title: "‰", dataIndex: "max_torque_permille" },
         { title: t("driverTemp"), render: (_, m) => fmt(m.driver_temp_c, 1) },
         { title: t("motorTemp"), render: (_, m) => fmt(m.motor_temp_c, 1) },
+        {
+          title: "",
+          render: (_, m) => (
+            <Button
+              size="small"
+              danger={!!m.error}
+              loading={busyNid === m.node_id}
+              onClick={() => onReinit(m.node_id)}
+            >
+              {t("reinitialize")}
+            </Button>
+          ),
+        },
       ]}
     />
   );

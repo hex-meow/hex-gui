@@ -115,6 +115,12 @@ pub const DEFAULT_MAX_ANGULAR_RPS: f64 = 3.0;
 /// Default MIT velocity gain (Nm·s/rad). Conservative starting point; tune live.
 pub const DEFAULT_KD_SI: f64 = 0.1;
 
+/// Default chassis acceleration limits (slew-rate limiting of the commanded
+/// twist). `0` = unlimited (instant). Linear bounds the velocity-*vector*
+/// increment (so heading changes are limited too); angular bounds |Δωz|.
+pub const DEFAULT_MAX_LIN_ACC: f64 = 2.0; // m/s²
+pub const DEFAULT_MAX_ANG_ACC: f64 = 6.0; // rad/s²
+
 // ───────────────────────────── shared state ─────────────────────────────────
 
 #[derive(Clone, Copy)]
@@ -128,9 +134,12 @@ struct Command {
     /// Per-motor MIT velocity gain KD in **SI units (Nm·s/rad)**, indexed like
     /// [`NODE_IDS`]. Converted to the wire u16 (Nm·s/Rev ÷ factor) in the loop.
     kd_si: [f64; 3],
-    /// Adjustable limits.
+    /// Adjustable velocity limits.
     max_linear: f64,
     max_angular: f64,
+    /// Adjustable acceleration (slew-rate) limits. `0` = unlimited.
+    max_lin_acc: f64,
+    max_ang_acc: f64,
 }
 
 impl Default for Command {
@@ -143,6 +152,8 @@ impl Default for Command {
             kd_si: [DEFAULT_KD_SI; 3],
             max_linear: DEFAULT_MAX_LINEAR_MPS,
             max_angular: DEFAULT_MAX_ANGULAR_RPS,
+            max_lin_acc: DEFAULT_MAX_LIN_ACC,
+            max_ang_acc: DEFAULT_MAX_ANG_ACC,
         }
     }
 }
@@ -294,6 +305,12 @@ pub struct Hopea3 {
     state: Arc<StdMutex<Hopea3State>>,
     running: Arc<AtomicBool>,
     task: JoinHandle<()>,
+    // Kept for single-motor re-init while the chassis keeps running.
+    mgr: Arc<Cia402Manager>,
+    bus: Arc<dyn can_transport::CanBus>,
+    sdo_timeout: Option<Duration>,
+    /// Per-motor kp/kd factor, shared with the loop so re-init can update it.
+    kd_factor: Arc<StdMutex<[f32; 3]>>,
 }
 
 /// How many times to attempt each motor's init before giving up. Motor init
@@ -361,8 +378,12 @@ impl Hopea3 {
         progress.lock().unwrap().active = false;
 
         // 2) Control + odometry loop.
+        let kd_factor = Arc::new(StdMutex::new(kd_factor));
         let running = Arc::new(AtomicBool::new(true));
         let task = {
+            let mgr = mgr.clone();
+            let bus = bus.clone();
+            let kd_factor = kd_factor.clone();
             let cmd = cmd.clone();
             let state = state.clone();
             let running = running.clone();
@@ -376,7 +397,40 @@ impl Hopea3 {
             state,
             running,
             task,
+            mgr,
+            bus,
+            sdo_timeout,
+            kd_factor,
         })
+    }
+
+    /// Re-initialize a single motor (e.g. one that faulted) while the chassis
+    /// keeps running. Clears its fault, re-runs the full per-motor init
+    /// (retried), and updates its kp/kd factor. The other motors are unaffected.
+    pub async fn reinit_motor(&self, nid: u8) -> anyhow::Result<()> {
+        let slice = NODE_IDS
+            .iter()
+            .position(|&n| n == nid)
+            .ok_or_else(|| anyhow::anyhow!("nid 0x{nid:02X} is not a HopeA3 motor"))?;
+        let torque = self.cmd.lock().unwrap().max_torque[slice];
+
+        let mut last_err = None;
+        for attempt in 1..=INIT_ATTEMPTS {
+            let _ = self.mgr.clear_error(nid).await;
+            match init_one_motor(&self.mgr, &self.bus, self.sdo_timeout, slice, nid, torque).await {
+                Ok(factor) => {
+                    self.kd_factor.lock().unwrap()[slice] = factor;
+                    log::info!("HopeA3: re-init motor 0x{nid:02X} ok (attempt {attempt})");
+                    return Ok(());
+                }
+                Err(e) => {
+                    log::warn!("HopeA3: re-init 0x{nid:02X} attempt {attempt}/{INIT_ATTEMPTS}: {e}");
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                }
+            }
+        }
+        Err(last_err.unwrap().context(format!("re-init 0x{nid:02X} failed")))
     }
 
     /// Update the commanded twist (clamped to the current limits, never errored).
@@ -398,6 +452,14 @@ impl Hopea3 {
     pub fn set_kd(&self, kd_si: [f64; 3]) {
         let mut c = self.cmd.lock().unwrap();
         c.kd_si = kd_si.map(|k| k.max(0.0));
+    }
+
+    /// Update the acceleration (slew-rate) limits. `0` disables limiting for
+    /// that axis (instant changes). Linear is m/s², angular rad/s².
+    pub fn set_accel_limits(&self, max_lin_acc: f64, max_ang_acc: f64) {
+        let mut c = self.cmd.lock().unwrap();
+        c.max_lin_acc = max_lin_acc.max(0.0);
+        c.max_ang_acc = max_ang_acc.max(0.0);
     }
 
     /// Update the velocity limits (re-clamps the current command).
@@ -544,7 +606,7 @@ async fn control_loop(
     mgr: Arc<Cia402Manager>,
     bus: Arc<dyn can_transport::CanBus>,
     kin: Kinematics,
-    kd_factor: [f32; 3],
+    kd_factor: Arc<StdMutex<[f32; 3]>>,
     cmd: Arc<StdMutex<Command>>,
     state: Arc<StdMutex<Hopea3State>>,
     running: Arc<AtomicBool>,
@@ -554,24 +616,98 @@ async fn control_loop(
     let mut tick = tokio::time::interval(period);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+    // Applied (rate-limited) twist, ramped toward the target each tick.
+    let (mut ax, mut ay, mut aw) = (0.0f64, 0.0f64, 0.0f64);
+
     while running.load(Ordering::SeqCst) {
         tick.tick().await;
 
         let c = *cmd.lock().unwrap();
+        let factor = *kd_factor.lock().unwrap();
+
+        // ── read wheel feedback first (so a fault can gate this tick's targets) ──
+        let mut motor_rev_s = [0.0f64; 3];
+        let mut motors = Vec::with_capacity(3);
+        let mut any_error = false;
+        for (i, &nid) in NODE_IDS.iter().enumerate() {
+            let ls = mgr.status(nid);
+            let m = &ls.measurements;
+            let vel = m.velocity_rev_per_s;
+            motor_rev_s[i] = WHEEL_SIGN[i] * vel.unwrap_or(0.0) as f64;
+            let (enabled, error) = match ls.logic.as_ref() {
+                Some(Logic::Enabled(_)) => (true, None),
+                Some(Logic::Error { kind, raw_code }) => {
+                    any_error = true;
+                    (false, Some(format!("{kind:?} (0x{raw_code:04X})")))
+                }
+                _ => (false, None),
+            };
+            motors.push(Hopea3Motor {
+                node_id: nid,
+                online: ls.connection.online,
+                enabled,
+                target_rev_per_s: 0.0, // filled after kinematics below
+                velocity_rev_per_s: vel,
+                torque_nm: m.torque_nm,
+                max_torque_permille: c.max_torque[i],
+                driver_temp_c: m.driver_temp_c,
+                motor_temp_c: m.motor_temp_c,
+                error,
+            });
+        }
+
+        // ── chassis acceleration limiting (slew-rate) ──
+        // If ANY motor is faulted, stop the whole chassis: zero the applied
+        // twist so every wheel (including the healthy ones) gets VDES=0. This
+        // also avoids ramping back up the instant the fault clears.
+        if any_error {
+            ax = 0.0;
+            ay = 0.0;
+            aw = 0.0;
+        } else {
+            // Linear: bound the velocity-*vector* step to max_lin_acc·dt, which
+            // limits speed and heading change together. Angular: bound |Δωz|.
+            // A zero limit means "instant" (snap to target).
+            let (tx, ty, tw) = (c.vx, c.vy, c.wz);
+            if c.max_lin_acc > 0.0 {
+                let (dx, dy) = (tx - ax, ty - ay);
+                let dist = (dx * dx + dy * dy).sqrt();
+                let step = c.max_lin_acc * dt;
+                if dist > step {
+                    let s = step / dist;
+                    ax += dx * s;
+                    ay += dy * s;
+                } else {
+                    ax = tx;
+                    ay = ty;
+                }
+            } else {
+                ax = tx;
+                ay = ty;
+            }
+            if c.max_ang_acc > 0.0 {
+                let dw = tw - aw;
+                let step = c.max_ang_acc * dt;
+                aw += dw.clamp(-step, step);
+            } else {
+                aw = tw;
+            }
+        }
 
         // ── inverse kinematics → send shared RPDO frame ──
         // Per motor: VDES (f32 Rev/s) + KD (u16) + max torque (u16). KD is given
         // in SI (Nm·s/rad); convert to the motor's wire int: Rev units = ×τ,
         // then ÷ the per-motor 0x2003:07 factor, clamped 0..=10000.
-        let targets = kin.twist_to_motor_rev_s(c.vx, c.vy, c.wz);
+        let targets = kin.twist_to_motor_rev_s(ax, ay, aw);
         let mut data = [0u8; SLICE_LEN * 3];
         for slice in 0..3 {
             let kd_rev = (c.kd_si[slice] * std::f64::consts::TAU) as f32;
-            let kd_int = (kd_rev / kd_factor[slice]).round().clamp(0.0, 10_000.0) as u16;
+            let kd_int = (kd_rev / factor[slice]).round().clamp(0.0, 10_000.0) as u16;
             let off = slice * SLICE_LEN;
             data[off..off + 4].copy_from_slice(&(targets[slice] as f32).to_le_bytes());
             data[off + 4..off + 6].copy_from_slice(&kd_int.to_le_bytes());
             data[off + 6..off + 8].copy_from_slice(&c.max_torque[slice].to_le_bytes());
+            motors[slice].target_rev_per_s = targets[slice] as f32;
         }
         match CanFrame::new_fd(SHARED_RPDO_COB_ID, &data, true) {
             Ok(frame) => {
@@ -583,33 +719,6 @@ async fn control_loop(
         }
 
         // ── forward kinematics from wheel feedback → twist + odom ──
-        let mut motor_rev_s = [0.0f64; 3];
-        let mut motors = Vec::with_capacity(3);
-        for (i, &nid) in NODE_IDS.iter().enumerate() {
-            let ls = mgr.status(nid);
-            let m = &ls.measurements;
-            let vel = m.velocity_rev_per_s;
-            motor_rev_s[i] = WHEEL_SIGN[i] * vel.unwrap_or(0.0) as f64;
-            let (enabled, error) = match ls.logic.as_ref() {
-                Some(Logic::Enabled(_)) => (true, None),
-                Some(Logic::Error { kind, raw_code }) => {
-                    (false, Some(format!("{kind:?} (0x{raw_code:04X})")))
-                }
-                _ => (false, None),
-            };
-            motors.push(Hopea3Motor {
-                node_id: nid,
-                online: ls.connection.online,
-                enabled,
-                target_rev_per_s: targets[i] as f32,
-                velocity_rev_per_s: vel,
-                torque_nm: m.torque_nm,
-                max_torque_permille: c.max_torque[i],
-                driver_temp_c: m.driver_temp_c,
-                motor_temp_c: m.motor_temp_c,
-                error,
-            });
-        }
         let (mvx, mvy, mwz) = kin.motor_rev_s_to_twist(motor_rev_s);
 
         {
@@ -622,9 +731,10 @@ async fn control_loop(
             s.meas_vx = mvx;
             s.meas_vy = mvy;
             s.meas_wz = mwz;
-            s.cmd_vx = c.vx;
-            s.cmd_vy = c.vy;
-            s.cmd_wz = c.wz;
+            // Report the applied (rate-limited) twist that's actually driving.
+            s.cmd_vx = ax;
+            s.cmd_vy = ay;
+            s.cmd_wz = aw;
             s.max_linear = c.max_linear;
             s.max_angular = c.max_angular;
             s.motors = motors;

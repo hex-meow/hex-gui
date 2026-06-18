@@ -49,7 +49,10 @@ export const api = {
   hopea3SetKd: (kdSi: number[]) => invoke<void>("hopea3_set_kd", { kdSi }),
   hopea3SetLimits: (maxLinear: number, maxAngular: number) =>
     invoke<void>("hopea3_set_limits", { maxLinear, maxAngular }),
+  hopea3SetAccelLimits: (maxLinAcc: number, maxAngAcc: number) =>
+    invoke<void>("hopea3_set_accel_limits", { maxLinAcc, maxAngAcc }),
   hopea3ClearErrors: () => invoke<void>("hopea3_clear_errors"),
+  hopea3ReinitMotor: (nid: number) => invoke<void>("hopea3_reinit_motor", { nid }),
   hopea3ResetOdom: () => invoke<void>("hopea3_reset_odom"),
   hopea3GetState: () => invoke<Hopea3State>("hopea3_get_state"),
 };

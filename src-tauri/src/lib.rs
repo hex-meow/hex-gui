@@ -47,7 +47,9 @@ pub fn run() {
             commands::hopea3_set_max_torque,
             commands::hopea3_set_kd,
             commands::hopea3_set_limits,
+            commands::hopea3_set_accel_limits,
             commands::hopea3_clear_errors,
+            commands::hopea3_reinit_motor,
             commands::hopea3_reset_odom,
             commands::hopea3_get_state,
         ])

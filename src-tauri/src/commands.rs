@@ -308,12 +308,37 @@ pub async fn hopea3_set_limits(
     Ok(())
 }
 
+/// Re-initialize a single HopeA3 motor (e.g. one that faulted) while the chassis
+/// keeps running. The other motors are unaffected.
+#[tauri::command]
+pub async fn hopea3_reinit_motor(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
+    let guard = state.hopea3.lock().await;
+    match guard.as_ref() {
+        Some(app) => app.reinit_motor(nid).await.map_err(err),
+        None => Err("HopeA3 is not running".into()),
+    }
+}
+
 /// Clear CiA402 faults on all three HopeA3 motors (best-effort). Useful before
 /// starting if a previous run left them in a heartbeat-lost / fault state.
 #[tauri::command]
 pub async fn hopea3_clear_errors(state: State<'_, AppState>) -> CmdResult<()> {
     let mgr = manager(&state).await?;
     crate::hopea3::clear_errors(&mgr).await;
+    Ok(())
+}
+
+/// Set chassis acceleration (slew-rate) limits. `0` = unlimited. Linear is m/s²
+/// (bounds the velocity-vector change), angular rad/s².
+#[tauri::command]
+pub async fn hopea3_set_accel_limits(
+    state: State<'_, AppState>,
+    max_lin_acc: f64,
+    max_ang_acc: f64,
+) -> CmdResult<()> {
+    if let Some(app) = state.hopea3.lock().await.as_ref() {
+        app.set_accel_limits(max_lin_acc, max_ang_acc);
+    }
     Ok(())
 }
 
