@@ -4,7 +4,7 @@ import { api, errMsg } from "../api";
 import { useI18n } from "../i18n";
 import type { BaseInfo, ZenohBaseState } from "../types";
 
-const POLL_MS = 150;
+const POLL_MS = 10;
 
 export function ZenohPanel() {
   const { message } = AntdApp.useApp();
