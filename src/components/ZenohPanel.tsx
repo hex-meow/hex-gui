@@ -89,8 +89,16 @@ export function ZenohPanel() {
     onMouseLeave: stop,
   });
 
-  // 固定 3 位小数,避免 antd 对极小值用科学计数法。
-  const fmt3 = (v: number | string) => Number(v).toFixed(3);
+  // 等宽字体 + 始终预留负号位(正数用图形空格 U+2007 占位),数字宽度恒定不闪。
+  const vstyle = {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    fontVariantNumeric: "tabular-nums" as const,
+    whiteSpace: "pre" as const, // 保留正数前导空格(占负号位)
+  };
+  const fmt3 = (v: number | string) => {
+    const n = Number(v);
+    return (n < 0 ? "-" : " ") + Math.abs(n).toFixed(3);
+  };
   const controlling = !!st?.controlling;
   const controlTag = controlling
     ? <Tag color="green">{t("zControlling")}</Tag>
@@ -162,15 +170,15 @@ export function ZenohPanel() {
           <Col flex="auto">
             <Typography.Text strong>{t("zPose")}</Typography.Text>
             <Row>
-              <Col style={{ width: 96 }}><Statistic title="x (m)" value={st?.pose_x ?? 0} formatter={fmt3} /></Col>
-              <Col style={{ width: 96 }}><Statistic title="y (m)" value={st?.pose_y ?? 0} formatter={fmt3} /></Col>
-              <Col style={{ width: 96 }}><Statistic title="θ (rad)" value={st?.pose_theta ?? 0} formatter={fmt3} /></Col>
+              <Col style={{ width: 96 }}><Statistic title="x (m)" value={st?.pose_x ?? 0} formatter={fmt3} valueStyle={vstyle} /></Col>
+              <Col style={{ width: 96 }}><Statistic title="y (m)" value={st?.pose_y ?? 0} formatter={fmt3} valueStyle={vstyle} /></Col>
+              <Col style={{ width: 96 }}><Statistic title="θ (rad)" value={st?.pose_theta ?? 0} formatter={fmt3} valueStyle={vstyle} /></Col>
             </Row>
             <Typography.Text strong>{t("zTwist")}</Typography.Text>
             <Row>
-              <Col style={{ width: 96 }}><Statistic title="vx" value={st?.vx ?? 0} formatter={fmt3} /></Col>
-              <Col style={{ width: 96 }}><Statistic title="vy" value={st?.vy ?? 0} formatter={fmt3} /></Col>
-              <Col style={{ width: 96 }}><Statistic title="ωz" value={st?.wz ?? 0} formatter={fmt3} /></Col>
+              <Col style={{ width: 96 }}><Statistic title="vx" value={st?.vx ?? 0} formatter={fmt3} valueStyle={vstyle} /></Col>
+              <Col style={{ width: 96 }}><Statistic title="vy" value={st?.vy ?? 0} formatter={fmt3} valueStyle={vstyle} /></Col>
+              <Col style={{ width: 96 }}><Statistic title="ωz" value={st?.wz ?? 0} formatter={fmt3} valueStyle={vstyle} /></Col>
             </Row>
           </Col>
         </Row>
