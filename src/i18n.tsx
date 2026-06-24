@@ -126,11 +126,37 @@ const STRINGS = {
   // Tool categories + Robot Application
   catDirectControl: { en: "Direct Control", zh: "直接控制" },
   catRobotApp: { en: "Robot Application", zh: "机器人应用" },
-  toolHopeA3: { en: "HopeA3", zh: "HopeA3" },
+  toolHopeA3: { en: "HopeA3(Raw Motor)", zh: "HopeA3(原始电机)" },
   toolHopeA3Desc: {
     en: "Triple-omni mobile base: 3 motors, 500 Hz max-torque PV control over one shared CAN-FD RPDO + live odometry.",
     zh: "三全向轮移动底盘：3 电机，单帧共享 CAN-FD RPDO 的 500 Hz 带最大力矩速度（PV）控制 + 实时里程计。",
   },
+  toolBaseZenoh: { en: "Base(Zenoh)", zh: "Base(Zenoh)" },
+  toolBaseZenohDesc: {
+    en: "Connect to a hex-controller over Zenoh: auto-discover bases, take control, and drive — the productized robot_api path.",
+    zh: "通过 Zenoh 连接 hex-controller：自动发现底盘、取得控制权、移动——产品化的 robot_api 路径。",
+  },
+  // Base(Zenoh) panel
+  zEndpoint: { en: "Controller endpoint", zh: "控制器地址" },
+  zConnect: { en: "Connect", zh: "连接" },
+  zDisconnect: { en: "Disconnect", zh: "断开" },
+  zConnected: { en: "Connected", zh: "已连接" },
+  zDiscover: { en: "Discover bases", zh: "发现底盘" },
+  zNoBase: { en: "No base found (is the controller running?)", zh: "未发现底盘（控制器起了吗？）" },
+  zFound: { en: "Found", zh: "已发现" },
+  zAcquire: { en: "Take control", zh: "取得控制权" },
+  zRelease: { en: "Release", zh: "释放控制权" },
+  zControlling: { en: "You are in control", zh: "你正在控制" },
+  zNotControlling: { en: "View-only (no control)", zh: "仅查看（未取得控制）" },
+  zBusy: { en: "Controlled by another client", zh: "被其他客户端控制" },
+  zActive: { en: "Active (motors armed)", zh: "已激活（电机使能）" },
+  zHolder: { en: "Holder", zh: "控制方" },
+  zMove: { en: "Drive (hold to move, release to stop)", zh: "驾驶（按住移动，松开停止）" },
+  zSpeedLin: { en: "Linear speed (m/s)", zh: "线速度 (m/s)" },
+  zSpeedAng: { en: "Angular speed (rad/s)", zh: "角速度 (rad/s)" },
+  zPose: { en: "Pose (odometry)", zh: "位姿（里程计）" },
+  zTwist: { en: "Measured twist", zh: "实测速度" },
+  zStop: { en: "STOP", zh: "急停归零" },
 
   // HopeA3 panel
   hopeStart: { en: "Start", zh: "启动" },

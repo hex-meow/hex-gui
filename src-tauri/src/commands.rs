@@ -14,6 +14,7 @@ use tauri::State;
 use crate::backend;
 use crate::dto::{LiveStateDto, MotorInfoDto, MotorModeDto, MotorTargetDto};
 use crate::state::AppState;
+use crate::zenoh_base::{BaseInfo, ZenohBaseState, ZenohConn};
 
 /// Anything we hand back to the frontend.
 type CmdResult<T> = Result<T, String>;
@@ -360,4 +361,72 @@ pub async fn hopea3_get_state(
         Some(app) => app.state(),
         None => crate::hopea3::Hopea3State::default(),
     })
+}
+
+// ───────────────────────── Base(Zenoh) ─────────────────────────
+
+/// 连接到控制器网络。`connect` 如 `tcp/127.0.0.1:7447`(空=仅多播发现)。
+#[tauri::command]
+pub async fn zenoh_connect(state: State<'_, AppState>, connect: String) -> CmdResult<()> {
+    let mut g = state.zenoh.lock().await;
+    if g.is_some() {
+        return Err("Zenoh 已连接;先 disconnect".into());
+    }
+    *g = Some(ZenohConn::open(&connect).await.map_err(err)?);
+    log::info!("Zenoh 已连接: {connect}");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn zenoh_disconnect(state: State<'_, AppState>) -> CmdResult<()> {
+    if let Some(c) = state.zenoh.lock().await.take() {
+        c.release().await;
+    }
+    Ok(())
+}
+
+/// 发现网络里的底盘(kind==BASE)。
+#[tauri::command]
+pub async fn zenoh_discover(state: State<'_, AppState>) -> CmdResult<Vec<BaseInfo>> {
+    let g = state.zenoh.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Zenoh".to_string())?;
+    Ok(c.discover().await)
+}
+
+/// 取得某底盘的控制权。
+#[tauri::command]
+pub async fn zenoh_acquire(state: State<'_, AppState>, prefix: String, model: String) -> CmdResult<()> {
+    let g = state.zenoh.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Zenoh".to_string())?;
+    c.acquire(&prefix, &model).await.map_err(err)
+}
+
+/// 置 ACTIVE / DISABLED。
+#[tauri::command]
+pub async fn zenoh_set_active(state: State<'_, AppState>, on: bool) -> CmdResult<()> {
+    let g = state.zenoh.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Zenoh".to_string())?;
+    c.set_active(on).await.map_err(err)
+}
+
+/// 设置车体速度(由常驻 20Hz 流发出去喂看门狗)。
+#[tauri::command]
+pub async fn zenoh_set_cmd(state: State<'_, AppState>, vx: f64, vy: f64, wz: f64) -> CmdResult<()> {
+    if let Some(c) = state.zenoh.lock().await.as_ref() {
+        c.set_cmd(vx, vy, wz);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn zenoh_get_state(state: State<'_, AppState>) -> CmdResult<ZenohBaseState> {
+    Ok(state.zenoh.lock().await.as_ref().map(|c| c.state()).unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn zenoh_release(state: State<'_, AppState>) -> CmdResult<()> {
+    if let Some(c) = state.zenoh.lock().await.as_ref() {
+        c.release().await;
+    }
+    Ok(())
 }

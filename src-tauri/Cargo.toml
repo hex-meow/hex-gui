@@ -11,6 +11,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+prost-build = "0.13"
+protoc-bin-vendored = "3"   # 自带 protoc,免系统安装
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -25,6 +27,10 @@ chrono = "0.4"
 # config builder). Switch back to a crates.io version once published.
 # hex-motor = { path = "../../hex-motor" }
 hex-motor = "0.1.1"
+
+# Base(Zenoh):连 hex-controller 暴露的 robot_api。
+zenoh = "1"
+prost = "0.13"
 
 # The `gs_usb` backend (candleLight over USB, CAN-FD) is cross-platform, so
 # it's enabled on every target. On Linux we additionally build `socketcan`.

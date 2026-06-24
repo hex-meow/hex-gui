@@ -108,6 +108,26 @@ export interface Hopea3State {
   running: boolean;
 }
 
+// ── Base(Zenoh) (mirrors zenoh_base::ZenohBaseState / BaseInfo) ──
+export interface BaseInfo {
+  prefix: string;
+  model: string;
+}
+
+export interface ZenohBaseState {
+  controlling: boolean;
+  holder: number;
+  running: boolean;
+  model: string;
+  prefix: string;
+  pose_x: number;
+  pose_y: number;
+  pose_theta: number;
+  vx: number;
+  vy: number;
+  wz: number;
+}
+
 // Tagged target union the backend deserializes (dto::MotorTargetDto).
 export type MotorTarget =
   | { kind: "Disable" }

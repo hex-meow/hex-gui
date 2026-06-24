@@ -27,6 +27,8 @@ pub struct AppState {
     /// Live init progress for the UI to poll while `hopea3_start` runs. A `std`
     /// mutex: only short, await-free updates happen under it.
     pub hopea3_init: StdMutex<InitProgress>,
+    /// Base(Zenoh):到 hex-controller 的连接(至多一条)。
+    pub zenoh: Mutex<Option<crate::zenoh_base::ZenohConn>>,
 }
 
 impl AppState {

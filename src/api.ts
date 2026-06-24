@@ -3,7 +3,7 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { Hopea3InitProgress, Hopea3State, LiveState, MotorInfo, MotorMode, MotorTarget } from "./types";
+import type { BaseInfo, Hopea3InitProgress, Hopea3State, LiveState, MotorInfo, MotorMode, MotorTarget, ZenohBaseState } from "./types";
 
 export const api = {
   connect: (iface: string, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -55,6 +55,18 @@ export const api = {
   hopea3ReinitMotor: (nid: number) => invoke<void>("hopea3_reinit_motor", { nid }),
   hopea3ResetOdom: () => invoke<void>("hopea3_reset_odom"),
   hopea3GetState: () => invoke<Hopea3State>("hopea3_get_state"),
+
+  // Base(Zenoh)
+  zenohConnect: (connect: string) => invoke<void>("zenoh_connect", { connect }),
+  zenohDisconnect: () => invoke<void>("zenoh_disconnect"),
+  zenohDiscover: () => invoke<BaseInfo[]>("zenoh_discover"),
+  zenohAcquire: (prefix: string, model: string) =>
+    invoke<void>("zenoh_acquire", { prefix, model }),
+  zenohSetActive: (on: boolean) => invoke<void>("zenoh_set_active", { on }),
+  zenohSetCmd: (vx: number, vy: number, wz: number) =>
+    invoke<void>("zenoh_set_cmd", { vx, vy, wz }),
+  zenohGetState: () => invoke<ZenohBaseState>("zenoh_get_state"),
+  zenohRelease: () => invoke<void>("zenoh_release"),
 };
 
 /** Normalise a thrown Tauri error (usually a plain string) to a message. */

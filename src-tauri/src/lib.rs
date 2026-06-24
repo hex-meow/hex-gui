@@ -9,6 +9,7 @@ mod dto;
 mod hopea3;
 mod logging;
 mod state;
+mod zenoh_base;
 
 use state::AppState;
 
@@ -52,6 +53,14 @@ pub fn run() {
             commands::hopea3_reinit_motor,
             commands::hopea3_reset_odom,
             commands::hopea3_get_state,
+            commands::zenoh_connect,
+            commands::zenoh_disconnect,
+            commands::zenoh_discover,
+            commands::zenoh_acquire,
+            commands::zenoh_set_active,
+            commands::zenoh_set_cmd,
+            commands::zenoh_get_state,
+            commands::zenoh_release,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
