@@ -74,6 +74,8 @@ impl ZenohConn {
             cfg.insert_json5("connect/endpoints", &format!("[\"{connect}\"]")).unwrap();
         }
         let session = zenoh::open(cfg).await.map_err(|e| anyhow!("zenoh open: {e}"))?;
+        // 给组播探测/建链一点时间,之后 discover 才能发现局域网内的控制器。
+        tokio::time::sleep(Duration::from_millis(700)).await;
         let ctrl = Arc::new(Ctrl {
             prefix: StdMutex::new(None),
             session_id: AtomicU32::new(0),

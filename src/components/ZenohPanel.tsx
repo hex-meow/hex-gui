@@ -10,7 +10,7 @@ export function ZenohPanel() {
   const { message } = AntdApp.useApp();
   const { t } = useI18n();
 
-  const [endpoint, setEndpoint] = useState("tcp/127.0.0.1:7447");
+  const [endpoint, setEndpoint] = useState(""); // 留空 = 自动扫描局域网(组播)
   const [connected, setConnected] = useState(false);
   const [bases, setBases] = useState<BaseInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -39,10 +39,15 @@ export function ZenohPanel() {
     try {
       await api.zenohConnect(endpoint.trim());
       setConnected(true);
-      const list = await api.zenohDiscover();
+      message.success(t("zConnected"));
+      // 组播发现可能稍慢,自动重试一次。
+      let list = await api.zenohDiscover();
+      if (list.length === 0) {
+        await new Promise((r) => setTimeout(r, 900));
+        list = await api.zenohDiscover();
+      }
       setBases(list);
       setSelected(list[0]?.prefix ?? null);
-      message.success(t("zConnected"));
       if (list.length === 0) message.warning(t("zNoBase"));
     } catch (e) { message.error(errMsg(e)); }
     finally { setBusy(false); }
@@ -84,6 +89,8 @@ export function ZenohPanel() {
     onMouseLeave: stop,
   });
 
+  // 固定 3 位小数,避免 antd 对极小值用科学计数法。
+  const fmt3 = (v: number | string) => Number(v).toFixed(3);
   const controlling = !!st?.controlling;
   const controlTag = controlling
     ? <Tag color="green">{t("zControlling")}</Tag>
@@ -99,7 +106,7 @@ export function ZenohPanel() {
       <Card size="small">
         <Space wrap>
           <Typography.Text>{t("zEndpoint")}</Typography.Text>
-          <Input style={{ width: 220 }} value={endpoint} disabled={connected} onChange={(e) => setEndpoint(e.target.value)} />
+          <Input style={{ width: 240 }} value={endpoint} disabled={connected} placeholder={t("zEndpointHint")} onChange={(e) => setEndpoint(e.target.value)} />
           {connected
             ? <Button onClick={disconnect}>{t("zDisconnect")}</Button>
             : <Button type="primary" loading={busy} onClick={connect}>{t("zConnect")}</Button>}
@@ -125,47 +132,48 @@ export function ZenohPanel() {
 
       {/* 控制 */}
       <Card size="small" title={<Space>{controlTag}{controlling && <>{t("zActive")}: <Switch onChange={setActive} /></>}</Space>}>
-        <Space size={24} align="start" wrap>
-          <Space direction="vertical">
-            <Typography.Text strong>{t("zMove")}</Typography.Text>
-            <Space>
-              <span style={{ width: 36, display: "inline-block" }} />
-              <Button disabled={!controlling} {...hold(lin, 0, 0)}>▲</Button>
-              <span style={{ width: 36, display: "inline-block" }} />
+        <Row gutter={[24, 16]} align="top" wrap={false} style={{ minWidth: 600 }}>
+          <Col flex="260px">
+            <Space direction="vertical">
+              <Typography.Text strong>{t("zMove")}</Typography.Text>
+              <Space>
+                <span style={{ width: 36, display: "inline-block" }} />
+                <Button disabled={!controlling} {...hold(lin, 0, 0)}>▲</Button>
+                <span style={{ width: 36, display: "inline-block" }} />
+              </Space>
+              <Space>
+                <Button disabled={!controlling} {...hold(0, lin, 0)}>◀</Button>
+                <Button danger disabled={!controlling} onClick={stop}>{t("zStop")}</Button>
+                <Button disabled={!controlling} {...hold(0, -lin, 0)}>▶</Button>
+              </Space>
+              <Space>
+                <Button disabled={!controlling} {...hold(0, 0, ang)}>↺</Button>
+                <Button disabled={!controlling} {...hold(-lin, 0, 0)}>▼</Button>
+                <Button disabled={!controlling} {...hold(0, 0, -ang)}>↻</Button>
+              </Space>
+              <Space>
+                <span>{t("zSpeedLin")}</span><InputNumber min={0} max={3} step={0.1} value={lin} onChange={(v) => setLin(v ?? 0)} />
+              </Space>
+              <Space>
+                <span>{t("zSpeedAng")}</span><InputNumber min={0} max={3} step={0.1} value={ang} onChange={(v) => setAng(v ?? 0)} />
+              </Space>
             </Space>
-            <Space>
-              <Button disabled={!controlling} {...hold(0, lin, 0)}>◀</Button>
-              <Button danger disabled={!controlling} onClick={stop}>{t("zStop")}</Button>
-              <Button disabled={!controlling} {...hold(0, -lin, 0)}>▶</Button>
-            </Space>
-            <Space>
-              <Button disabled={!controlling} {...hold(0, 0, ang)}>↺</Button>
-              <Button disabled={!controlling} {...hold(-lin, 0, 0)}>▼</Button>
-              <Button disabled={!controlling} {...hold(0, 0, -ang)}>↻</Button>
-            </Space>
-            <Space>
-              <span>{t("zSpeedLin")}</span><InputNumber min={0} max={3} step={0.1} value={lin} onChange={(v) => setLin(v ?? 0)} />
-            </Space>
-            <Space>
-              <span>{t("zSpeedAng")}</span><InputNumber min={0} max={3} step={0.1} value={ang} onChange={(v) => setAng(v ?? 0)} />
-            </Space>
-          </Space>
-
-          <Space direction="vertical">
+          </Col>
+          <Col flex="auto">
             <Typography.Text strong>{t("zPose")}</Typography.Text>
-            <Row gutter={16}>
-              <Col><Statistic title="x (m)" value={st?.pose_x ?? 0} precision={3} /></Col>
-              <Col><Statistic title="y (m)" value={st?.pose_y ?? 0} precision={3} /></Col>
-              <Col><Statistic title="θ (rad)" value={st?.pose_theta ?? 0} precision={3} /></Col>
+            <Row>
+              <Col style={{ width: 96 }}><Statistic title="x (m)" value={st?.pose_x ?? 0} formatter={fmt3} /></Col>
+              <Col style={{ width: 96 }}><Statistic title="y (m)" value={st?.pose_y ?? 0} formatter={fmt3} /></Col>
+              <Col style={{ width: 96 }}><Statistic title="θ (rad)" value={st?.pose_theta ?? 0} formatter={fmt3} /></Col>
             </Row>
             <Typography.Text strong>{t("zTwist")}</Typography.Text>
-            <Row gutter={16}>
-              <Col><Statistic title="vx" value={st?.vx ?? 0} precision={3} /></Col>
-              <Col><Statistic title="vy" value={st?.vy ?? 0} precision={3} /></Col>
-              <Col><Statistic title="ωz" value={st?.wz ?? 0} precision={3} /></Col>
+            <Row>
+              <Col style={{ width: 96 }}><Statistic title="vx" value={st?.vx ?? 0} formatter={fmt3} /></Col>
+              <Col style={{ width: 96 }}><Statistic title="vy" value={st?.vy ?? 0} formatter={fmt3} /></Col>
+              <Col style={{ width: 96 }}><Statistic title="ωz" value={st?.wz ?? 0} formatter={fmt3} /></Col>
             </Row>
-          </Space>
-        </Space>
+          </Col>
+        </Row>
       </Card>
     </Space>
   );

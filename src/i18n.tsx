@@ -137,7 +137,8 @@ const STRINGS = {
     zh: "通过 Zenoh 连接 hex-controller：自动发现底盘、取得控制权、移动——产品化的 robot_api 路径。",
   },
   // Base(Zenoh) panel
-  zEndpoint: { en: "Controller endpoint", zh: "控制器地址" },
+  zEndpoint: { en: "Endpoint (optional)", zh: "地址(可选)" },
+  zEndpointHint: { en: "blank = auto-scan LAN (multicast)", zh: "留空 = 自动扫描局域网(组播)" },
   zConnect: { en: "Connect", zh: "连接" },
   zDisconnect: { en: "Disconnect", zh: "断开" },
   zConnected: { en: "Connected", zh: "已连接" },
