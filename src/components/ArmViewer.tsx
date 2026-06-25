@@ -38,6 +38,7 @@ export function ArmViewer({ q, gravity, jointNames, previewQ }: Props) {
     mount.appendChild(renderer.domElement);
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(0, 0, 0); // 始终绕零点(基座原点)旋转/缩放
+    controls.enablePan = false;   // 禁止平移 → 只能绕零点 orbit + zoom
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.75));
     const dir = new THREE.DirectionalLight(0xffffff, 0.8);
