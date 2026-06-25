@@ -168,6 +168,33 @@ export interface ZenohBaseState {
   wz: number;
 }
 
+// ── Arm(Zenoh) (mirrors zenoh_arm::ZenohArmState / ArmInfo) ──
+export interface ArmInfo {
+  prefix: string;
+  model: string;
+  dof: number;
+  has_ee: boolean;
+  ee_model: string;
+}
+
+export interface ZenohArmState {
+  controlling: boolean;
+  holder: number;
+  mode: string;           // our last-set OperatingMode name
+  model: string;
+  prefix: string;
+  dof: number;
+  joint_names: string[];
+  pos_min: number[];
+  pos_max: number[];
+  q: number[];
+  dq: number[];
+  tau: number[];
+  gravity: [number, number, number];
+  has_ee: boolean;
+  ee_model: string;
+}
+
 // Tagged target union the backend deserializes (dto::MotorTargetDto).
 export type MotorTarget =
   | { kind: "Disable" }

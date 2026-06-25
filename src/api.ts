@@ -3,7 +3,7 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { BaseInfo, Hopea3InitProgress, Hopea3State, KnobConfig, LiveState, MotorInfo, MotorMode, MotorTarget, SmartKnobState, ZenohBaseState } from "./types";
+import type { ArmInfo, BaseInfo, Hopea3InitProgress, Hopea3State, KnobConfig, LiveState, MotorInfo, MotorMode, MotorTarget, SmartKnobState, ZenohArmState, ZenohBaseState } from "./types";
 
 export const api = {
   connect: (iface: string, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -79,6 +79,17 @@ export const api = {
     invoke<void>("zenoh_set_cmd", { vx, vy, wz }),
   zenohGetState: () => invoke<ZenohBaseState>("zenoh_get_state"),
   zenohRelease: () => invoke<void>("zenoh_release"),
+
+  // Arm(Zenoh)
+  armConnect: (connect: string) => invoke<void>("arm_connect", { connect }),
+  armDisconnect: () => invoke<void>("arm_disconnect"),
+  armDiscover: () => invoke<ArmInfo[]>("arm_discover"),
+  armAcquire: (prefix: string, model: string) => invoke<void>("arm_acquire", { prefix, model }),
+  armSetMode: (mode: number) => invoke<void>("arm_set_mode", { mode }),
+  armSetGravity: (gravity: [number, number, number]) => invoke<void>("arm_set_gravity", { gravity }),
+  armGoto: (q: number[]) => invoke<void>("arm_goto", { q }),
+  armGetState: () => invoke<ZenohArmState>("arm_get_state"),
+  armRelease: () => invoke<void>("arm_release"),
 };
 
 /** Normalise a thrown Tauri error (usually a plain string) to a message. */

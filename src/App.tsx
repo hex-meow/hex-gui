@@ -11,10 +11,11 @@ import { ZeroTool } from "./components/ZeroTool";
 import { Hopea3Panel } from "./components/Hopea3Panel";
 import { SmartKnobPanel } from "./components/SmartKnobPanel";
 import { ZenohPanel } from "./components/ZenohPanel";
+import { ArmPanel } from "./components/ArmPanel";
 import { TutorialModal } from "./components/Tutorial";
 import type { MotorInfo } from "./types";
 
-type Tool = "control" | "changeId" | "zero" | "hopea3" | "smartknob" | "zenoh";
+type Tool = "control" | "changeId" | "zero" | "hopea3" | "smartknob" | "zenoh" | "arm";
 
 const DEVICE_POLL_MS = 700;
 
@@ -111,12 +112,13 @@ export default function App() {
     : tool === "changeId" ? t("toolChangeId")
     : tool === "zero" ? t("toolZero")
     : tool === "zenoh" ? t("toolBaseZenoh")
+    : tool === "arm" ? "Arm (Zenoh)"
     : tool === "smartknob" ? t("toolSmartKnob")
     : t("toolHopeA3");
   const needsHeartbeat = tool === "control" || tool === "hopea3" || tool === "smartknob";
-  // hopea3 / smartknob / zenoh 都是整屏面板;zenoh 走 Zenoh 不用 CAN 总线。
-  const showSidebar = tool !== "hopea3" && tool !== "smartknob" && tool !== "zenoh";
-  const showConnectBar = tool !== "zenoh";
+  // hopea3 / smartknob / zenoh / arm 都是整屏面板;zenoh/arm 走 Zenoh 不用 CAN 总线。
+  const showSidebar = tool !== "hopea3" && tool !== "smartknob" && tool !== "zenoh" && tool !== "arm";
+  const showConnectBar = tool !== "zenoh" && tool !== "arm";
 
   return (
     <Layout style={{ height: "100vh" }}>
@@ -165,6 +167,8 @@ export default function App() {
             <SmartKnobPanel connected={connected} devices={devices} />
           ) : tool === "zenoh" ? (
             <ZenohPanel />
+          ) : tool === "arm" ? (
+            <ArmPanel />
           ) : tool === "changeId" ? (
             <ChangeIdTool devices={devices} selectedNid={selectedNid} connected={connected} />
           ) : tool === "zero" ? (
@@ -237,6 +241,7 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
         </Typography.Text>
         <Space size={16} wrap style={{ justifyContent: "center", width: "100%" }}>
           <ToolCard title={t("toolBaseZenoh")} desc={t("toolBaseZenohDesc")} onClick={() => onPick("zenoh")} />
+          <ToolCard title="Arm (Zenoh)" desc="机械臂:数字孪生 / GRAVITY_COMP / 设重力 / 预设位姿" onClick={() => onPick("arm")} />
           <ToolCard title={t("toolHopeA3")} desc={t("toolHopeA3Desc")} onClick={() => onPick("hopea3")} />
           <ToolCard title={t("toolSmartKnob")} desc={t("toolSmartKnobDesc")} onClick={() => onPick("smartknob")} />
           <ToolCard title={t("toolTutorial")} desc={t("toolTutorialDesc")} onClick={() => setTutorialOpen(true)} />

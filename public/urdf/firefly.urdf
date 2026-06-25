@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="utf-8"?>
+<robot name="firefly_y6">
+
+    <link name="base_link">
+        <inertial>
+            <origin xyz="-0.00015122 -0.00000305 0.04925993" rpy="0 0 0" />
+            <mass value="0.87430597" />
+            <inertia ixx="0.0013187" ixy="0.00000009" ixz="-0.00000212" iyy="0.00133505" iyz="0.00000013" izz="0.0010065" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://xpkg_urdf_firefly_y6/meshes/base_link.STL" />
+            </geometry>
+            <material name="">
+                <color rgba="1 1 1 1" />
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://xpkg_urdf_firefly_y6/meshes/base_link.STL" />
+            </geometry>
+        </collision>
+    </link>
+
+    <link name="link_1">
+        <inertial>
+            <origin xyz="0.00671535 -0.00275632 0.02393862" rpy="0 0 0" />
+            <mass value="0.25449622" />
+            <inertia ixx="0.00036700" ixy="0.00000933" ixz="-0.00004363" iyy="0.00022812" iyz="0.00001848" izz="0.00032440" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://xpkg_urdf_firefly_y6/meshes/link_1.STL" />
+            </geometry>
+            <material name="">
+                <color rgba="1 1 1 1" />
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://xpkg_urdf_firefly_y6/meshes/link_1.STL" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="joint_1" type="revolute">
+        <origin xyz="0 0 0.09505" rpy="0 0 0" />
+        <parent link="base_link" />
+        <child link="link_1" />
+        <axis xyz="0 0 1" />
+        <limit lower="-2.86" upper="2.86" effort="6" velocity="6" />
+    </joint>
+
+    <link name="link_2">
+        <inertial>
+            <origin xyz="-0.00065196 0.00050605 0.13439379" rpy="0 0 0" />
+            <mass value="1.28270343" />
+            <inertia ixx="0.01969749" ixy="-0.00000048" ixz="0.00002449" iyy="0.01949532" iyz="0.00000402" izz="0.00071320" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://xpkg_urdf_firefly_y6/meshes/link_2.STL" />
+            </geometry>
+            <material name="">
+                <color rgba="1 1 1 1" />
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://xpkg_urdf_firefly_y6/meshes/link_2.STL" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="joint_2" type="revolute">
+        <origin xyz="0.02 0 0.05" rpy="0 0 0" />
+        <parent link="link_1" />
+        <child link="link_2" />
+        <axis xyz="0 1 0" />
+        <limit lower="-1.57" upper="2.09" effort="6" velocity="6" />
+    </joint>
+
+    <link name="link_3">
+        <inertial>
+            <origin xyz="-0.05668605 -0.00287518  0.15455959" rpy="0 0 0" />
+            <mass value="0.93588267" />
+            <inertia ixx="0.00983649" ixy="0.00007803" ixz="0.00124619" iyy="0.00991413" iyz="-0.00026866" izz="0.00104920" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://xpkg_urdf_firefly_y6/meshes/link_3.STL" />
+            </geometry>
+            <material name="">
+                <color rgba="1 1 1 1" />
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://xpkg_urdf_firefly_y6/meshes/link_3.STL" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="joint_3" type="revolute">
+        <origin xyz="0 0 0.27" rpy="0 0 0" />
+        <parent link="link_2" />
+        <child link="link_3" />
+        <axis xyz="0 1 0" />
+        <limit lower="0" upper="3.14" effort="6" velocity="6" />
+    </joint>
+
+    <link name="link_4">
+        <inertial>
+            <origin xyz="-0.05184192 -0.00200161 0.04855136" rpy="0 0 0" />
+            <mass value="0.55059939" />
+            <inertia ixx="0.00075566" ixy="0.00005198" ixz="0.00037393" iyy="0.00098159" iyz="-0.00004878" izz="0.00079856" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://xpkg_urdf_firefly_y6/meshes/link_4.STL" />
+            </geometry>
+            <material name="">
+                <color rgba="1 1 1 1" />
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://xpkg_urdf_firefly_y6/meshes/link_4.STL" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="joint_4" type="revolute">
+        <origin xyz="-0.065 0 0.25" rpy="0 0 0" />
+        <parent link="link_3" />
+        <child link="link_4" />
+        <axis xyz="0 1 0" />
+        <limit lower="-1.57" upper="1.57" effort="6" velocity="6" />
+    </joint>
+
+    <link name="link_5">
+        <inertial>
+            <origin xyz="0.04236212 -0.00000333 0.00771096" rpy="0 0 0" />
+            <mass value="0.41052864" />
+            <inertia ixx="0.0001862" ixy="-0.00000002" ixz="-0.00001795" iyy="0.00025554" iyz="-0.00000002" izz="0.0002374" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://xpkg_urdf_firefly_y6/meshes/link_5.STL" />
+            </geometry>
+            <material name="">
+                <color rgba="1 1 1 1" />
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://xpkg_urdf_firefly_y6/meshes/link_5.STL" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="joint_5" type="revolute">
+        <origin xyz="-0.047 0 0.065" rpy="0 0 0" />
+        <parent link="link_4" />
+        <child link="link_5" />
+        <axis xyz="-1 0 0" />
+        <limit lower="-1.54" upper="1.54" effort="6" velocity="6" />
+    </joint>
+
+    <link name="link_6">
+        <inertial>
+            <origin xyz="-0.00048907 0 0.0034393" rpy="0 0 0" />
+            <mass value="0.0076012" />
+            <inertia ixx="0.00000089" ixy="0" ixz="0" iyy="0.00000065" iyz="0" izz="0.00000143" />
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://xpkg_urdf_firefly_y6/meshes/link_6.STL" />
+            </geometry>
+            <material name="">
+                <color rgba="1 1 1 1" />
+            </material>
+        </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+                <mesh filename="package://xpkg_urdf_firefly_y6/meshes/link_6.STL" />
+            </geometry>
+        </collision>
+    </link>
+    <joint name="joint_6" type="revolute">
+        <origin xyz="0.047 0 0.034" rpy="0 0 0" />
+        <parent link="link_5" />
+        <child link="link_6" />
+        <axis xyz="0 0 1" />
+        <limit lower="-2.79" upper="2.79" effort="6" velocity="6" />
+    </joint>
+
+</robot>
