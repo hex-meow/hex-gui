@@ -43,9 +43,16 @@ export function ArmViewer({ q, gravity, jointNames, previewQ }: Props) {
     const dir = new THREE.DirectionalLight(0xffffff, 0.8);
     dir.position.set(1, 1, 2);
     scene.add(dir);
-    scene.add(new THREE.GridHelper(2, 20, 0x444444, 0x2a2a2a).rotateX(Math.PI / 2)); // XY 平面(Z-up)
+    const grid = new THREE.GridHelper(2, 20, 0x444444, 0x2a2a2a).rotateX(Math.PI / 2); // XY 平面(Z-up)
+    (grid.material as THREE.Material).transparent = true;
+    (grid.material as THREE.Material).opacity = 0.3;
+    scene.add(grid);
 
-    const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 0, 0.5), 0.3, 0xff5555);
+    // 重力箭头:放在地板下方,且 depthTest=false → 不被机械臂/地板遮挡,始终可见。
+    const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 0, -0.04), 0.34, 0xff5555, 0.08, 0.05);
+    arrow.position.set(0, 0, -0.04);
+    [arrow.line.material, arrow.cone.material].forEach((m) => { (m as THREE.Material).depthTest = false; (m as THREE.Material).transparent = true; });
+    arrow.renderOrder = 999;
     scene.add(arrow);
     arrowRef.current = arrow;
 
