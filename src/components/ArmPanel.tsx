@@ -1,7 +1,7 @@
 // Arm(Zenoh)工具:发现/取控 + 3D 数字孪生 + 关节状态 + GRAVITY_COMP/设重力/预设位姿。
 // 镜像 ZenohPanel 的连接/取控流;控制部分换成机械臂特有。
 import { useCallback, useEffect, useState } from "react";
-import { App as AntdApp, Button, Card, Input, InputNumber, Select, Space, Table, Tag, Typography } from "antd";
+import { App as AntdApp, Button, Card, Input, InputNumber, Select, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { api, errMsg } from "../api";
 import type { ArmInfo, ZenohArmState } from "../types";
 import { ArmViewer } from "./ArmViewer";
@@ -27,6 +27,7 @@ export function ArmPanel() {
   const [gy, setGy] = useState(0);
   const [gz, setGz] = useState(-9.81);
   const [busy, setBusy] = useState(false);
+  const [previewQ, setPreviewQ] = useState<number[] | null>(null); // 预设悬浮预览
 
   useEffect(() => {
     if (!connected) { setSt(null); return; }
@@ -97,7 +98,7 @@ export function ArmPanel() {
       <Card size="small">
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
           <div style={{ flex: "1 1 480px", minWidth: 380 }}>
-            <ArmViewer q={st?.q ?? []} gravity={grav} jointNames={st?.joint_names ?? []} />
+            <ArmViewer q={st?.q ?? []} gravity={grav} jointNames={st?.joint_names ?? []} previewQ={previewQ} />
           </div>
           <div style={{ flex: "1 1 320px", minWidth: 300 }}>
             <Space direction="vertical" size={12} style={{ width: "100%" }}>
@@ -116,16 +117,25 @@ export function ArmPanel() {
 
               <Typography.Text strong>重力向量 (m/s²)</Typography.Text>
               <Space wrap>
-                <InputNumber style={{ width: 92 }} value={gx} step={0.5} addonBefore="x" onChange={(v) => setGx(v ?? 0)} />
-                <InputNumber style={{ width: 92 }} value={gy} step={0.5} addonBefore="y" onChange={(v) => setGy(v ?? 0)} />
-                <InputNumber style={{ width: 92 }} value={gz} step={0.5} addonBefore="z" onChange={(v) => setGz(v ?? 0)} />
+                <InputNumber style={{ width: 96 }} value={gx} step={0.5} prefix="x" onChange={(v) => setGx(v ?? 0)} />
+                <InputNumber style={{ width: 96 }} value={gy} step={0.5} prefix="y" onChange={(v) => setGy(v ?? 0)} />
+                <InputNumber style={{ width: 96 }} value={gz} step={0.5} prefix="z" onChange={(v) => setGz(v ?? 0)} />
                 <Button disabled={!controlling} onClick={setGravity}>设</Button>
               </Space>
               <Typography.Text type="secondary">测试用 z=-2.9(30%)更安全;斜装时填 base 系真实重力</Typography.Text>
 
-              <Typography.Text strong>预设位姿(进 ACTIVE 移动)</Typography.Text>
+              <Typography.Text strong>预设位姿(悬浮预览幽灵臂,点击移动)</Typography.Text>
               <Space wrap>
-                {PRESETS.map((p) => <Button key={p.name} disabled={!controlling} onClick={() => goTo(p.q)}>{p.name}</Button>)}
+                {PRESETS.map((p) => (
+                  <Tooltip key={p.name} title={`q = [${p.q.map((v) => v.toFixed(2)).join(", ")}] rad`}>
+                    <Button
+                      disabled={!controlling}
+                      onMouseEnter={() => setPreviewQ(p.q)}
+                      onMouseLeave={() => setPreviewQ(null)}
+                      onClick={() => goTo(p.q)}
+                    >{p.name}</Button>
+                  </Tooltip>
+                ))}
               </Space>
             </Space>
           </div>
