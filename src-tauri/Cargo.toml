@@ -31,6 +31,8 @@ hex-motor = "0.1.1"
 # Base(Zenoh):连 hex-controller 暴露的 robot_api。
 zenoh = "1"
 prost = "0.13"
+# 机械臂动力学(重力 G(q)):host 端 tau_ff 前馈,与控制器 GRAVITY_COMP 共用同一 crate(仅依赖 urdf-rs)。
+hex-arm-dynamics = { path = "../../hex-arm-dynamics" }
 
 # The `gs_usb` backend (candleLight over USB, CAN-FD) is cross-platform, so
 # it's enabled on every target. On Linux we additionally build `socketcan`.

@@ -28,8 +28,14 @@ export function ArmPanel() {
   const [gz, setGz] = useState(-9.81);
   const [busy, setBusy] = useState(false);
   const [previewQ, setPreviewQ] = useState<number[] | null>(null); // 预设悬浮预览
-  const [kp, setKp] = useState(20); // host 侧增益(控制器忠实执行);调低=移动柔和便于观察
+  const [kp, setKp] = useState(10); // host 侧增益(控制器忠实执行);有重力前馈后 kp=10 已够,更柔和
   const [kd, setKd] = useState(1.5);
+  const [gMode, setGMode] = useState<"xyz" | "quat">("xyz"); // 重力输入方式:XYZ 分量 / 四元数朝向
+  const [gMag, setGMag] = useState(9.81); // |g|
+  const [qx, setQx] = useState(0); // 整臂安装朝向四元数(x,y,z,w);默认 (0,0,0,1)=竖直安装
+  const [qy, setQy] = useState(0);
+  const [qz, setQz] = useState(0);
+  const [qw, setQw] = useState(1);
 
   useEffect(() => {
     if (!connected) { setSt(null); return; }
@@ -68,9 +74,39 @@ export function ArmPanel() {
   const setGravity = useCallback(async () => { try { await api.armSetGravity([gx, gy, gz]); } catch (e) { message.error(errMsg(e)); } }, [gx, gy, gz, message]);
   const goTo = useCallback(async (q: number[]) => { try { await api.armGoto(q, kp, kd); } catch (e) { message.error(errMsg(e)); } }, [kp, kd, message]);
 
+  // 四元数(整臂安装朝向)→ 基座系重力向量:臂按 q 旋转、世界重力恒朝下,故 base 系重力 = |g|·(q⁻¹·下)。
+  // q⁻¹·(0,0,-1) 的解析式(单位四元数):(2(wy−xz), −2(wx+yz), 2(x²+y²)−1)。XYZ 仍是下发控制器的单一真值。
+  const applyQuat = (m: number, x: number, y: number, z: number, w: number) => {
+    const n = Math.hypot(x, y, z, w) || 1;
+    const [ux, uy, uz, uw] = [x / n, y / n, z / n, w / n];
+    const dx = 2 * (uw * uy - ux * uz);
+    const dy = -2 * (uw * ux + uy * uz);
+    const dz = 2 * (ux * ux + uy * uy) - 1;
+    setGx(+(m * dx).toFixed(4)); setGy(+(m * dy).toFixed(4)); setGz(+(m * dz).toFixed(4));
+  };
+  const switchGMode = (mode: "xyz" | "quat") => {
+    if (mode === "quat") { // 进 quat:从当前重力方向反解最小旋转(无 roll)作初值,避免切模式时画面跳变
+      const m = Math.hypot(gx, gy, gz) || 9.81;
+      setGMag(+m.toFixed(3));
+      const d: [number, number, number] = [gx / m, gy / m, gz / m]; // 重力方向
+      const dot = -d[2]; // d·(0,0,-1)
+      if (dot > 0.9999) { setQx(0); setQy(0); setQz(0); setQw(1); }
+      else if (dot < -0.9999) { setQx(1); setQy(0); setQz(0); setQw(0); }
+      else {
+        const ax = [-d[1], d[0], 0]; // cross(d, 下)
+        const al = Math.hypot(ax[0], ax[1], ax[2]) || 1;
+        const ang = Math.acos(Math.max(-1, Math.min(1, dot)));
+        const s = Math.sin(ang / 2);
+        setQx(+(ax[0] / al * s).toFixed(4)); setQy(+(ax[1] / al * s).toFixed(4)); setQz(+(ax[2] / al * s).toFixed(4)); setQw(+Math.cos(ang / 2).toFixed(4));
+      }
+    }
+    setGMode(mode);
+  };
+
   const controlling = !!st?.controlling;
   const dof = st?.dof || 6;
-  const grav = (st?.gravity ?? [gx, gy, gz]) as [number, number, number];
+  const grav = [gx, gy, gz] as [number, number, number]; // 本地实时值 → 3D 预览随编辑即时倾斜(“设”才下发控制器)
+  const armQuat = gMode === "quat" ? ([qx, qy, qz, qw] as [number, number, number, number]) : null;
   const names = st?.joint_names ?? Array.from({ length: dof }, (_, i) => `joint_${i + 1}`);
   const rows = names.map((n, i) => ({
     key: i, name: n,
@@ -100,7 +136,7 @@ export function ArmPanel() {
       <Card size="small">
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
           <div style={{ flex: "1 1 480px", minWidth: 380 }}>
-            <ArmViewer q={st?.q ?? []} gravity={grav} jointNames={st?.joint_names ?? []} previewQ={previewQ} />
+            <ArmViewer q={st?.q ?? []} gravity={grav} jointNames={st?.joint_names ?? []} previewQ={previewQ} armQuat={armQuat} />
           </div>
           <div style={{ flex: "1 1 320px", minWidth: 300 }}>
             <Space direction="vertical" size={12} style={{ width: "100%" }}>
@@ -117,14 +153,31 @@ export function ArmPanel() {
                 <Button danger disabled={!controlling} onClick={() => setMode(1)}>DISABLE</Button>
               </Space>
 
-              <Typography.Text strong>重力向量 (m/s²)</Typography.Text>
               <Space wrap>
-                <InputNumber style={{ width: 96 }} value={gx} step={0.5} prefix="x" onChange={(v) => setGx(v ?? 0)} />
-                <InputNumber style={{ width: 96 }} value={gy} step={0.5} prefix="y" onChange={(v) => setGy(v ?? 0)} />
-                <InputNumber style={{ width: 96 }} value={gz} step={0.5} prefix="z" onChange={(v) => setGz(v ?? 0)} />
+                <Typography.Text strong>重力向量 (m/s²)</Typography.Text>
+                <Select size="small" style={{ width: 130 }} value={gMode} onChange={switchGMode}
+                  options={[{ value: "xyz", label: "XYZ 分量" }, { value: "quat", label: "四元数朝向" }]} />
                 <Button disabled={!controlling} onClick={setGravity}>设</Button>
               </Space>
-              <Typography.Text type="secondary">测试用 z=-2.9(30%)更安全;斜装时填 base 系真实重力</Typography.Text>
+              {gMode === "xyz" ? (
+                <Space wrap>
+                  <InputNumber style={{ width: 96 }} value={gx} step={0.5} prefix="x" onChange={(v) => setGx(v ?? 0)} />
+                  <InputNumber style={{ width: 96 }} value={gy} step={0.5} prefix="y" onChange={(v) => setGy(v ?? 0)} />
+                  <InputNumber style={{ width: 96 }} value={gz} step={0.5} prefix="z" onChange={(v) => setGz(v ?? 0)} />
+                </Space>
+              ) : (
+                <>
+                  <Space wrap>
+                    <InputNumber style={{ width: 110 }} value={gMag} min={0} step={0.5} prefix="|g|" onChange={(v) => { const m = v ?? 0; setGMag(m); applyQuat(m, qx, qy, qz, qw); }} />
+                    <InputNumber style={{ width: 96 }} value={qx} step={0.05} prefix="x" onChange={(v) => { const x = v ?? 0; setQx(x); applyQuat(gMag, x, qy, qz, qw); }} />
+                    <InputNumber style={{ width: 96 }} value={qy} step={0.05} prefix="y" onChange={(v) => { const y = v ?? 0; setQy(y); applyQuat(gMag, qx, y, qz, qw); }} />
+                    <InputNumber style={{ width: 96 }} value={qz} step={0.05} prefix="z" onChange={(v) => { const z = v ?? 0; setQz(z); applyQuat(gMag, qx, qy, z, qw); }} />
+                    <InputNumber style={{ width: 96 }} value={qw} step={0.05} prefix="w" onChange={(v) => { const w = v ?? 0; setQw(w); applyQuat(gMag, qx, qy, qz, w); }} />
+                  </Space>
+                  <Typography.Link href="https://quaternions.online/" target="_blank" rel="noreferrer">四元数可视化工具 ↗</Typography.Link>
+                </>
+              )}
+              <Typography.Text type="secondary">四元数 = 整臂安装朝向(x,y,z,w,Hamilton 约定,自动归一化);3D 随编辑即时旋转。斜装直接照真实安装姿态填;测试用 |g| 调小(如 2.9)更安全。</Typography.Text>
 
               <Typography.Text strong>增益 kp/kd(host 侧给,控制器忠实执行;调低 kp 移动柔和便于观察)</Typography.Text>
               <Space wrap>

@@ -14,13 +14,15 @@ interface Props {
   gravity: [number, number, number];
   jointNames: string[];
   previewQ?: number[] | null; // 悬浮预设时的目标位姿(幽灵臂)
+  armQuat?: [number, number, number, number] | null; // 整臂朝向(x,y,z,w);给了就直接用它转臂(四元数模式),否则从重力方向反推
 }
 
-export function ArmViewer({ q, gravity, jointNames, previewQ }: Props) {
+export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const robotRef = useRef<URDFRobot | null>(null);
   const ghostRef = useRef<URDFRobot | null>(null);
   const arrowRef = useRef<THREE.ArrowHelper | null>(null);
+  const armRootRef = useRef<THREE.Group | null>(null); // 整臂根:改重力向量时旋转它(臂倾斜、重力始终朝下=人眼所见)
   const autoJointsRef = useRef<string[]>([]);
 
   useEffect(() => {
@@ -57,6 +59,11 @@ export function ArmViewer({ q, gravity, jointNames, previewQ }: Props) {
     scene.add(arrow);
     arrowRef.current = arrow;
 
+    // 整臂根:robot/ghost 挂在它下面;改重力时旋转它(地板/箭头留在 world,臂随重力倾斜)。
+    const armRoot = new THREE.Group();
+    scene.add(armRoot);
+    armRootRef.current = armRoot;
+
     const loader = new URDFLoader();
     loader.packages = { xpkg_urdf_firefly_y6: "/urdf" };
     // ⚠️ 真实签名是 (path, manager, material, onComplete) —— 4 个参数(.d.ts 漏了 material)。
@@ -77,7 +84,7 @@ export function ArmViewer({ q, gravity, jointNames, previewQ }: Props) {
     loader.loadAsync("/urdf/firefly.urdf").then((robot) => {
       robotRef.current = robot;
       autoJointsRef.current = Object.keys(robot.joints).filter((n) => (robot.joints[n] as any).jointType !== "fixed");
-      scene.add(robot);
+      armRoot.add(robot);
     }).catch((e) => console.error("URDF load failed", e));
 
     // 幽灵臂(预设预览):半透明绿色,默认隐藏。
@@ -89,7 +96,7 @@ export function ArmViewer({ q, gravity, jointNames, previewQ }: Props) {
       });
       ghost.visible = false;
       ghostRef.current = ghost;
-      scene.add(ghost);
+      armRoot.add(ghost);
     }).catch(() => {});
 
     let raf = 0;
@@ -129,17 +136,25 @@ export function ArmViewer({ q, gravity, jointNames, previewQ }: Props) {
     }
   }, [previewQ, jointNames]);
 
-  // 重力箭头方向/长度
+  // 重力可视化:箭头**始终朝下**(world -Z);**旋转整臂**让人看到机械臂在真实空间里的样子。
+  // armQuat 给了(四元数模式)→ 直接用它当整臂朝向(无歧义);否则从重力方向反推最小旋转(XYZ 模式)。
   useEffect(() => {
-    const arrow = arrowRef.current;
-    if (!arrow) return;
     const g = new THREE.Vector3(gravity[0], gravity[1], gravity[2]);
     const len = g.length();
-    if (len > 1e-6) {
-      arrow.setDirection(g.clone().normalize());
-      arrow.setLength(0.12 + 0.22 * Math.min(len / 9.81, 1), 0.05, 0.03);
+    const arrow = arrowRef.current;
+    if (arrow && len > 1e-6) {
+      arrow.setDirection(new THREE.Vector3(0, 0, -1)); // 固定朝下
+      arrow.setLength(0.12 + 0.22 * Math.min(len / 9.81, 1), 0.05, 0.03); // 长度示意大小
     }
-  }, [gravity]);
+    const armRoot = armRootRef.current;
+    if (armRoot) {
+      if (armQuat) {
+        armRoot.quaternion.set(armQuat[0], armQuat[1], armQuat[2], armQuat[3]).normalize();
+      } else if (len > 1e-6) {
+        armRoot.quaternion.setFromUnitVectors(g.clone().normalize(), new THREE.Vector3(0, 0, -1));
+      }
+    }
+  }, [gravity, armQuat]);
 
   return <div ref={mountRef} style={{ width: "100%", height: 440, borderRadius: 8, overflow: "hidden" }} />;
 }

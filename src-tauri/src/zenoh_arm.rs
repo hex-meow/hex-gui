@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use anyhow::anyhow;
+use hex_arm_dynamics::ArmDynamics;
 use prost::Message;
 use serde::Serialize;
 
@@ -77,6 +78,7 @@ struct Ctrl {
     session_id: AtomicU32,
     target: StdMutex<Option<Vec<f32>>>, // Active 时 50Hz 流的目标位姿
     gains: StdMutex<(f32, f32)>,        // (kp, kd) —— host 侧定增益(控制器忠实执行)
+    dynamics: StdMutex<Option<Arc<ArmDynamics>>>, // 取控时从 arm/urdf 建;host 端重力前馈 tau_ff=G(q) 用
     state: StdMutex<ZenohArmState>,
 }
 
@@ -100,7 +102,8 @@ impl ZenohArmConn {
             prefix: StdMutex::new(None),
             session_id: AtomicU32::new(0),
             target: StdMutex::new(None),
-            gains: StdMutex::new((20.0, 1.5)),
+            gains: StdMutex::new((10.0, 1.5)), // 有重力前馈后 kp=10 已够,更柔和
+            dynamics: StdMutex::new(None),
             state: StdMutex::new(s0),
         });
 
@@ -119,10 +122,22 @@ impl ZenohArmConn {
                     let Some(target) = c.target.lock().unwrap().clone() else { continue };
                     let (kp, kd) = *c.gains.lock().unwrap();
                     let n = target.len();
+                    // host 端重力前馈:tau_ff = G(q_当前)。在臂**当前所在**算重力(control 在哪补哪)→
+                    // Active 位置控制下不再因重力下垂/漂移。与控制器 GRAVITY_COMP **同一 G(q)**(共用 crate)。
+                    // 模型未加载 / q 维度不符 → 空 tau_ff(优雅退化为纯 kp/kd)。
+                    let tau_ff = {
+                        let dyn_guard = c.dynamics.lock().unwrap();
+                        let st = c.state.lock().unwrap();
+                        match dyn_guard.as_ref() {
+                            Some(d) if d.dof() == n && st.q.len() == n =>
+                                d.gravity_torque_with(&st.q, st.gravity),
+                            _ => vec![],
+                        }
+                    };
                     let jt = pb::JointTrajectory {
                         header: None,
                         session_id: sid,
-                        points: vec![pb::JointSetpoint { q: target, dq: vec![], kp: vec![kp; n], kd: vec![kd; n], tau_ff: vec![] }],
+                        points: vec![pb::JointSetpoint { q: target, dq: vec![], kp: vec![kp; n], kd: vec![kd; n], tau_ff }],
                         t_from_start_ns: vec![0],
                         on_timeout: pb::TimeoutBehavior::Hold as i32,
                     };
@@ -204,6 +219,15 @@ impl ZenohArmConn {
         *self.ctrl.prefix.lock().unwrap() = Some(prefix.to_string());
         // 取 arm/description 填关节名/限位
         let desc = query_one::<pb::ArmDescription>(&self.session, &format!("{prefix}/arm/description"), vec![]).await;
+        // 取 arm/urdf 建重力前馈模型(host 端 tau_ff=G(q);失败则关闭前馈,退化为纯 kp/kd)
+        let dynamics = match query_one::<pb::UrdfResource>(&self.session, &format!("{prefix}/arm/urdf"), vec![]).await {
+            Some(u) => match ArmDynamics::from_urdf_string(&u.xml) {
+                Ok(d) => { log::info!("Arm: 重力前馈模型已加载(dof={})", d.dof()); Some(Arc::new(d)) }
+                Err(e) => { log::warn!("Arm: URDF 解析失败,重力前馈关闭: {e}"); None }
+            },
+            None => { log::warn!("Arm: 无 arm/urdf(控制器未配 URDF_PATH?),重力前馈关闭"); None }
+        };
+        *self.ctrl.dynamics.lock().unwrap() = dynamics;
         let mut st = self.ctrl.state.lock().unwrap();
         st.controlling = true; st.prefix = prefix.into(); st.model = model.into(); st.mode = "DISABLED".into();
         if let Some(d) = desc {
@@ -257,6 +281,7 @@ impl ZenohArmConn {
             let _: Option<pb::GenericResponse> = query_one(&self.session, &format!("{prefix}/rpc/release_session"), enc(&req)).await;
         }
         *self.ctrl.prefix.lock().unwrap() = None;
+        *self.ctrl.dynamics.lock().unwrap() = None;
         let mut st = self.ctrl.state.lock().unwrap();
         st.controlling = false; st.holder = 0; st.mode = "DISABLED".into();
     }

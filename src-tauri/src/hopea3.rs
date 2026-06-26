@@ -10,7 +10,7 @@
 //! (u16, ‰). The master streams targets at **500 Hz** as **one shared CAN-FD
 //! frame** that all three motors receive — each reads its own 8-byte slice, the
 //! other slices are consumed by placeholder mappings. This mirrors the
-//! single-frame technique in `base-backend/src/motors/hy_mit_motor.rs`.
+//! single-frame technique from a proven reference implementation.
 //!
 //! Feedback / odometry reuse the manager's existing TPDO1 stream (it already
 //! parses position / host-filtered velocity / torque per motor); we read
@@ -98,8 +98,8 @@ const MIT_SUB_FACTOR: u8 = 0x07; // f32       (kp/kd phys→int divisor)
 const OD_MAX_TORQUE: u16 = 0x6072; // u16 ‰ of peak
 
 /// Placeholder mapping object for the bytes belonging to *other* motors. Using
-/// the vendor object the proven `hy_mit_motor.rs` reference uses (`0x3000:03`,
-/// 32-bit) rather than a CiA dummy, since HEX firmware is known to accept it.
+/// the vendor object the proven reference implementation uses (`0x3000:03`,
+/// 32-bit) rather than a CiA dummy, since the motor firmware is known to accept it.
 /// One per 4 bytes ⇒ two per 8-byte slice.
 const PAD_ENTRY: TpdoEntry = TpdoEntry {
     index: 0x3000,
