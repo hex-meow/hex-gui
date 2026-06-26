@@ -10,12 +10,15 @@
 #   • Windows (windows-latest) → .msi + .exe NSIS installer  (x86-64)
 #   • macOS (macos-latest) → .dmg + .app, built `universal` (Intel + Apple Silicon)
 #
-# ⚠️ PREREQUISITE: src-tauri/Cargo.toml currently uses path deps + a
-# [patch.crates-io] block pointing at sibling crates that live OUTSIDE this
-# repo (../../hex-motor, ../../can-transport, ../../canopen-sdo). A fresh CI
-# checkout cannot resolve them, so this workflow will NOT go green until those
-# are switched to crates.io sources (publish hex-motor, then drop the path deps
-# and the patch block). See the chat notes / README for the exact edits.
+# ⚠️ PREREQUISITES for a green CI build — two things must resolve in a FRESH
+# checkout (hex-motor / can-transport / canopen-sdo are already crates.io deps):
+#   1. hex-arm-dynamics — publish it to crates.io. Cargo.toml now uses
+#      `hex-arm-dynamics = "0.1.0"` (no longer a path dep).
+#   2. The shared proto — build.rs compiles `../../hex-robot-proto/proto` by
+#      default, a SIBLING repo NOT present in CI. Provide it one of:
+#        • vendor the .proto into this repo + point ROBOT_PROTO_DIR at it, OR
+#        • add a CI step that checks out hex-robot-proto + set ROBOT_PROTO_DIR, OR
+#        • fetch via buf (`buf export`) / depend on a published proto crate.
 #
 # ⚠️ Bundles here are UNSIGNED. macOS users hit Gatekeeper (right-click → Open);
 # Windows users hit SmartScreen. Add code signing later via tauri-action env.
@@ -52,6 +55,19 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+
+      # Shared proto contract lives in a sibling repo; build.rs compiles it via
+      # ROBOT_PROTO_DIR. Check it out (pinned tag) so a fresh CI checkout resolves.
+      # Bump `ref` when the proto changes; switch to `main` if you prefer latest.
+      - name: Check out shared proto (hex-robot-proto)
+        uses: actions/checkout@v4
+        with:
+          repository: hex-meow/hex-robot-proto
+          ref: v0.1.0
+          path: _proto
+      - name: Point the build at the shared proto
+        shell: bash # forward-slash relative path → works on Linux/macOS/Windows
+        run: echo "ROBOT_PROTO_DIR=../_proto/proto" >> "$GITHUB_ENV"
 
       # Tauri v2 Linux runtime/build deps: WebKitGTK 4.1, GTK3, libsoup3, etc.
       # libfuse2 lets the AppImage tooling run. (gs_usb uses pure-Rust nusb, so

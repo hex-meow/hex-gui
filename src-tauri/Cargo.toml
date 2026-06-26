@@ -32,7 +32,8 @@ hex-motor = "0.1.1"
 zenoh = "1"
 prost = "0.13"
 # 机械臂动力学(重力 G(q)):host 端 tau_ff 前馈,与控制器 GRAVITY_COMP 共用同一 crate(仅依赖 urdf-rs)。
-hex-arm-dynamics = { path = "../../hex-arm-dynamics" }
+# crates.io 版(CI 需要)。本地开发未发布改动时可临时改回 { path = "../../hex-arm-dynamics" }。
+hex-arm-dynamics = "0.1.0"
 
 # The `gs_usb` backend (candleLight over USB, CAN-FD) is cross-platform, so
 # it's enabled on every target. On Linux we additionally build `socketcan`.
