@@ -419,16 +419,23 @@ pub async fn smartknob_set_config(state: State<'_, AppState>, index: usize) -> C
 }
 
 /// Update live haptic tunables: overall strength scale (Nm/unit), host torque
-/// clamp (Nm), and the motor-side max-torque safety clamp (‰ of peak).
+/// clamp (Nm), motor-side max-torque safety clamp (‰ of peak), and Coulomb
+/// friction compensation (Nm) for non-Zero-G modes.
 #[tauri::command]
 pub async fn smartknob_set_tuning(
     state: State<'_, AppState>,
     strength_scale: f64,
     torque_limit_nm: f64,
     max_torque_permille: u16,
+    friction_compensation: f64,
 ) -> CmdResult<()> {
     if let Some(app) = state.smartknob.lock().await.as_ref() {
-        app.set_tuning(strength_scale, torque_limit_nm, max_torque_permille);
+        app.set_tuning(
+            strength_scale,
+            torque_limit_nm,
+            max_torque_permille,
+            friction_compensation,
+        );
     }
     Ok(())
 }

@@ -187,6 +187,7 @@ const STRINGS = {
   skStrength: { en: "Strength scale (Nm/unit)", zh: "强度系数 (Nm/单位)" },
   skTorqueLimit: { en: "Torque limit (Nm)", zh: "力矩上限 (Nm)" },
   skMaxTorque: { en: "Motor max torque (‰)", zh: "电机最大力矩 (‰)" },
+  skFrictionComp: { en: "Friction comp (Nm)", zh: "摩擦补偿 (Nm)" },
 
   // HopeA3 panel
   hopeStart: { en: "Start", zh: "启动" },

@@ -119,6 +119,9 @@ export interface KnobConfig {
   snap_point: number;
   snap_point_bias: number;
   detent_positions: number[];
+  zero_g: boolean;
+  friction_compensation: number;
+  strength_scale: number;
   text: string;
   led_hue: number;
 }
@@ -146,6 +149,7 @@ export interface SmartKnobState {
   strength_scale: number;
   torque_limit_nm: number;
   max_torque_permille: number;
+  friction_compensation: number;
 }
 
 // ── Base(Zenoh) (mirrors zenoh_base::ZenohBaseState / BaseInfo) ──

@@ -20,6 +20,13 @@ import type { KnobConfig, MotorInfo, SmartKnobState } from "../types";
 
 const POLL_MS = 40; // 25 Hz UI poll (haptic loop runs at 1 kHz in Rust)
 
+interface PerModeTuning {
+  strength: number;
+  torqueLimit: number;
+  maxTorque: number;
+  frictionComp: number;
+}
+
 export function SmartKnobPanel({ connected, devices }: { connected: boolean; devices: MotorInfo[] }) {
   const { message } = AntdApp.useApp();
   const { t } = useI18n();
@@ -36,6 +43,11 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
   const [strength, setStrength] = useState(0.15);
   const [torqueLimit, setTorqueLimit] = useState(2.0);
   const [maxTorque, setMaxTorque] = useState(700);
+  const [frictionComp, setFrictionComp] = useState(0.0);
+
+  // Per-mode tuning RAM — survives mode switches so the user doesn't lose
+  // their tweaks.  Lazy: only populated when the user touches a slider.
+  const perModeTuning = useRef<Map<number, PerModeTuning>>(new Map());
 
   // Fetch the preset list once (it's static, connection-independent).
   useEffect(() => {
@@ -80,7 +92,7 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
     setStarting(true);
     try {
       await api.smartknobStart(selectedNid, modeIndex);
-      await api.smartknobSetTuning(strength, torqueLimit, maxTorque);
+      await api.smartknobSetTuning(strength, torqueLimit, maxTorque, frictionComp);
       setRunning(true);
       message.success(t("skRunning"));
     } catch (e) {
@@ -88,7 +100,7 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
     } finally {
       setStarting(false);
     }
-  }, [selectedNid, modeIndex, strength, torqueLimit, maxTorque, message, t]);
+  }, [selectedNid, modeIndex, strength, torqueLimit, maxTorque, frictionComp, message, t]);
 
   const stop = useCallback(async () => {
     try {
@@ -103,19 +115,44 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
   const pickMode = useCallback(
     (idx: number) => {
       setModeIndex(idx);
-      if (running) api.smartknobSetConfig(idx).catch(() => {});
-    },
-    [running]
-  );
-
-  const applyTuning = useCallback(
-    (s: number, tl: number, mt: number) => {
+      // Restore per-mode tuning if the user has touched this mode before;
+      // otherwise fall back to the preset defaults.
+      const saved = perModeTuning.current.get(idx);
+      let s: number, tl: number, mt: number, fc: number;
+      if (saved) {
+        s = saved.strength;
+        tl = saved.torqueLimit;
+        mt = saved.maxTorque;
+        fc = saved.frictionComp;
+      } else {
+        s = configs[idx]?.strength_scale ?? 0.15;
+        tl = torqueLimit;
+        mt = maxTorque;
+        fc = configs[idx]?.friction_compensation ?? 0;
+      }
       setStrength(s);
       setTorqueLimit(tl);
       setMaxTorque(mt);
-      if (running) api.smartknobSetTuning(s, tl, mt).catch(() => {});
+      setFrictionComp(fc);
+      if (running) {
+        api.smartknobSetConfig(idx).catch(() => {});
+        api.smartknobSetTuning(s, tl, mt, fc).catch(() => {});
+      }
     },
-    [running]
+    [running, configs, torqueLimit, maxTorque]
+  );
+
+  const applyTuning = useCallback(
+    (s: number, tl: number, mt: number, fc: number) => {
+      setStrength(s);
+      setTorqueLimit(tl);
+      setMaxTorque(mt);
+      setFrictionComp(fc);
+      // Persist into the per-mode RAM slot for the currently-active mode.
+      perModeTuning.current.set(modeIndex, { strength: s, torqueLimit: tl, maxTorque: mt, frictionComp: fc });
+      if (running) api.smartknobSetTuning(s, tl, mt, fc).catch(() => {});
+    },
+    [running, modeIndex]
   );
 
   const clearError = useCallback(async () => {
@@ -205,7 +242,7 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
                   min={0}
                   step={0.01}
                   value={strength}
-                  onChange={(v) => applyTuning(v ?? 0, torqueLimit, maxTorque)}
+                  onChange={(v) => applyTuning(v ?? 0, torqueLimit, maxTorque, frictionComp)}
                 />
               </Labeled>
               <Labeled label={t("skTorqueLimit")}>
@@ -213,7 +250,7 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
                   min={0}
                   step={0.1}
                   value={torqueLimit}
-                  onChange={(v) => applyTuning(strength, v ?? 0, maxTorque)}
+                  onChange={(v) => applyTuning(strength, v ?? 0, maxTorque, frictionComp)}
                 />
               </Labeled>
               <Labeled label={t("skMaxTorque")}>
@@ -222,7 +259,16 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
                   max={1000}
                   step={50}
                   value={maxTorque}
-                  onChange={(v) => applyTuning(strength, torqueLimit, v ?? 0)}
+                  onChange={(v) => applyTuning(strength, torqueLimit, v ?? 0, frictionComp)}
+                />
+              </Labeled>
+              <Labeled label={t("skFrictionComp")}>
+                <InputNumber
+                  min={0}
+                  max={0.5}
+                  step={0.005}
+                  value={frictionComp}
+                  onChange={(v) => applyTuning(strength, torqueLimit, maxTorque, v ?? 0)}
                 />
               </Labeled>
             </Space>
@@ -280,6 +326,7 @@ function Dial({ config, state }: { config: KnobConfig | null; state: SmartKnobSt
   const pos = state?.current_position ?? config?.position ?? 0;
   const sub = state?.sub_position_unit ?? 0; // pointer offset toward next detent, in (−1..1)
   const minP = state?.min_position ?? config?.min_position ?? 0;
+  const maxP = state?.max_position ?? config?.max_position ?? 0;
   const endstop = state?.at_endstop ?? false;
   const running = state?.running ?? false;
 
@@ -294,10 +341,10 @@ function Dial({ config, state }: { config: KnobConfig | null; state: SmartKnobSt
   if (gauge) {
     // Bounded value gauge: spread positions across a 300° arc, gap at bottom.
     const start = 90 + (360 - GAUGE_SPAN) / 2; // 120° (SVG: 0°=+x, CW positive here)
-    const frac = num > 1 ? (value - minP) / (num - 1) : 0;
+    const frac = num > 1 ? (maxP - value) / (num - 1) : 0;
     needleDeg = start + clamp(frac, 0, 1) * GAUGE_SPAN;
     for (let i = 0; i < num; i++) {
-      const deg = start + (i / (num - 1)) * GAUGE_SPAN;
+      const deg = start + ((num - 1 - i) / (num - 1)) * GAUGE_SPAN;
       const active = i === pos - minP;
       ticks.push(
         <Tick key={i} deg={deg} color={active ? accent : dim} long={active} />

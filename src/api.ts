@@ -63,8 +63,18 @@ export const api = {
   smartknobStop: () => invoke<void>("smartknob_stop"),
   smartknobSetConfig: (index: number) =>
     invoke<void>("smartknob_set_config", { index }),
-  smartknobSetTuning: (strengthScale: number, torqueLimitNm: number, maxTorquePermille: number) =>
-    invoke<void>("smartknob_set_tuning", { strengthScale, torqueLimitNm, maxTorquePermille }),
+  smartknobSetTuning: (
+      strengthScale: number,
+      torqueLimitNm: number,
+      maxTorquePermille: number,
+      frictionCompensation: number,
+    ) =>
+    invoke<void>("smartknob_set_tuning", {
+      strengthScale,
+      torqueLimitNm,
+      maxTorquePermille,
+      frictionCompensation,
+    }),
   smartknobClearError: () => invoke<void>("smartknob_clear_error"),
   smartknobGetState: () => invoke<SmartKnobState>("smartknob_get_state"),
 
