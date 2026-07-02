@@ -1,0 +1,10 @@
+.base-pose-viewer {
+  flex: 1;
+  min-height: 440px;
+}
+
+.base-pose-viewer canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

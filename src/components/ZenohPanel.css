@@ -1,0 +1,282 @@
+.zenoh-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  min-height: calc(100vh - 96px);
+}
+
+.zenoh-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.zenoh-panel__title.ant-typography {
+  margin: 0 0 4px;
+}
+
+.zenoh-panel__status {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 220px;
+}
+
+.zenoh-connect-panel,
+.zenoh-card,
+.zenoh-odom {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02)),
+    #101318;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.zenoh-connect-panel {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto minmax(420px, 1.2fr);
+  gap: 12px;
+  align-items: end;
+  padding: 16px;
+}
+
+.zenoh-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #d8dee8;
+  font-weight: 650;
+}
+
+.zenoh-field .ant-input-number {
+  width: 100%;
+}
+
+.zenoh-field > span {
+  color: #9aa4b2;
+  font-size: 12px;
+}
+
+.zenoh-connect-panel__actions,
+.zenoh-discovery {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.zenoh-discovery__select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.zenoh-dashboard {
+  display: grid;
+  grid-template-columns: minmax(300px, 340px) minmax(420px, 1fr) minmax(280px, 340px);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.zenoh-card,
+.zenoh-odom {
+  min-width: 0;
+  padding: 16px;
+}
+
+.zenoh-card__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.zenoh-card__heading h2 {
+  margin: 0 0 2px;
+  color: #eef2f7;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.zenoh-active-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.zenoh-pad {
+  display: grid;
+  grid-template-columns: repeat(3, 68px);
+  gap: 10px;
+  justify-content: center;
+  margin: 18px 0;
+}
+
+.zenoh-pad .ant-btn {
+  height: 48px;
+  touch-action: none;
+}
+
+.zenoh-speed-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.zenoh-keyboard-control {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.zenoh-keyboard-control__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.zenoh-key-hints {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.zenoh-key-hints kbd {
+  display: grid;
+  min-width: 0;
+  height: 30px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.18);
+  color: #dce7f7;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.zenoh-keyboard-control__hint.ant-typography {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.zenoh-odom {
+  display: flex;
+  flex-direction: column;
+  min-height: 520px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.zenoh-odom__heading {
+  margin: 0;
+  padding: 16px 16px 0;
+}
+
+.zenoh-telemetry {
+  display: flex;
+  flex-direction: column;
+}
+
+.zenoh-metric-group + .zenoh-metric-group {
+  margin-top: 18px;
+}
+
+.zenoh-metric-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.zenoh-metric {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 7px;
+}
+
+.zenoh-metric span {
+  color: #8a93a3;
+  font-size: 12px;
+}
+
+.zenoh-metric strong {
+  color: #eef2f7;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  white-space: pre;
+}
+
+.zenoh-prefix {
+  margin-top: auto;
+  overflow: hidden;
+  padding-top: 18px;
+  color: #667085;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1220px) {
+  .zenoh-connect-panel {
+    grid-template-columns: minmax(260px, 1fr) auto;
+  }
+
+  .zenoh-discovery {
+    grid-column: 1 / -1;
+  }
+
+  .zenoh-dashboard {
+    grid-template-columns: minmax(260px, 320px) minmax(420px, 1fr);
+  }
+
+  .zenoh-telemetry {
+    grid-column: 1 / -1;
+  }
+
+  .zenoh-metric-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .zenoh-panel__header,
+  .zenoh-connect-panel,
+  .zenoh-dashboard {
+    grid-template-columns: 1fr;
+  }
+
+  .zenoh-panel__header {
+    display: grid;
+  }
+
+  .zenoh-panel__status,
+  .zenoh-connect-panel__actions,
+  .zenoh-discovery {
+    justify-content: flex-start;
+  }
+
+  .zenoh-telemetry {
+    grid-column: auto;
+  }
+
+  .zenoh-metric-grid {
+    grid-template-columns: 1fr;
+  }
+}

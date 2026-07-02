@@ -20,13 +20,14 @@ import { api, errMsg } from "../api";
 import { useI18n } from "../i18n";
 import { nid2hex } from "../format";
 import type { Hopea3Motor, Hopea3State } from "../types";
+import { BasePoseViewer } from "./BasePoseViewer";
 
 const POLL_MS = 50; // 20 Hz UI poll (control/odom run at 500 Hz in Rust)
 const MAX_TRAJ_POINTS = 3000;
 const MANUAL_MS = 33; // ~30 Hz manual-input (keyboard/gamepad) loop
 const PAD_DEADZONE = 0.12;
 
-// WASD = XY translate, QE = yaw. Mapped to ROS: +vx fwd, +vy left, +wz CCW.
+// WASD = XY translate, QE = yaw. Signs match the on-screen drive pad.
 const KEY_MAP: Record<string, "fwd" | "back" | "left" | "right" | "ccw" | "cw"> = {
   w: "fwd", s: "back", a: "left", d: "right", q: "ccw", e: "cw",
 };
@@ -63,6 +64,7 @@ export function Hopea3Panel({ connected }: { connected: boolean }) {
   // Trajectory ring buffer (world frame).
   const traj = useRef<{ x: number; y: number }[]>([]);
   const [trajVersion, setTrajVersion] = useState(0);
+  const [odomViewVersion, setOdomViewVersion] = useState(0);
 
   // Poll backend state while running.
   useEffect(() => {
@@ -120,6 +122,7 @@ export function Hopea3Panel({ connected }: { connected: boolean }) {
       await api.hopea3Start();
       traj.current = [];
       setTrajVersion((v) => v + 1);
+      setOdomViewVersion((v) => v + 1);
       setRunning(true);
       message.success(t("hopeRunning"));
     } catch (e) {
@@ -355,8 +358,20 @@ export function Hopea3Panel({ connected }: { connected: boolean }) {
               <Card
                 title={t("hopeOdom")}
                 size="small"
-                extra={<Button size="small" onClick={() => { traj.current = []; setTrajVersion((v) => v + 1); api.hopea3ResetOdom().catch(() => {}); }}>{t("hopeResetOdom")}</Button>}
+                extra={<Button size="small" onClick={() => { traj.current = []; setTrajVersion((v) => v + 1); setOdomViewVersion((v) => v + 1); api.hopea3ResetOdom().catch(() => {}); }}>{t("hopeResetOdom")}</Button>}
               >
+                <div style={{ height: 440, margin: "-8px -8px 12px" }}>
+                  <BasePoseViewer
+                    key={odomViewVersion}
+                    connected={running}
+                    poseX={state?.pose_x ?? 0}
+                    poseY={state?.pose_y ?? 0}
+                    theta={state?.pose_theta ?? 0}
+                    vx={state?.meas_vx ?? 0}
+                    vy={state?.meas_vy ?? 0}
+                    wz={state?.meas_wz ?? 0}
+                  />
+                </div>
                 <TrajectoryChart
                   points={traj.current}
                   version={trajVersion}
@@ -630,10 +645,10 @@ function readKeyboard(keys: Set<string>, linear: number, angular: number): Twist
     switch (KEY_MAP[k]) {
       case "fwd": fx += 1; break;
       case "back": fx -= 1; break;
-      case "left": fy += 1; break;
-      case "right": fy -= 1; break;
-      case "ccw": fz += 1; break;
-      case "cw": fz -= 1; break;
+      case "left": fy -= 1; break;
+      case "right": fy += 1; break;
+      case "ccw": fz -= 1; break;
+      case "cw": fz += 1; break;
     }
   }
   if (fx === 0 && fy === 0 && fz === 0) return null;
