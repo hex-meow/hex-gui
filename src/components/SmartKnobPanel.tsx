@@ -261,7 +261,7 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
     (updates: Partial<KnobConfig>) => {
       setCustomConfig((prev) => {
         if (!prev) return prev;
-        let next: KnobConfig = {
+        const next: KnobConfig = {
           ...prev,
           strength_scale: strength,
           friction_compensation: frictionComp,
@@ -270,8 +270,9 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
           d_gain: dGain,
           ...updates,
         };
-        if (shouldRefreshDefaultGains(updates)) {
-          next = withDefaultGains(next);
+        if (modeIndex === 0 && updates.detent_strength_unit !== undefined) {
+          next.p_gain = recommendedPGain(next);
+          next.d_gain = recommendedDGain(next);
           setPGain(next.p_gain);
           setDGain(next.d_gain);
           perModeTuning.current.set(modeIndex, {
@@ -279,7 +280,7 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
             torqueLimit,
             maxTorque,
             frictionComp,
-            clickTorque: next.click_torque_nm,
+            clickTorque,
             pGain: next.p_gain,
             dGain: next.d_gain,
           });
@@ -291,7 +292,7 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
               torqueLimit,
               maxTorque,
               frictionComp,
-              next.click_torque_nm,
+              clickTorque,
             ).catch(() => {});
           }
         }
@@ -303,6 +304,14 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
     },
     [running, modeIndex, strength, torqueLimit, maxTorque, frictionComp, clickTorque, pGain, dGain],
   );
+
+  const applyRecommendedGains = useCallback(() => {
+    const cfg = modeIndex === 0 ? customConfig : configs[modeIndex];
+    if (!cfg) return;
+    const nextPGain = recommendedPGain(cfg);
+    const nextDGain = recommendedDGain(cfg);
+    applyTuning(strength, torqueLimit, maxTorque, frictionComp, clickTorque, nextPGain, nextDGain);
+  }, [modeIndex, customConfig, configs, applyTuning, strength, torqueLimit, maxTorque, frictionComp, clickTorque]);
 
   const clearError = useCallback(async () => {
     try {
@@ -514,6 +523,9 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
                   onChange={(v) => applyTuning(strength, torqueLimit, maxTorque, frictionComp, clickTorque, pGain, v ?? 0)}
                 />
               </Labeled>
+              <Button onClick={applyRecommendedGains}>
+                {t("skRecommendedGains")}
+              </Button>
               <Labeled label={t("skStrength")}>
                 <InputNumber
                   min={0}
@@ -762,28 +774,11 @@ function Labeled({ label, children }: { label: string; children: React.ReactNode
 const DEG = Math.PI / 180;
 const CLICK_WIDTH_THRESHOLD_RAD = 3 * DEG;
 
-function shouldRefreshDefaultGains(updates: Partial<KnobConfig>): boolean {
-  return (
-    updates.detent_strength_unit !== undefined ||
-    updates.position_width_radians !== undefined ||
-    updates.detent_positions !== undefined ||
-    updates.click_torque_nm !== undefined
-  );
-}
-
-function withDefaultGains(cfg: KnobConfig): KnobConfig {
-  return {
-    ...cfg,
-    p_gain: defaultPGain(cfg),
-    d_gain: defaultDGain(cfg),
-  };
-}
-
-function defaultPGain(cfg: KnobConfig): number {
+function recommendedPGain(cfg: KnobConfig): number {
   return cfg.detent_strength_unit * 4.0;
 }
 
-function defaultDGain(cfg: KnobConfig): number {
+function recommendedDGain(cfg: KnobConfig): number {
   if (cfg.detent_positions.length > 0) return 0;
   if (cfg.click_torque_nm > 0 || cfg.position_width_radians < CLICK_WIDTH_THRESHOLD_RAD) return 0;
 

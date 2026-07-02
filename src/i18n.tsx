@@ -191,6 +191,7 @@ const STRINGS = {
   skClickTorque: { en: "Click torque (Nm)", zh: "弹片强度 (Nm)" },
   skPGain: { en: "P-gain", zh: "P 增益" },
   skDGain: { en: "D-gain", zh: "D 增益" },
+  skRecommendedGains: { en: "Use recommended P/D", zh: "使用推荐 P/D" },
   skTuningFeel: { en: "Tuning — Feel", zh: "调参 — 手感" },
   skTuningSafety: { en: "Tuning — Safety", zh: "调参 — 安全" },
   skModeConfig: { en: "Mode config", zh: "模式配置" },

@@ -101,9 +101,6 @@ const PID_LIMIT: f64 = 10.0;
 //    direction) whenever the position changes when the detent width is
 //    too small for the P factor to work well."
 
-/// Detent widths below this threshold use haptic clicks instead of D-gain.
-const CLICK_WIDTH_THRESHOLD_RAD: f64 = 3.0 * DEG;
-
 /// Click duration per direction (ticks at 1 kHz).  5 ms → 10 ms total per click.
 const CLICK_TICKS_PER_PHASE: u32 = 5;
 
@@ -167,7 +164,11 @@ pub struct KnobConfig {
     pub is_custom: bool,
 }
 
-/// Helper: the most common defaults for a [`KnobConfig`] preset.
+/// Helper for declaring haptic presets.
+///
+/// Keep `p_gain` and `d_gain` explicit in each call. They are part of the
+/// mode's feel, so downstream users can customize any preset by editing one
+/// line instead of reverse-engineering a detent-strength formula.
 impl KnobConfig {
     fn preset(
         text: &str,
@@ -181,9 +182,11 @@ impl KnobConfig {
         snap_point_bias: f64,
         friction_compensation: f64,
         strength_scale: f64,
+        p_gain: f64,
+        d_gain: f64,
         led_hue: i32,
     ) -> Self {
-        let mut cfg = Self {
+        Self {
             position,
             min_position,
             max_position,
@@ -194,20 +197,13 @@ impl KnobConfig {
             snap_point_bias,
             friction_compensation,
             strength_scale,
+            p_gain,
+            d_gain,
             text: text.to_string(),
             led_hue,
             ..Default::default()
-        };
-        cfg.p_gain = default_p_gain(&cfg);
-        cfg.d_gain = default_d_gain(&cfg);
-        cfg
+        }
     }
-}
-
-fn config_with_default_gains(mut config: KnobConfig) -> KnobConfig {
-    config.p_gain = default_p_gain(&config);
-    config.d_gain = default_d_gain(&config);
-    config
 }
 
 /// The full demo set, ported 1:1 from `interface_task.cpp`.
@@ -215,7 +211,7 @@ pub fn preset_configs() -> Vec<KnobConfig> {
     let p = KnobConfig::preset;
     vec![
         // ── Custom: fully user-editable mode ──
-        config_with_default_gains(KnobConfig {
+        KnobConfig {
             is_custom: true,
             text: "Custom\nEdit me".into(),
             led_hue: 120,
@@ -224,29 +220,33 @@ pub fn preset_configs() -> Vec<KnobConfig> {
             snap_point: 0.55,
             friction_compensation: DEFAULT_FRICTION_COMPENSATION,
             strength_scale: DEFAULT_STRENGTH_SCALE,
-            ..p("", 0, 0, -1, 10.0, 0.0, 1.0, 0.55, 0.0, 0.03, 0.15, 120)
-        }),
+            p_gain: 0.0,
+            d_gain: 0.0,
+            ..p("", 0, 0, -1, 10.0, 0.0, 1.0, 0.55, 0.0, 0.03, 0.35, 0.0, 0.0, 120)
+        },
         // ── classic presets ──
-        p("Unbounded\nNo detents", 0, 0, -1, 10.0, 0.0, 1.0, 1.1, 0.0, 0.09, 0.15, 200),
-        p("Bounded 0-10\nNo detents", 0, 0, 10, 10.0, 0.0, 1.0, 1.1, 0.0, 0.05, 0.25, 0),
-        p("Multi-rev\nNo detents", 0, 0, 72, 10.0, 0.0, 1.0, 1.1, 0.0, 0.08, DEFAULT_STRENGTH_SCALE, 73),
-        p("On/off\nStrong detent", 0, 0, 1, 60.0, 1.0, 1.0, 0.55, 0.0, 0.05, 0.25, 157),
-        p("Return-to-center", 0, 0, 0, 60.0, 0.01, 0.6, 1.1, 0.0, DEFAULT_FRICTION_COMPENSATION, 0.05, 45),
-        p("Fine values\nNo detents", 127, 0, 255, 1.0, 0.0, 1.0, 1.1, 0.0, 0.02, 0.3, 219),
-        config_with_default_gains(KnobConfig {
+        // The two arguments before `led_hue` are this mode's explicit
+        // `p_gain` and `d_gain`; edit them per preset to customize feel.
+        p("Unbounded\nNo detents", 0, 0, -1, 10.0, 0.0, 1.0, 1.1, 0.0, 0.09, 0.15, 0.0, 0.0, 200),
+        p("Bounded 0-10\nNo detents", 0, 0, 10, 10.0, 0.0, 1.0, 1.1, 0.0, 0.05, 0.25, 0.0, 0.0, 0),
+        p("Multi-rev\nNo detents", 0, 0, 72, 10.0, 0.0, 1.0, 1.1, 0.0, 0.08, DEFAULT_STRENGTH_SCALE, 0.0, 0.0, 73),
+        p("On/off\nStrong detent", 0, 0, 1, 60.0, 1.0, 1.0, 0.55, 0.0, 0.05, 0.25, 4.0, 0.11, 157),
+        p("Return-to-center", 0, 0, 0, 60.0, 0.01, 0.6, 1.1, 0.0, DEFAULT_FRICTION_COMPENSATION, 0.05, 0.04, 0.0002, 45),
+        p("Fine values\nNo detents", 127, 0, 255, 1.0, 0.0, 1.0, 1.1, 0.0, 0.02, 0.3, 0.0, 0.0, 219),
+        KnobConfig {
             click_torque_nm: 0.37,
-            ..p("Fine values\nWith detents", 127, 0, 255, 1.0, 1.0, 1.0, 1.1, 0.0, DEFAULT_FRICTION_COMPENSATION, 0.25, 25)
-        }),
-        p("Coarse values\nStrong detents", 0, 0, 31, 8.225806452, 2.0, 1.0, 1.1, 0.0, 0.08, 0.75, 200),
-        config_with_default_gains(KnobConfig {
+            ..p("Fine values\nWith detents", 127, 0, 255, 1.0, 1.0, 1.0, 1.1, 0.0, DEFAULT_FRICTION_COMPENSATION, 0.25, 4.0, 0.0, 25)
+        },
+        p("Coarse values\nStrong detents", 0, 0, 31, 8.225806452, 2.5, 1.0, 1.1, 0.0, 0.08, 0.75, 10.0, 0.05, 200),
+        KnobConfig {
             click_torque_nm: 1.20,
-            ..p("Coarse values\nWeak detents", 0, 0, 31, 8.225806452, 0.2, 1.0, 1.1, 0.0, 0.02, 1.5, 0)
-        }),
-        config_with_default_gains(KnobConfig {
+            ..p("Coarse values\nWeak detents", 0, 0, 31, 8.225806452, 0.2, 1.0, 1.1, 0.0, 0.02, 1.5, 0.8, 0.0, 0)
+        },
+        KnobConfig {
             detent_positions: vec![2, 10, 21, 22],
-            ..p("Magnetic detents", 0, 0, 31, 7.0, 2.5, 1.0, 0.7, 0.0, 0.01, 0.8, 73)
-        }),
-        p("Return-to-center\nwith detents", 0, -6, 6, 60.0, 1.0, 1.0, 0.55, 0.4, 0.02, 0.15, 157),
+            ..p("Magnetic detents", 0, 0, 31, 7.0, 2.5, 1.0, 0.7, 0.0, 0.01, 0.8, 10.0, 0.0, 73)
+        },
+        p("Return-to-center\nwith detents", 0, -6, 6, 60.0, 1.0, 1.0, 0.55, 0.4, 0.02, 0.15, 4.0, 0.02, 157),
     ]
 }
 
@@ -928,8 +928,8 @@ async fn haptic_loop(
             custom_config_dirty.store(false, Ordering::SeqCst);
             config = custom_config.lock().expect("custom_config poisoned").clone();
             h.click.prev_current_position = h.detent.current_position;
-            // Propagate config fields to the active tuning so the haptic
-            // feel changes immediately (detent_strength → p_gain, etc.).
+            // Propagate explicit config fields to the active tuning so the
+            // haptic feel changes immediately.
             // strength_scale is deliberately NOT propagated — the user
             // controls it independently via the Tuning — Feel slider.
             tun.p_gain = config.p_gain;
@@ -1051,33 +1051,6 @@ async fn haptic_loop(
 
     state.lock().expect("state poisoned").running = false;
     log::info!("SmartKnob: haptic loop stopped");
-}
-
-fn default_p_gain(config: &KnobConfig) -> f64 {
-    config.detent_strength_unit * 4.0
-}
-
-/// Firmware's width-dependent default derivative gain (creates "clicks" on fine
-/// detents, kept small on coarse ones; disabled for magnetic detents).
-///
-/// Returns 0 when the config enables [`KnobConfig::use_click`] (the haptic
-/// click pulse train replaces D-gain damping, avoiding the sensor noise
-/// amplification that the original firmware's TODO flagged).  Also returns 0
-/// for very fine detents (width ≤ [`CLICK_WIDTH_THRESHOLD_RAD`]) as a
-/// fallback for modes that have detents but don't opt into clicks.
-fn default_d_gain(config: &KnobConfig) -> f64 {
-    if !config.detent_positions.is_empty() {
-        return 0.0;
-    }
-    if config.click_torque_nm > 0.0 || config.position_width_radians < CLICK_WIDTH_THRESHOLD_RAD {
-        return 0.0;
-    }
-    let lower = config.detent_strength_unit * 0.08; // at 3°
-    let upper = config.detent_strength_unit * 0.02; // at 8°
-    let w_lower = 3.0 * DEG;
-    let w_upper = 8.0 * DEG;
-    let raw = lower + (upper - lower) / (w_upper - w_lower) * (config.position_width_radians - w_lower);
-    raw.clamp(lower.min(upper), lower.max(upper))
 }
 
 // ─────────────────────────────── unit tests ─────────────────────────────────
@@ -1332,50 +1305,6 @@ mod tests {
         assert_eq!(frame[5], 0);
         // Bytes 6-7: max_torque_permille = 700u16 LE
         assert_eq!(u16::from_le_bytes([frame[6], frame[7]]), 700);
-    }
-
-    // ── default_d_gain ──
-
-    #[test]
-    fn default_d_gain_zero_for_magnetic_detents() {
-        let cfg = KnobConfig {
-            detent_positions: vec![1, 2, 3],
-            ..Default::default()
-        };
-        assert_eq!(default_d_gain(&cfg), 0.0);
-    }
-
-    #[test]
-    fn default_d_gain_zero_for_click_mode() {
-        let cfg = KnobConfig {
-            click_torque_nm: 0.37,
-            detent_strength_unit: 1.0,
-            position_width_radians: 10.0 * DEG,
-            ..Default::default()
-        };
-        assert_eq!(default_d_gain(&cfg), 0.0);
-    }
-
-    #[test]
-    fn default_d_gain_zero_below_click_threshold() {
-        let cfg = KnobConfig {
-            detent_strength_unit: 1.0,
-            position_width_radians: 2.0 * DEG, // < 3° threshold
-            ..Default::default()
-        };
-        assert_eq!(default_d_gain(&cfg), 0.0);
-    }
-
-    #[test]
-    fn default_d_gain_nonzero_in_normal_range() {
-        let cfg = KnobConfig {
-            detent_strength_unit: 1.0,
-            position_width_radians: 5.0 * DEG, // between 3° and 8°
-            ..Default::default()
-        };
-        let d = default_d_gain(&cfg);
-        assert!(d > 0.0);
-        assert!(d < 1.0); // reasonable range
     }
 
     // ── preset_configs ──
