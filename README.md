@@ -114,6 +114,27 @@ cd src-tauri && cargo run
 (Repeat `npm run build` after frontend changes, since `cargo run` embeds the
 built `dist/` rather than talking to the Vite dev server.)
 
+### Laggy on Linux? Use a Wayland session
+
+If the UI feels sluggish on Linux — especially when the window is large, with
+the lag getting worse the bigger the window — **log into a Wayland session**
+(GDM login screen → gear icon → **"Ubuntu on Wayland"** → log in). This is by
+far the biggest fix and needs no change to the app.
+
+The cause is **WebKitGTK** — the webview Tauri uses on Linux — not this app.
+On the **NVIDIA proprietary driver under X11** (and worse with fractional
+display scaling), WebKitGTK's per-frame window presentation is slow, so cost
+scales with window pixel area. Chromium-based apps (Chrome, VS Code) don't hit
+this; WebKitGTK does. It reproduces in `cargo tauri dev` and in the prebuilt
+binary alike, and none of the usual `WEBKIT_DISABLE_DMABUF_RENDERER` /
+`WEBKIT_DISABLE_COMPOSITING_MODE` / Skia-CPU env toggles help — but Wayland
+does.
+
+**Quick confirmation:** install GNOME Web (`sudo apt install epiphany-browser`),
+maximize it, and scroll a long page. If Epiphany is *also* laggy when large,
+it's this WebKitGTK/X11 limitation (not hex-motor-gui), and switching to Wayland
+is the fix.
+
 ## Packaging (Ubuntu x64)
 
 Prebuilt packages target **Ubuntu 22.04+ / x86-64**. Other distros: build from
