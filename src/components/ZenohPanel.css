@@ -3,7 +3,7 @@
   flex-direction: column;
   gap: 16px;
   width: 100%;
-  min-height: calc(100vh - 96px);
+  min-height: 100%;
 }
 
 .zenoh-panel__header {
@@ -74,9 +74,23 @@
   min-width: 0;
 }
 
+.zenoh-discovery > .ant-typography {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .zenoh-discovery__select {
-  flex: 1 1 auto;
+  flex: 1 1 220px;
   min-width: 0;
+}
+
+.zenoh-dock-status {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
 }
 
 .zenoh-dashboard {

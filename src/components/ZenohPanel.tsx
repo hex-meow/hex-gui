@@ -212,19 +212,6 @@ export function ZenohPanel() {
 
   return (
     <div className="zenoh-panel">
-      <header className="zenoh-panel__header">
-        <div>
-          <Typography.Title level={3} className="zenoh-panel__title">
-            {t("toolBaseZenoh")}
-          </Typography.Title>
-          <Typography.Text type="secondary">{t("toolBaseZenohDesc")}</Typography.Text>
-        </div>
-        <div className="zenoh-panel__status">
-          {connected ? <Tag color="blue">{t("zConnected")}</Tag> : <Tag>{t("zDisconnected")}</Tag>}
-          {statusTag}
-        </div>
-      </header>
-
       <section className="zenoh-connect-panel">
         <label className="zenoh-field zenoh-field--endpoint">
           <span>{t("zEndpoint")}</span>
@@ -258,6 +245,10 @@ export function ZenohPanel() {
           ) : (
             <Button type="primary" disabled={!selected} onClick={acquire}>{t("zAcquire")}</Button>
           )}
+          <span className="zenoh-dock-status">
+            {connected ? <Tag color="blue">{t("zConnected")}</Tag> : <Tag>{t("zDisconnected")}</Tag>}
+            {statusTag}
+          </span>
         </div>
       </section>
 

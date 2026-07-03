@@ -53,8 +53,8 @@ export function ConnectBar({
   };
 
   return (
-    <Space>
-      <span style={{ color: "#8a93a3" }}>{t("bus")}</span>
+    <Space className="connect-bar" wrap size={[8, 8]}>
+      <span className="connect-bar__label">{t("bus")}</span>
       <Input
         style={{ width: 110 }}
         value={iface}
@@ -62,7 +62,7 @@ export function ConnectBar({
         onChange={(e) => setIface(e.target.value)}
         placeholder={defaultIface()}
       />
-      <span style={{ color: "#8a93a3" }}>{t("ourNid")}</span>
+      <span className="connect-bar__label">{t("ourNid")}</span>
       <Input
         style={{ width: 80 }}
         value={ourNid}
@@ -80,7 +80,7 @@ export function ConnectBar({
         </Button>
       )}
       <Tag color={connected ? "green" : "default"}>
-        {connected ? "connected" : "disconnected"}
+        {connected ? t("zConnected") : t("zDisconnected")}
       </Tag>
     </Space>
   );

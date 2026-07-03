@@ -115,10 +115,8 @@ export function ArmPanel() {
   }));
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%", maxWidth: 1000 }}>
-      <Typography.Title level={4} style={{ margin: 0 }}>Arm (Zenoh)</Typography.Title>
-
-      <Card size="small">
+    <Space direction="vertical" size={16} className="arm-panel" style={{ width: "100%", maxWidth: 1100 }}>
+      <Card size="small" className="app-command-card">
         <Space wrap>
           <Typography.Text>Endpoint</Typography.Text>
           <Input style={{ width: 240 }} value={endpoint} disabled={connected} placeholder="留空=组播扫描,或 tcp/IP:7447" onChange={(e) => setEndpoint(e.target.value)} />

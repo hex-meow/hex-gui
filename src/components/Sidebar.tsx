@@ -78,8 +78,8 @@ export function Sidebar({
                     padding: "8px 10px",
                     borderRadius: 8,
                     marginBottom: 6,
-                    background: selected ? "rgba(79,140,255,0.18)" : "transparent",
-                    border: selected ? "1px solid #4f8cff" : "1px solid transparent",
+                    background: selected ? "rgba(231,91,43,0.16)" : "transparent",
+                    border: selected ? "1px solid rgba(231,91,43,0.72)" : "1px solid transparent",
                   }}
                 >
                   <div style={{ width: "100%" }}>

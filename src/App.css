@@ -1,6 +1,10 @@
 :root {
   --brand-primary: #e75b2b;
   --brand-primary-soft: #ff8a5f;
+  --brand-primary-deep: #9e3119;
+  --brand-amber: #f4bb56;
+  --brand-green: #62d18f;
+  --brand-data: #7ba7d9;
   --tool-bg: #07090d;
   --tool-panel: #101318;
   --tool-panel-hover: #151920;
@@ -9,40 +13,202 @@
   --tool-muted: #9aa4b2;
   --tool-subtle: #667085;
   --tool-blue: var(--brand-primary);
-  --tool-amber: #f4bb56;
-  --tool-green: #62d18f;
-  --tool-cyan: #57d2e8;
+  --tool-amber: var(--brand-amber);
+  --tool-green: var(--brand-green);
+  --tool-cyan: var(--brand-data);
   --tool-purple: #a58bff;
   --tool-pink: #f183b5;
   --tool-orange: var(--brand-primary);
   --tool-lime: #b6dc5f;
   --tool-slate: #aeb8c6;
+  --surface-bg: #0a0d12;
+  --surface-panel: #11151b;
+  --surface-panel-strong: #151920;
+  --surface-border: rgba(255, 255, 255, 0.1);
 }
 
-.app-shell .app-header.ant-layout-header {
+.app-shell {
+  height: 100vh;
+  overflow: hidden;
+  color: var(--tool-text);
   background:
-    linear-gradient(90deg, rgba(231, 91, 43, 0.98), rgba(173, 55, 26, 0.96)),
-    #e75b2b;
-  border-bottom: 1px solid rgba(255, 190, 160, 0.34);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08), 0 10px 30px rgba(0, 0, 0, 0.28);
+    radial-gradient(circle at 12% -20%, rgba(231, 91, 43, 0.14), transparent 28rem),
+    radial-gradient(circle at 86% 8%, rgba(244, 187, 86, 0.08), transparent 30rem),
+    linear-gradient(180deg, #0b0d12 0%, #080a0e 100%);
 }
 
-.app-header .ant-typography,
-.app-header .ant-typography-secondary {
-  color: rgba(255, 247, 243, 0.9) !important;
+.app-shell .ant-layout {
+  background: transparent;
 }
 
-.app-header .ant-btn-default {
-  color: #fff6f2;
-  background: rgba(0, 0, 0, 0.18);
-  border-color: rgba(255, 255, 255, 0.28);
+.app-chrome {
+  flex: 0 0 auto;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015)),
+    rgba(9, 11, 15, 0.96);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.28);
 }
 
-.app-header .ant-btn-default:hover,
-.app-header .ant-btn-default:focus-visible {
-  color: #ffffff;
-  background: rgba(0, 0, 0, 0.28);
-  border-color: rgba(255, 255, 255, 0.46);
+.app-chrome__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+  min-height: 92px;
+  padding: 18px 22px 14px;
+}
+
+.app-chrome__back.ant-btn {
+  height: 34px;
+  padding-inline: 12px;
+  color: #ffe9df;
+  background: rgba(231, 91, 43, 0.12);
+  border-color: rgba(231, 91, 43, 0.44);
+  border-radius: 8px;
+  font-weight: 750;
+}
+
+.app-chrome__back.ant-btn:hover,
+.app-chrome__back.ant-btn:focus-visible {
+  color: #fff7f2;
+  background: rgba(231, 91, 43, 0.2);
+  border-color: rgba(255, 138, 95, 0.72);
+}
+
+.app-chrome__identity {
+  min-width: 0;
+}
+
+.app-chrome__title.ant-typography {
+  margin: 0;
+  color: #f4f7fb;
+  font-size: clamp(1.45rem, 2.2vw, 2rem);
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.app-chrome__description.ant-typography {
+  display: block;
+  max-width: 980px;
+  margin-top: 5px;
+  overflow: hidden;
+  color: #9aa4b2;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-command-dock,
+.app-command-card.ant-card,
+.zenoh-connect-panel {
+  border-top-color: rgba(231, 91, 43, 0.72);
+  box-shadow:
+    inset 0 1px rgba(255, 190, 160, 0.15),
+    0 10px 28px rgba(0, 0, 0, 0.18);
+}
+
+.app-command-dock {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: center;
+  margin: 0 22px 16px;
+  padding: 13px 14px;
+  background:
+    linear-gradient(135deg, rgba(231, 91, 43, 0.06), transparent 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02)),
+    var(--surface-panel);
+  border: 1px solid var(--surface-border);
+  border-top-color: rgba(231, 91, 43, 0.72);
+  border-radius: 8px;
+}
+
+.app-command-dock__label {
+  color: #b6becb;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.connect-bar {
+  min-width: 0;
+}
+
+.connect-bar__label {
+  color: #9aa4b2;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.app-main {
+  min-height: 0;
+}
+
+.app-content {
+  min-width: 0;
+  padding: 16px 22px 22px;
+  overflow: auto;
+  background: transparent;
+}
+
+.app-sidebar.ant-layout-sider {
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012)),
+    #0d1016;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.app-shell .ant-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015)),
+    var(--surface-panel);
+  border-color: var(--surface-border);
+  border-radius: 8px;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.045);
+}
+
+.app-shell .app-command-card.ant-card {
+  border-top-color: rgba(231, 91, 43, 0.72);
+}
+
+.app-shell .ant-card-head {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+@media (max-width: 900px) {
+  .app-chrome__header {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    min-height: auto;
+    padding: 16px;
+  }
+
+  .app-chrome__back.ant-btn {
+    width: fit-content;
+  }
+
+  .app-chrome__description.ant-typography {
+    white-space: normal;
+  }
+
+  .app-command-dock {
+    align-items: flex-start;
+    flex-direction: column;
+    margin-inline: 16px;
+  }
+
+  .app-content {
+    padding: 14px 16px 18px;
+  }
+
+  .app-sidebar.ant-layout-sider {
+    max-width: 244px !important;
+    min-width: 244px !important;
+    width: 244px !important;
+  }
 }
 
 .tool-picker {

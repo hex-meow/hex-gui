@@ -170,7 +170,7 @@ export function CanAnalyzerPanel() {
   return (
     <Space direction="vertical" size={12} style={{ width: "100%" }}>
       {/* connection */}
-      <Card size="small">
+      <Card size="small" className="app-command-card">
         <Space wrap>
           <Typography.Text strong>{t("canBus")}</Typography.Text>
           <Tooltip title={t("canConnectHint")}>

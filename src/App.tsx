@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { App as AntdApp, Button, Empty, Layout, Space, Tooltip, Typography } from "antd";
+import { App as AntdApp, Button, Empty, Layout, Tooltip, Typography } from "antd";
 import { api, errMsg } from "./api";
 import { useI18n } from "./i18n";
 import { ConnectBar } from "./components/ConnectBar";
@@ -109,15 +109,17 @@ export default function App() {
   if (tool == null) return <ToolPicker onPick={setTool} />;
 
   const selected = devices.find((d) => d.node_id === selectedNid) ?? null;
-  const toolLabel =
-    tool === "control" ? t("toolControl")
-    : tool === "changeId" ? t("toolChangeId")
-    : tool === "zero" ? t("toolZero")
-    : tool === "zenoh" ? t("toolBaseZenoh")
-    : tool === "arm" ? "Arm (Zenoh)"
-    : tool === "smartknob" ? t("toolSmartKnob")
-    : tool === "canalyzer" ? t("toolCanalyzer")
-    : t("toolHopeA3");
+  const toolMeta = {
+    control: { title: t("toolControl"), desc: t("toolControlDesc") },
+    changeId: { title: t("toolChangeId"), desc: t("toolChangeIdDesc") },
+    zero: { title: t("toolZero"), desc: t("toolZeroDesc") },
+    hopea3: { title: t("toolHopeA3"), desc: t("toolHopeA3Desc") },
+    smartknob: { title: t("toolSmartKnob"), desc: t("toolSmartKnobDesc") },
+    zenoh: { title: t("toolBaseZenoh"), desc: t("toolBaseZenohDesc") },
+    arm: { title: t("toolArmZenoh"), desc: t("toolArmZenohDesc") },
+    canalyzer: { title: t("toolCanalyzer"), desc: t("toolCanalyzerDesc") },
+  } satisfies Record<Tool, { title: string; desc: string }>;
+  const { title: toolTitle, desc: toolDesc } = toolMeta[tool];
   const needsHeartbeat = tool === "control" || tool === "hopea3" || tool === "smartknob";
   // hopea3 / smartknob / zenoh / arm / canalyzer 都是整屏面板;zenoh/arm 走 Zenoh,
   // canalyzer 自带总线连接,都不使用顶栏的电机 ConnectBar。
@@ -126,37 +128,35 @@ export default function App() {
   const showConnectBar = tool !== "zenoh" && tool !== "arm" && tool !== "canalyzer";
 
   return (
-    <Layout className="app-shell" style={{ height: "100vh" }}>
-      <Layout.Header
-        className="app-header"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          paddingInline: 16,
-          gap: 16,
-        }}
-      >
-        <Space size={12}>
-          <Typography.Title level={4} style={{ margin: 0, color: "#e6e8eb" }}>
-            {t("appTitle")}
-          </Typography.Title>
-          <Typography.Text type="secondary">{toolLabel}</Typography.Text>
-          <Button size="small" onClick={switchTool}>
-            {t("switchTool")}
+    <Layout className={`app-shell app-shell--${tool}`}>
+      <div className="app-chrome">
+        <header className="app-chrome__header">
+          <Button className="app-chrome__back" size="small" onClick={switchTool}>
+            ← {t("backToTools")}
           </Button>
-        </Space>
+          <div className="app-chrome__identity">
+            <Typography.Title level={2} className="app-chrome__title">
+              {toolTitle}
+            </Typography.Title>
+            <Typography.Text type="secondary" className="app-chrome__description">
+              {toolDesc}
+            </Typography.Text>
+          </div>
+        </header>
         {showConnectBar && (
-          <ConnectBar
-            connected={connected}
-            onChange={onConnChange}
-            broadcastHeartbeat={needsHeartbeat}
-          />
+          <section className="app-command-dock" aria-label={t("connectionDock")}>
+            <div className="app-command-dock__label">{t("connectionDock")}</div>
+            <ConnectBar
+              connected={connected}
+              onChange={onConnChange}
+              broadcastHeartbeat={needsHeartbeat}
+            />
+          </section>
         )}
-      </Layout.Header>
-      <Layout>
+      </div>
+      <Layout className="app-main">
         {showSidebar && (
-          <Layout.Sider width={280} theme="dark" style={{ borderRight: "1px solid #262b35" }}>
+          <Layout.Sider width={288} theme="dark" className="app-sidebar">
             <Sidebar
               devices={devices}
               selectedNid={selectedNid}
@@ -166,7 +166,7 @@ export default function App() {
             />
           </Layout.Sider>
         )}
-        <Layout.Content style={{ padding: 16, overflow: "auto" }}>
+        <Layout.Content className="app-content">
           {tool === "hopea3" ? (
             <Hopea3Panel connected={connected} />
           ) : tool === "smartknob" ? (

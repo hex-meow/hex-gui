@@ -143,7 +143,7 @@
 .can-trace-resizer:hover::after,
 .can-trace-resizer:focus-visible::after,
 .can-resizing-column .can-trace-resizer::after {
-  background: #4f8cff;
+  background: var(--brand-primary);
 }
 
 .can-resizing-column {
@@ -172,7 +172,7 @@
 }
 
 .can-trace-row--tx {
-  background: rgba(79, 140, 255, 0.1);
+  background: rgba(231, 91, 43, 0.12);
 }
 
 .can-trace-cell {

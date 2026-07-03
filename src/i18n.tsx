@@ -193,6 +193,8 @@ const STRINGS = {
 
   // App
   appTitle: { en: "hex-motor host", zh: "hex-motor 上位机" },
+  backToTools: { en: "Tools", zh: "工具" },
+  connectionDock: { en: "CAN connection", zh: "CAN 连接" },
   selectMotor: { en: "Select a motor on the left", zh: "在左侧选择一个电机" },
   connectFirst: { en: "Connect to a CAN bus first", zh: "请先连接 CAN 总线" },
 

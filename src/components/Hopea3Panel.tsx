@@ -241,15 +241,6 @@ export function Hopea3Panel({ connected }: { connected: boolean }) {
 
   return (
     <div className="hope-panel zenoh-panel">
-      <header className="zenoh-panel__header">
-        <div>
-          <Typography.Title level={3} className="zenoh-panel__title">
-            {t("toolHopeA3")}
-          </Typography.Title>
-          <Typography.Text type="secondary">{t("toolHopeA3Desc")}</Typography.Text>
-        </div>
-      </header>
-
       <section className="hope-start-panel zenoh-connect-panel">
         <div className="hope-start-panel__copy">
           <Typography.Text strong>{t("hopeStart")}</Typography.Text>
