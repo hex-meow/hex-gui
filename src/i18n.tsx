@@ -442,6 +442,38 @@ const STRINGS = {
   changeIdFailed: { en: "Change ID failed", zh: "改 ID 失败" },
   sameIdError: { en: "New ID must differ from current", zh: "新 ID 必须与当前不同" },
   forgetOffline: { en: "Forget offline", zh: "清除离线" },
+
+  // Diagnostics (log / events viewing, clear_fault) — shared Arm/Base Zenoh
+  diagEvents: { en: "Events", zh: "事件" },
+  diagLogs: { en: "Logs", zh: "日志" },
+  diagRefresh: { en: "Refresh history", zh: "刷新历史" },
+  diagRefreshHint: {
+    en: "Re-query events/recent + log/recent from the controller (late-join history).",
+    zh: "重新从控制器拉取 events/recent + log/recent(补齐迟到连上前的历史)。",
+  },
+  diagNoEvents: { en: "No events", zh: "暂无事件" },
+  diagNoLogs: { en: "No logs (WARN+ tee; nothing yet or best-effort dropped)", zh: "暂无日志(WARN+ tee;尚无输出或尽力层已丢弃)" },
+  diagColSeverity: { en: "Severity", zh: "严重度" },
+  diagColCode: { en: "Code", zh: "机器码" },
+  diagColText: { en: "Detail", zh: "描述" },
+  diagColInfo: { en: "Info", zh: "附加" },
+  diagSevInfo: { en: "INFO", zh: "信息" },
+  diagSevWarn: { en: "WARNING", zh: "警告" },
+  diagSevError: { en: "ERROR", zh: "错误" },
+  diagSevFatal: { en: "FATAL", zh: "致命" },
+  diagLevelAll: { en: "All", zh: "全部" },
+  diagTemp: { en: "temp (℃)", zh: "温度 (℃)" },
+  diagFaultTitle: {
+    en: "FATAL_ERROR — motor fault / offline (latched)",
+    zh: "严重故障 FATAL_ERROR —— 电机故障 / 离线(已锁存)",
+  },
+  diagFaultDesc: {
+    en: "Motors are safe-stopped and latched; enabling is refused. Take control and clear the fault to return to idle.",
+    zh: "电机已安全停机并锁存,使能被拒。取得控制权并清除故障后回到空闲态。",
+  },
+  diagClearFault: { en: "Clear fault", zh: "清除故障" },
+  diagClearNeedControl: { en: "Take control first to clear the fault", zh: "需先取得控制权才能清除故障" },
+  diagFaultCleared: { en: "Fault cleared", zh: "故障已清除" },
 } satisfies Record<string, Entry>;
 
 export type I18nKey = keyof typeof STRINGS;

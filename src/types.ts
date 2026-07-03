@@ -174,6 +174,29 @@ export interface SmartKnobState {
   d_gain: number;
 }
 
+// ── Diagnostics (log / events viewing — mirrors diag.rs DTOs) ──
+export interface LogLine {
+  proc: string;    // publishing process (arm0 / base0 / launcher / imu0…)
+  ts_ns: number;   // per-process monotonic ns (ordering only, not cross-process)
+  level: string;   // ERROR / WARN / INFO / DEBUG / TRACE (empty if unparsed)
+  target: string;
+  msg: string;
+}
+
+export interface RobotEvent {
+  seq: number;      // monotonic, assigned by backend (dedupe / notify watermark)
+  severity: number; // 1=INFO 2=WARNING 3=ERROR 4=FATAL
+  code: string;     // stable machine code, e.g. "motor_fault_0x8130"
+  text: string;     // human-readable
+  kv: [string, string][];
+  ts_ns: number;
+}
+
+export interface EventsSnapshot {
+  events: RobotEvent[];
+  baseline_seq: number; // only notify for seq >= this (suppresses seeded history)
+}
+
 // ── Base(Zenoh) (mirrors zenoh_base::ZenohBaseState / BaseInfo) ──
 export interface BaseInfo {
   prefix: string;
@@ -192,6 +215,7 @@ export interface ZenohBaseState {
   vx: number;
   vy: number;
   wz: number;
+  fatal: boolean; // RobotStatus.mode == FATAL_ERROR (latched motor fault/offline)
 }
 
 // ── Arm(Zenoh) (mirrors zenoh_arm::ZenohArmState / ArmInfo) ──
@@ -216,9 +240,11 @@ export interface ZenohArmState {
   q: number[];
   dq: number[];
   tau: number[];
+  temp: number[]; // per-joint temperature ℃ (JointState.temp; empty if motors don't report)
   gravity: [number, number, number];
   has_ee: boolean;
   ee_model: string;
+  fatal: boolean; // RobotStatus.mode == FATAL_ERROR (latched motor fault/offline)
 }
 
 // ── CAN Analyzer (mirrors analyzer.rs DTOs) ──

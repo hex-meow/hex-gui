@@ -5,6 +5,8 @@ import { App as AntdApp, Button, Card, Input, InputNumber, Select, Space, Table,
 import { api, errMsg } from "../api";
 import type { ArmInfo, ZenohArmState } from "../types";
 import { ArmViewer } from "./ArmViewer";
+import { DiagnosticsCard, FaultAlert } from "./DiagnosticsPanel";
+import { useI18n } from "../i18n";
 
 const POLL_MS = 33; // ~30fps for the twin
 
@@ -18,6 +20,7 @@ const PRESETS: { name: string; q: number[] }[] = [
 
 export function ArmPanel() {
   const { message } = AntdApp.useApp();
+  const { t } = useI18n();
   const [endpoint, setEndpoint] = useState("");
   const [connected, setConnected] = useState(false);
   const [arms, setArms] = useState<ArmInfo[]>([]);
@@ -46,6 +49,8 @@ export function ArmPanel() {
     return () => { alive = false; window.clearInterval(h); };
   }, [connected]);
   useEffect(() => () => { api.armDisconnect().catch(() => {}); }, []);
+  // 选中(手动或自动)某臂即诊断聚焦:订阅其 events/logs + 播种历史(与取控解耦,只读也生效)。
+  useEffect(() => { if (connected && selected) api.armSetDiagFocus(selected).catch(() => {}); }, [connected, selected]);
 
   const connect = useCallback(async () => {
     setBusy(true);
@@ -111,6 +116,7 @@ export function ArmPanel() {
   const rows = names.map((n, i) => ({
     key: i, name: n,
     q: st?.q[i] ?? 0, dq: st?.dq[i] ?? 0, tau: st?.tau[i] ?? 0,
+    temp: st?.temp?.[i] ?? null,
     lim: st?.pos_min?.[i] != null && st?.pos_max?.[i] != null ? `[${st.pos_min[i].toFixed(2)}, ${st.pos_max[i].toFixed(2)}]` : "",
   }));
 
@@ -122,7 +128,9 @@ export function ArmPanel() {
           <Input style={{ width: 240 }} value={endpoint} disabled={connected} placeholder="留空=组播扫描,或 tcp/IP:7447" onChange={(e) => setEndpoint(e.target.value)} />
           {connected ? <Button onClick={disconnect}>断开</Button> : <Button type="primary" loading={busy} onClick={connect}>连接</Button>}
           {connected && (
-            <Select style={{ width: 340 }} value={selected ?? undefined} onChange={setSelected}
+            // 取控期间锁定选择:否则切换会让诊断聚焦(events/logs/故障灯/清障目标)漂到另一台,而
+            // 关节/位姿/控制命令仍在原机器上 → 混淆视图 + 清障打错机器。要换机器先释放。
+            <Select style={{ width: 340 }} value={selected ?? undefined} onChange={setSelected} disabled={controlling}
               options={arms.map((a) => ({ value: a.prefix, label: `${a.model} — ${a.prefix}${a.has_ee ? ` +EE(${a.ee_model || "?"})` : ""}` }))} />
           )}
           {connected && (controlling
@@ -130,6 +138,8 @@ export function ArmPanel() {
             : <Button type="primary" disabled={!selected} onClick={acquire}>取控</Button>)}
         </Space>
       </Card>
+
+      {connected && <FaultAlert fatal={!!st?.fatal} controlling={controlling} onClear={api.armClearFault} />}
 
       <Card size="small">
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
@@ -208,9 +218,19 @@ export function ArmPanel() {
             { title: "q (rad)", dataIndex: "q", render: (v: number) => v.toFixed(3) },
             { title: "dq (rad/s)", dataIndex: "dq", render: (v: number) => v.toFixed(3) },
             { title: "τ (Nm)", dataIndex: "tau", render: (v: number) => v.toFixed(2) },
+            { title: t("diagTemp"), dataIndex: "temp", render: (v: number | null) => v == null ? "—" : v.toFixed(1) },
             { title: "限位 (rad)", dataIndex: "lim" },
           ]} />
       </Card>
+
+      {connected && (
+        <DiagnosticsCard
+          enabled={!!selected}
+          getEvents={api.armGetEvents}
+          getLogs={api.armGetLogs}
+          onRefresh={api.armRefreshDiag}
+        />
+      )}
     </Space>
   );
 }

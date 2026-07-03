@@ -3,7 +3,7 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiveState, MotorInfo, MotorMode, MotorTarget, SmartKnobState, ZenohArmState, ZenohBaseState } from "./types";
+import type { ArmInfo, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, SmartKnobState, ZenohArmState, ZenohBaseState } from "./types";
 
 export const api = {
   connect: (iface: string, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -140,6 +140,11 @@ export const api = {
     invoke<void>("zenoh_set_cmd", { vx, vy, wz }),
   zenohGetState: () => invoke<ZenohBaseState>("zenoh_get_state"),
   zenohRelease: () => invoke<void>("zenoh_release"),
+  zenohSetDiagFocus: (prefix: string) => invoke<void>("zenoh_set_diag_focus", { prefix }),
+  zenohRefreshDiag: () => invoke<void>("zenoh_refresh_diag"),
+  zenohGetEvents: () => invoke<EventsSnapshot>("zenoh_get_events"),
+  zenohGetLogs: () => invoke<LogLine[]>("zenoh_get_logs"),
+  zenohClearFault: () => invoke<void>("zenoh_clear_fault"),
 
   // Arm(Zenoh)
   armConnect: (connect: string) => invoke<void>("arm_connect", { connect }),
@@ -151,6 +156,11 @@ export const api = {
   armGoto: (q: number[], kp: number, kd: number) => invoke<void>("arm_goto", { q, kp, kd }),
   armGetState: () => invoke<ZenohArmState>("arm_get_state"),
   armRelease: () => invoke<void>("arm_release"),
+  armSetDiagFocus: (prefix: string) => invoke<void>("arm_set_diag_focus", { prefix }),
+  armRefreshDiag: () => invoke<void>("arm_refresh_diag"),
+  armGetEvents: () => invoke<EventsSnapshot>("arm_get_events"),
+  armGetLogs: () => invoke<LogLine[]>("arm_get_logs"),
+  armClearFault: () => invoke<void>("arm_clear_fault"),
 };
 
 /** Normalise a thrown Tauri error (usually a plain string) to a message. */

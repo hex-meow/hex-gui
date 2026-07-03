@@ -2,6 +2,7 @@
 //! 逻辑同 hex-controller 的 base_client,但持久化:一个 Session + 常驻
 //! 20Hz cmd_vel 流(喂控制器看门狗)+ odom/status 订阅。
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -9,6 +10,8 @@ use std::time::Duration;
 use anyhow::anyhow;
 use prost::Message;
 use serde::Serialize;
+
+use crate::diag;
 
 pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/robot_api.rs"));
@@ -28,6 +31,27 @@ async fn query_one<Resp: Message + Default>(session: &zenoh::Session, key: &str,
         }
     }
     None
+}
+
+/// 汇聚一次 query 的**全部**回复(key, payload)。用于 `.../log/recent`(每进程一个 queryable → 多回复)。
+async fn query_all(session: &zenoh::Session, key: &str) -> Vec<(String, Vec<u8>)> {
+    let mut out = Vec::new();
+    if let Ok(replies) = session.get(key).await {
+        while let Ok(reply) = replies.recv_async().await {
+            if let Ok(sample) = reply.result() {
+                out.push((sample.key_expr().as_str().to_string(), sample.payload().to_bytes().to_vec()));
+            }
+        }
+    }
+    out
+}
+
+/// proto `Event` → 诊断 DTO(seq 占位 0,由 [`diag::EventBuf`] 分配;kv 排序稳定;ts 取 Header.stamp_ns)。
+fn to_event(ev: pb::Event) -> diag::RobotEvent {
+    let ts_ns = ev.header.as_ref().map(|h| h.stamp_ns).unwrap_or(0);
+    let mut kv: Vec<(String, String)> = ev.kv.into_iter().collect();
+    kv.sort();
+    diag::RobotEvent { seq: 0, severity: ev.severity, code: ev.code, text: ev.text, kv, ts_ns }
 }
 
 /// 发现到的一个底盘。
@@ -51,6 +75,7 @@ pub struct ZenohBaseState {
     pub vx: f64,
     pub vy: f64,
     pub wz: f64,
+    pub fatal: bool,       // RobotStatus.mode==FATAL_ERROR(电机故障/离线锁存,P1-3)→ 需 clear_fault
 }
 
 struct Ctrl {
@@ -58,6 +83,10 @@ struct Ctrl {
     session_id: AtomicU32, // 0 = 未持有
     cmd: StdMutex<(f64, f64, f64)>,
     state: StdMutex<ZenohBaseState>,
+    // 诊断视图(log/events 查看)——与取控解耦:选中即聚焦,只读也能看。
+    diag_prefix: StdMutex<Option<String>>,   // 当前聚焦的机器 prefix(过滤 events/logs)
+    logs: StdMutex<VecDeque<diag::LogLine>>,
+    events: StdMutex<diag::EventBuf>,        // 环形缓冲 + 单调 seq + 通知 baseline(同锁原子)
 }
 
 /// 一条到控制器网络的连接(持久 Session + 常驻任务)。
@@ -81,6 +110,9 @@ impl ZenohConn {
             session_id: AtomicU32::new(0),
             cmd: StdMutex::new((0.0, 0.0, 0.0)),
             state: StdMutex::new(ZenohBaseState::default()),
+            diag_prefix: StdMutex::new(None),
+            logs: StdMutex::new(VecDeque::new()),
+            events: StdMutex::new(diag::EventBuf::default()),
         });
 
         // 20Hz cmd_vel 流(喂看门狗)。
@@ -103,14 +135,14 @@ impl ZenohConn {
                 }
             });
         }
-        // odom 订阅(通配,按当前 prefix 过滤)。
+        // odom 订阅(通配,按当前 prefix 精确匹配 —— 避免 base0 前缀吃到 base00 的帧)。
         if let Ok(sub) = session.declare_subscriber("hexmeow/**/base/odom").await {
             let c = ctrl.clone();
             tokio::spawn(async move {
                 while let Ok(sample) = sub.recv_async().await {
                     let cur = c.prefix.lock().unwrap().clone();
                     let Some(p) = cur else { continue };
-                    if !sample.key_expr().as_str().starts_with(&p) { continue; }
+                    if sample.key_expr().as_str() != format!("{p}/base/odom") { continue; }
                     if let Ok(o) = pb::Odometry::decode(&*sample.payload().to_bytes()) {
                         let t = o.twist.unwrap_or_default();
                         let mut st = c.state.lock().unwrap();
@@ -120,18 +152,54 @@ impl ZenohConn {
                 }
             });
         }
-        // status 订阅 → holder / running。
+        // status 订阅 → holder/running(按取控 prefix)+ FATAL_ERROR 灯(按诊断聚焦 prefix,只读也可见)。
         if let Ok(sub) = session.declare_subscriber("hexmeow/**/status").await {
             let c = ctrl.clone();
             tokio::spawn(async move {
                 while let Ok(sample) = sub.recv_async().await {
-                    let cur = c.prefix.lock().unwrap().clone();
-                    let Some(p) = cur else { continue };
-                    if !sample.key_expr().as_str().starts_with(&p) { continue; }
-                    if let Ok(s) = pb::RobotStatus::decode(&*sample.payload().to_bytes()) {
-                        let mut st = c.state.lock().unwrap();
-                        st.holder = s.session_holder;
-                        st.running = s.mode == pb::RobotMode::Running as i32;
+                    let Ok(s) = pb::RobotStatus::decode(&*sample.payload().to_bytes()) else { continue };
+                    let key = sample.key_expr().as_str();
+                    // P1-3:FATAL_ERROR 锁存据当前聚焦机器判定,取控/只读/仅选中都能看到故障灯。
+                    let dp = c.diag_prefix.lock().unwrap().clone();
+                    if let Some(dp) = dp {
+                        if key == format!("{dp}/status") {
+                            c.state.lock().unwrap().fatal = s.mode == pb::RobotMode::FatalError as i32;
+                        }
+                    }
+                    // holder/running:按我们取控的 prefix。
+                    let Some(p) = c.prefix.lock().unwrap().clone() else { continue };
+                    if key != format!("{p}/status") { continue; }
+                    let mut st = c.state.lock().unwrap();
+                    st.holder = s.session_holder;
+                    st.running = s.mode == pb::RobotMode::Running as i32;
+                }
+            });
+        }
+        // 日志订阅(尽力层,P1-7):hexmeow/<cid>/*/log 全进程 tee;按 diag_prefix 的 cid 过滤后进环形缓冲。
+        if let Ok(sub) = session.declare_subscriber("hexmeow/**/log").await {
+            let c = ctrl.clone();
+            tokio::spawn(async move {
+                while let Ok(sample) = sub.recv_async().await {
+                    let Some(dp) = c.diag_prefix.lock().unwrap().clone() else { continue };
+                    let Some(cid) = diag::cid_prefix(&dp) else { continue };
+                    let key = sample.key_expr().as_str();
+                    if !key.starts_with(&format!("{cid}/")) || !key.ends_with("/log") { continue; }
+                    let proc = diag::proc_of_log_key(key);
+                    let raw = String::from_utf8_lossy(&sample.payload().to_bytes()).into_owned();
+                    let line = diag::parse_log_line(&proc, &raw);
+                    diag::push_capped(&mut c.logs.lock().unwrap(), line, diag::LOG_RING_CAP);
+                }
+            });
+        }
+        // 事件订阅(可靠层,P1-3):<prefix>/events 逐条;按 diag_prefix 精确匹配后进环形缓冲(带单调 seq)。
+        if let Ok(sub) = session.declare_subscriber("hexmeow/**/events").await {
+            let c = ctrl.clone();
+            tokio::spawn(async move {
+                while let Ok(sample) = sub.recv_async().await {
+                    let Some(dp) = c.diag_prefix.lock().unwrap().clone() else { continue };
+                    if sample.key_expr().as_str() != format!("{dp}/events") { continue; }
+                    if let Ok(ev) = pb::Event::decode(&*sample.payload().to_bytes()) {
+                        c.events.lock().unwrap().push_live(to_event(ev));
                     }
                 }
             });
@@ -190,6 +258,62 @@ impl ZenohConn {
 
     pub fn state(&self) -> ZenohBaseState {
         self.ctrl.state.lock().unwrap().clone()
+    }
+
+    // ───────────────────────── 诊断视图(log / events)─────────────────────────
+
+    /// 诊断聚焦:选中某机器即订阅其 events/logs(与取控解耦,只读/仅选中也生效)。清空旧缓冲并从
+    /// `.../events/recent` + `.../log/recent` 播种一次历史(事后连上也查得到,如底盘拔轮)。
+    pub async fn set_diag_focus(&self, prefix: &str) {
+        *self.ctrl.diag_prefix.lock().unwrap() = Some(prefix.to_string());
+        self.ctrl.state.lock().unwrap().fatal = false; // 由 status 订阅按新 prefix 重新点亮
+        self.ctrl.events.lock().unwrap().clear();
+        self.ctrl.logs.lock().unwrap().clear();
+        self.refresh_diag().await;
+    }
+
+    /// 从控制器拉取历史事件 + 日志,替换本地缓冲("刷新历史"按钮或聚焦时调)。事件经
+    /// [`EventBuf::reseed`](diag::EventBuf::reseed) 原子重建 + 重置 baseline,使前端不对刚拉回的旧事件
+    /// 误弹通知(仅对之后的实时事件弹),且与并发实时 push 无竞态。
+    pub async fn refresh_diag(&self) {
+        let Some(prefix) = self.ctrl.diag_prefix.lock().unwrap().clone() else { return };
+        // 事件历史:<prefix>/events/recent → EventLog(单 queryable)。先 await 拿数据,再一把锁内原子重建。
+        if let Some(log) = query_one::<pb::EventLog>(&self.session, &format!("{prefix}/events/recent"), vec![]).await {
+            let history: Vec<diag::RobotEvent> = log.events.into_iter().map(to_event).collect();
+            self.ctrl.events.lock().unwrap().reseed(history);
+        }
+        // 日志历史:hexmeow/<cid>/*/log/recent → 每进程一个多行 blob。
+        if let Some(cid) = diag::cid_prefix(&prefix) {
+            let blobs = query_all(&self.session, &format!("{cid}/*/log/recent")).await;
+            let mut ring = VecDeque::new();
+            for (key, payload) in blobs {
+                let proc = diag::proc_of_log_key(&key);
+                let text = String::from_utf8_lossy(&payload);
+                for raw in text.lines().filter(|l| !l.is_empty()) {
+                    diag::push_capped(&mut ring, diag::parse_log_line(&proc, raw), diag::LOG_RING_CAP);
+                }
+            }
+            *self.ctrl.logs.lock().unwrap() = ring;
+        }
+    }
+
+    pub fn get_events(&self) -> diag::EventsSnapshot {
+        self.ctrl.events.lock().unwrap().snapshot()
+    }
+
+    pub fn get_logs(&self) -> Vec<diag::LogLine> {
+        self.ctrl.logs.lock().unwrap().iter().cloned().collect()
+    }
+
+    /// P1-3 clear_fault:清除底盘锁存的 FATAL(需持有会话)。回 ok 则控制器进 IDLE_MODE;
+    /// 电机仍坏则控制器如实回错并保持 Fault。
+    pub async fn clear_fault(&self) -> anyhow::Result<()> {
+        let sid = self.ctrl.session_id.load(Ordering::Relaxed);
+        if sid == 0 { return Err(anyhow!("未持有控制权(clear_fault 需先取控)")); }
+        let req = pb::ClearFaultRequest { session_id: sid };
+        let resp: pb::GenericResponse = query_one(&self.session, &format!("{}/rpc/clear_fault", self.prefix()), enc(&req))
+            .await.ok_or_else(|| anyhow!("clear_fault 无回复"))?;
+        if resp.ok { Ok(()) } else { Err(anyhow!(resp.error.unwrap_or_else(|| "clear_fault 失败".into()))) }
     }
 
     pub async fn release(&self) {

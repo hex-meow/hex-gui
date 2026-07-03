@@ -7,6 +7,7 @@ mod analyzer;
 mod backend;
 mod commands;
 mod device_registry;
+mod diag;
 mod dto;
 mod hopea3;
 mod imu;
@@ -90,6 +91,11 @@ pub fn run() {
             commands::zenoh_set_cmd,
             commands::zenoh_get_state,
             commands::zenoh_release,
+            commands::zenoh_set_diag_focus,
+            commands::zenoh_refresh_diag,
+            commands::zenoh_get_events,
+            commands::zenoh_get_logs,
+            commands::zenoh_clear_fault,
             commands::arm_connect,
             commands::arm_disconnect,
             commands::arm_discover,
@@ -99,6 +105,11 @@ pub fn run() {
             commands::arm_goto,
             commands::arm_get_state,
             commands::arm_release,
+            commands::arm_set_diag_focus,
+            commands::arm_refresh_diag,
+            commands::arm_get_events,
+            commands::arm_get_logs,
+            commands::arm_clear_fault,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

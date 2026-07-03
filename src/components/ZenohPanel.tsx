@@ -4,6 +4,7 @@ import { api, errMsg } from "../api";
 import { useI18n } from "../i18n";
 import type { BaseInfo, ZenohBaseState } from "../types";
 import { BasePoseViewer } from "./BasePoseViewer";
+import { DiagnosticsCard, FaultAlert } from "./DiagnosticsPanel";
 import "./ZenohPanel.css";
 
 const POLL_MS = 10;
@@ -60,6 +61,17 @@ export function ZenohPanel() {
   useEffect(() => () => {
     api.zenohDisconnect().catch(() => {});
   }, []);
+
+  // 选中(手动或自动)某底盘即诊断聚焦:订阅其 events/logs + 播种历史(与取控解耦,只读也生效)。
+  useEffect(() => {
+    if (connected && selected) api.zenohSetDiagFocus(selected).catch(() => {});
+  }, [connected, selected]);
+
+  // FATAL 时控制器已把电机失能(clear_fault 也置 enabled=false),而它不在 status 里回传 enabled。
+  // 故障灯亮即把 Active 开关复位到 off,避免清障后开关仍"假 on" → 拖动无效却看不出原因。
+  useEffect(() => {
+    if (st?.fatal) setArmed(false);
+  }, [st?.fatal]);
 
   const connect = useCallback(async () => {
     setBusy(true);
@@ -237,7 +249,7 @@ export function ZenohPanel() {
             value={selected ?? undefined}
             onChange={setSelected}
             placeholder={t("zNoBase")}
-            disabled={!connected || bases.length === 0}
+            disabled={!connected || bases.length === 0 || controlling}
             options={bases.map((b) => ({ value: b.prefix, label: `${b.model} - ${b.prefix}` }))}
           />
           {controlling ? (
@@ -251,6 +263,8 @@ export function ZenohPanel() {
           </span>
         </div>
       </section>
+
+      {connected && <FaultAlert fatal={!!st?.fatal} controlling={controlling} onClear={api.zenohClearFault} />}
 
       <div className="zenoh-dashboard">
         <section className="zenoh-card zenoh-drive">
@@ -354,6 +368,15 @@ export function ZenohPanel() {
           </div>
         </section>
       </div>
+
+      {connected && (
+        <DiagnosticsCard
+          enabled={!!selected}
+          getEvents={api.zenohGetEvents}
+          getLogs={api.zenohGetLogs}
+          onRefresh={api.zenohRefreshDiag}
+        />
+      )}
     </div>
   );
 }

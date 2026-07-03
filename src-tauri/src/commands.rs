@@ -12,6 +12,7 @@ use hex_motor::types::MotorMode;
 use tauri::State;
 
 use crate::backend;
+use crate::diag::{EventsSnapshot, LogLine};
 use crate::dto::{LiveStateDto, MotorInfoDto, MotorModeDto, MotorTargetDto};
 use crate::state::AppState;
 use crate::zenoh_base::{BaseInfo, ZenohBaseState, ZenohConn};
@@ -827,6 +828,42 @@ pub async fn zenoh_release(state: State<'_, AppState>) -> CmdResult<()> {
     Ok(())
 }
 
+/// 诊断聚焦(选中底盘时调):订阅其 events/logs 并播种历史。与取控解耦,只读也生效。
+#[tauri::command]
+pub async fn zenoh_set_diag_focus(state: State<'_, AppState>, prefix: String) -> CmdResult<()> {
+    let g = state.zenoh.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Zenoh".to_string())?;
+    c.set_diag_focus(&prefix).await;
+    Ok(())
+}
+
+/// 手动"刷新历史":重新拉取 events/recent + log/recent 替换本地缓冲。
+#[tauri::command]
+pub async fn zenoh_refresh_diag(state: State<'_, AppState>) -> CmdResult<()> {
+    let g = state.zenoh.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Zenoh".to_string())?;
+    c.refresh_diag().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn zenoh_get_events(state: State<'_, AppState>) -> CmdResult<EventsSnapshot> {
+    Ok(state.zenoh.lock().await.as_ref().map(|c| c.get_events()).unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn zenoh_get_logs(state: State<'_, AppState>) -> CmdResult<Vec<LogLine>> {
+    Ok(state.zenoh.lock().await.as_ref().map(|c| c.get_logs()).unwrap_or_default())
+}
+
+/// P1-3 clear_fault:清除底盘锁存的 FATAL(需先取控)。
+#[tauri::command]
+pub async fn zenoh_clear_fault(state: State<'_, AppState>) -> CmdResult<()> {
+    let g = state.zenoh.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Zenoh".to_string())?;
+    c.clear_fault().await.map_err(err)
+}
+
 // ───────────────────────── Arm(Zenoh)─────────────────────────
 
 #[tauri::command]
@@ -896,4 +933,40 @@ pub async fn arm_release(state: State<'_, AppState>) -> CmdResult<()> {
         c.release().await;
     }
     Ok(())
+}
+
+/// 诊断聚焦(选中机械臂时调):订阅其 events/logs 并播种历史。与取控解耦,只读也生效。
+#[tauri::command]
+pub async fn arm_set_diag_focus(state: State<'_, AppState>, prefix: String) -> CmdResult<()> {
+    let g = state.zenoh_arm.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Arm Zenoh".to_string())?;
+    c.set_diag_focus(&prefix).await;
+    Ok(())
+}
+
+/// 手动"刷新历史":重新拉取 events/recent + log/recent 替换本地缓冲。
+#[tauri::command]
+pub async fn arm_refresh_diag(state: State<'_, AppState>) -> CmdResult<()> {
+    let g = state.zenoh_arm.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Arm Zenoh".to_string())?;
+    c.refresh_diag().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn arm_get_events(state: State<'_, AppState>) -> CmdResult<EventsSnapshot> {
+    Ok(state.zenoh_arm.lock().await.as_ref().map(|c| c.get_events()).unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn arm_get_logs(state: State<'_, AppState>) -> CmdResult<Vec<LogLine>> {
+    Ok(state.zenoh_arm.lock().await.as_ref().map(|c| c.get_logs()).unwrap_or_default())
+}
+
+/// P1-3 clear_fault:清除机械臂锁存的 FATAL(需先取控)。
+#[tauri::command]
+pub async fn arm_clear_fault(state: State<'_, AppState>) -> CmdResult<()> {
+    let g = state.zenoh_arm.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Arm Zenoh".to_string())?;
+    c.clear_fault().await.map_err(err)
 }
