@@ -13,7 +13,7 @@ import { SmartKnobPanel } from "./components/SmartKnobPanel";
 import { ZenohPanel } from "./components/ZenohPanel";
 import { ArmPanel } from "./components/ArmPanel";
 import { CanAnalyzerPanel } from "./components/CanAnalyzerPanel";
-import { TutorialModal } from "./components/Tutorial";
+import { TutorialModal, TUTORIALS } from "./components/Tutorial";
 import type { MotorInfo } from "./types";
 import "./App.css";
 
@@ -31,6 +31,8 @@ export default function App() {
   const [selectedNid, setSelectedNid] = useState<number | null>(null);
   // nid -> csv path (presence means logging is on for that motor)
   const [logging, setLogging] = useState<Record<number, string>>({});
+  // Per-app "how to use this tool" modal (its slides live in TUTORIALS[tool]).
+  const [tutorialOpen, setTutorialOpen] = useState(false);
 
   // Poll the device list while connected.
   useEffect(() => {
@@ -80,6 +82,7 @@ export default function App() {
     setSelectedNid(null);
     setLogging({});
     setDevices([]);
+    setTutorialOpen(false);
     setTool(null);
   }, []);
 
@@ -142,6 +145,13 @@ export default function App() {
               {toolDesc}
             </Typography.Text>
           </div>
+          <Button
+            className="app-chrome__tutorial"
+            size="small"
+            onClick={() => setTutorialOpen(true)}
+          >
+            {t("tutorialButton")}
+          </Button>
         </header>
         {showConnectBar && (
           <section className="app-command-dock" aria-label={t("connectionDock")}>
@@ -199,6 +209,12 @@ export default function App() {
           )}
         </Layout.Content>
       </Layout>
+      <TutorialModal
+        open={tutorialOpen}
+        onClose={() => setTutorialOpen(false)}
+        title={`${toolTitle} · ${t("tutorialButton")}`}
+        slides={TUTORIALS[tool]}
+      />
     </Layout>
   );
 }

@@ -402,6 +402,7 @@ const STRINGS = {
     zh: "第一次用？左右滑动的快速上手指南，带你连接并控制电机。",
   },
   tutorialTitle: { en: "Getting started", zh: "快速上手" },
+  tutorialButton: { en: "Tutorial", zh: "使用教程" },
   tutorialMediaPlaceholder: {
     en: "(screenshot / video goes here)",
     zh: "（此处放截图 / 视频）",

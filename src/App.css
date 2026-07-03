@@ -52,7 +52,7 @@
 
 .app-chrome__header {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 16px;
   align-items: center;
   min-height: 92px;
@@ -78,6 +78,23 @@
 
 .app-chrome__identity {
   min-width: 0;
+}
+
+.app-chrome__tutorial.ant-btn {
+  height: 34px;
+  padding-inline: 14px;
+  color: #d7deea;
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  font-weight: 650;
+}
+
+.app-chrome__tutorial.ant-btn:hover,
+.app-chrome__tutorial.ant-btn:focus-visible {
+  color: #f4f7fb;
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.28);
 }
 
 .app-chrome__title.ant-typography {
@@ -186,7 +203,8 @@
     padding: 16px;
   }
 
-  .app-chrome__back.ant-btn {
+  .app-chrome__back.ant-btn,
+  .app-chrome__tutorial.ant-btn {
     width: fit-content;
   }
 

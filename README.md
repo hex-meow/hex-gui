@@ -1,9 +1,5 @@
 # hex-motor GUI (Tauri)
 
-## todo
-
-Add LICENSE file.
-
 A Tauri 2.x desktop GUI on top of the local [`hex-motor`](../hex-motor)
 crate. Connect to a CAN bus, browse discovered CiA402 motors in a sidebar,
 watch each motor's PDO feedback (position / host-filtered velocity / torque /
@@ -154,11 +150,47 @@ Outputs land in `src-tauri/target/release/bundle/{deb,appimage}/`.
 
 ### CI
 
-`.github/workflows/release.yml` builds on `ubuntu-22.04`: it uploads the
-`.deb` + `.AppImage` as run artifacts on pushes/PRs, and on a `v*` tag creates
-a **draft** GitHub Release with them attached. (It will fail until the
-`hex-motor` path dependency in `src-tauri/Cargo.toml` is switched to a
-git/crates.io source — see the note at the top of the workflow.)
+`.github/workflows/release.yml` builds all three desktop platforms in a matrix:
+
+| Runner          | Bundles                                    |
+| --------------- | ------------------------------------------ |
+| `ubuntu-22.04`  | `.deb` + `.AppImage` (x86-64)              |
+| `windows-latest`| `.msi` + NSIS `.exe` installer (x86-64)    |
+| `macos-latest`  | `.dmg` + `.app`, universal (Intel + ARM)   |
+
+The workflow runs on pushes to `main`, PRs, `v*` tags, and manual dispatch. What
+it does depends on the trigger:
+
+- **push / PR / manual** — build every platform and upload the bundles as
+  **run artifacts** (Actions → the run → Artifacts). Nothing is released.
+- **`v*` tag** — build every platform and create a **draft GitHub Release**
+  named `hex-motor-gui <tag>` with every bundle attached.
+
+#### Cutting a draft release
+
+The draft Release is driven entirely by pushing a tag that matches `v*`
+(handled by [`tauri-action`](https://github.com/tauri-apps/tauri-action) with
+`releaseDraft: true`). There is no button to click — just tag and push:
+
+```bash
+# bump the version in package.json + src-tauri/tauri.conf.json first, then:
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Each platform's job appends its bundles to the same Release. When all three
+finish, open **Releases** on GitHub — the draft is waiting there. Review it, then
+**Publish** manually (drafts are never public until you publish). To redo a
+release, delete the draft + its tag, then re-tag.
+
+> Bundles are **unsigned**: macOS users right-click → Open past Gatekeeper,
+> Windows users click through SmartScreen. Add signing later via `tauri-action`
+> env vars.
+>
+> **Green-build prerequisites** (see the header comment in the workflow): the
+> `hex-arm-dynamics` crate must be published to crates.io, and the shared proto
+> contract is checked out from `hex-meow/hex-robot-proto` (pinned tag, wired via
+> `ROBOT_PROTO_DIR`) — bump that `ref` when the proto changes.
 
 ## Usage
 

@@ -17,7 +17,7 @@ interface Slide {
   body: { en: string; zh: string };
 }
 
-const SLIDES: Slide[] = [
+const HOME_SLIDES: Slide[] = [
   {
     media: { type: "image", src: "/tutorial/01-connect.png" },
     title: { en: "1 · Connect", zh: "1 · 连接" },
@@ -51,6 +51,39 @@ const SLIDES: Slide[] = [
   },
 ];
 
+// Placeholder slides for a per-app tutorial that hasn't been written yet.
+// Each slide's media already points at `public/tutorial/<tool>/0N.png`, so
+// dropping a screenshot (or renaming to .mp4 and adjusting the type) there is
+// all it takes to fill a step in — then replace the step's body text. Add or
+// remove steps by changing `count`.
+function placeholderSlides(tool: string, count = 3): Slide[] {
+  return Array.from({ length: count }, (_, i) => {
+    const n = i + 1;
+    return {
+      media: { type: "image", src: `/tutorial/${tool}/0${n}.png` },
+      title: { en: `Step ${n}`, zh: `步骤 ${n}` },
+      body: {
+        en: "(Describe this step, then drop a screenshot into public/tutorial/ to replace this placeholder.)",
+        zh: "（在此描述该步骤，并把截图放到 public/tutorial/ 目录以替换此占位。）",
+      },
+    };
+  });
+}
+
+// Slide sets keyed by tool id (matching App's Tool union, plus "home" for the
+// landing-page guide). Each app starts with blank placeholder steps.
+export const TUTORIALS: Record<string, Slide[]> = {
+  home: HOME_SLIDES,
+  control: placeholderSlides("control"),
+  changeId: placeholderSlides("changeId"),
+  zero: placeholderSlides("zero"),
+  hopea3: placeholderSlides("hopea3"),
+  smartknob: placeholderSlides("smartknob"),
+  zenoh: placeholderSlides("zenoh"),
+  arm: placeholderSlides("arm"),
+  canalyzer: placeholderSlides("canalyzer"),
+};
+
 // Renders the slide's image/video, falling back to the placeholder caption if
 // the file is missing (so it looks intentional before real media is dropped in).
 function SlideMedia({ media }: { media?: Slide["media"] }) {
@@ -82,9 +115,21 @@ function SlideMedia({ media }: { media?: Slide["media"] }) {
   );
 }
 
-export function TutorialModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function TutorialModal({
+  open,
+  onClose,
+  title,
+  slides,
+}: {
+  open: boolean;
+  onClose: () => void;
+  // Defaults to the landing-page "Getting started" guide when omitted.
+  title?: string;
+  slides?: Slide[];
+}) {
   const { t, lang } = useI18n();
   const { token } = theme.useToken();
+  const list = slides ?? HOME_SLIDES;
 
   return (
     <Modal
@@ -93,10 +138,10 @@ export function TutorialModal({ open, onClose }: { open: boolean; onClose: () =>
       footer={null}
       width={640}
       centered
-      title={t("tutorialTitle")}
+      title={title ?? t("tutorialTitle")}
     >
       <Carousel arrows draggable adaptiveHeight style={{ paddingBottom: 24 }}>
-        {SLIDES.map((s, i) => (
+        {list.map((s, i) => (
           <div key={i}>
             <div style={{ padding: "8px 32px 0" }}>
               <div
