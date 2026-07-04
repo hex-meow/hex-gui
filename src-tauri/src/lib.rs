@@ -25,6 +25,7 @@ pub fn run() {
         env_logger::Env::default().default_filter_or("info,hex_motor=info,hex_motor_gui_lib=info"),
     )
     .try_init();
+    let _timer_resolution = request_timer_resolution();
 
     tauri::Builder::default()
         .manage(AppState::default())
@@ -114,3 +115,30 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(windows)]
+struct TimerResolutionGuard;
+
+#[cfg(windows)]
+impl Drop for TimerResolutionGuard {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Media::timeEndPeriod(1);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn request_timer_resolution() -> Option<TimerResolutionGuard> {
+    let result = unsafe { windows_sys::Win32::Media::timeBeginPeriod(1) };
+    if result == 0 {
+        log::info!("Windows timer resolution requested at 1 ms");
+        Some(TimerResolutionGuard)
+    } else {
+        log::warn!("Windows timeBeginPeriod(1) failed: {result}");
+        None
+    }
+}
+
+#[cfg(not(windows))]
+fn request_timer_resolution() {}

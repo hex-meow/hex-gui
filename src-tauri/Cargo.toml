@@ -52,3 +52,6 @@ can-transport = { version = "0.1.2", features = ["socketcan", "gs_usb"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 can-transport = { version = "0.1.2", features = ["gs_usb"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Media"] }

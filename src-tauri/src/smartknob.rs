@@ -101,8 +101,12 @@ const PID_LIMIT: f64 = 10.0;
 //    direction) whenever the position changes when the detent width is
 //    too small for the P factor to work well."
 
-/// Click duration per direction (ticks at 1 kHz).  5 ms → 10 ms total per click.
-const CLICK_TICKS_PER_PHASE: u32 = 5;
+/// Click duration per direction. The loop targets 1 kHz, but Windows/USB
+/// scheduling can miss ticks, so the pulse is timed from `Instant` instead of
+/// counting loop iterations.
+const CLICK_PHASE_DURATION: Duration = Duration::from_millis(5);
+const CLICK_TOTAL_DURATION: Duration = Duration::from_millis(10);
+const HAPTIC_TIMING_WARN_THRESHOLD: Duration = Duration::from_millis(3);
 
 /// Default live-tunables.
 pub const DEFAULT_STRENGTH_SCALE: f64 = 0.15; // Nm per firmware PID unit
@@ -650,8 +654,8 @@ struct ClickState {
     /// Logical position at the *previous* tick, used to detect detent
     /// transitions and trigger a click.
     prev_current_position: i32,
-    /// Remaining ticks in the current click sequence (counts down to 0).
-    ticks_remaining: u32,
+    /// Wall-clock start of the current click sequence.
+    started_at: Option<Instant>,
     /// Sign of the first phase of the *next* click (±1).  Flips after each
     /// triggered click so alternating detent transitions feel symmetric.
     dir: f64,
@@ -831,14 +835,24 @@ fn compute_friction_coulomb(velocity_rad_s: f64, compensation: f64) -> f64 {
 /// A biphasic (alternating-direction) torque burst that fires on each detent
 /// transition. Direction flips so clockwise and counter-clockwise transitions
 /// both feel crisp.
-fn compute_click_torque(click: &mut ClickState, click_torque_nm: f64, click_active: bool) -> f64 {
-    if !click_active || click.ticks_remaining == 0 {
+fn compute_click_torque(
+    click: &mut ClickState,
+    click_torque_nm: f64,
+    click_active: bool,
+    now: Instant,
+) -> f64 {
+    let Some(started_at) = click.started_at else {
+        return 0.0;
+    };
+    if !click_active {
         return 0.0;
     }
-    click.ticks_remaining -= 1;
-    // Phase 1: first direction; Phase 2: reverse.
-    let phase = click.ticks_remaining / CLICK_TICKS_PER_PHASE;
-    let sign = if phase == 1 { click.dir } else { -click.dir };
+    let elapsed = now.duration_since(started_at);
+    if elapsed >= CLICK_TOTAL_DURATION {
+        click.started_at = None;
+        return 0.0;
+    }
+    let sign = if elapsed < CLICK_PHASE_DURATION { click.dir } else { -click.dir };
     sign * click_torque_nm
 }
 
@@ -880,14 +894,28 @@ async fn haptic_loop(
             last_idle_start: None,
             latest_sub_position_unit: 0.0,
         },
-        click: ClickState { prev_current_position: configs[0].position, ticks_remaining: 0, dir: 1.0 },
+        click: ClickState { prev_current_position: configs[0].position, started_at: None, dir: 1.0 },
     };
 
     // Rate-limit RPDO send warnings to once per second (avoids log spam at 1 kHz).
     let mut last_rpdo_warn: Option<Instant> = None;
+    let mut last_timing_warn: Option<Instant> = None;
+    let mut last_tick_at = Instant::now();
 
     while running.load(Ordering::SeqCst) {
         tick.tick().await;
+        let tick_at = Instant::now();
+        let loop_dt = tick_at.duration_since(last_tick_at);
+        last_tick_at = tick_at;
+        if loop_dt > HAPTIC_TIMING_WARN_THRESHOLD {
+            let should_warn = last_timing_warn
+                .map(|t| tick_at.duration_since(t) >= Duration::from_secs(1))
+                .unwrap_or(true);
+            if should_warn {
+                log::warn!("SmartKnob: haptic loop tick took {:.2} ms", loop_dt.as_secs_f64() * 1000.0);
+                last_timing_warn = Some(tick_at);
+            }
+        }
         let mut tun = *tuning.lock().expect("tuning poisoned");
 
         // ── 1. read motor feedback & unwrap to a continuous shaft angle ──
@@ -932,7 +960,7 @@ async fn haptic_loop(
             h.detent.detent_center = h.angle.shaft_angle;
             h.detent.last_idle_start = None;
             h.click.prev_current_position = h.detent.current_position;
-            h.click.ticks_remaining = 0;
+            h.click.started_at = None;
             h.click.dir = 1.0;
             // Restore per-mode tuning (user-tweaked values, or preset defaults on
             // first visit).  Also write them back into the shared Tuning so the
@@ -1034,11 +1062,11 @@ async fn haptic_loop(
         if h.detent.current_position != h.click.prev_current_position {
             h.click.prev_current_position = h.detent.current_position;
             if click_active {
-                h.click.ticks_remaining = CLICK_TICKS_PER_PHASE * 2;
+                h.click.started_at = Some(tick_at);
                 h.click.dir = -h.click.dir;
             }
         }
-        let click_torque = compute_click_torque(&mut h.click, tun.click_torque_nm, click_active);
+        let click_torque = compute_click_torque(&mut h.click, tun.click_torque_nm, click_active, tick_at);
 
         // ── 9. clamp total torque ──
         // Runaway guard on the TOTAL command, not just the PID term: above
@@ -1057,6 +1085,7 @@ async fn haptic_loop(
         let data = build_rpdo_frame(torque_nm, tun.max_torque_permille);
         match CanFrame::new_fd(rpdo_cob_id(nid), &data, true) {
             Ok(frame) => {
+                let send_started = Instant::now();
                 if let Err(e) = bus.send(frame).await {
                     // Rate-limit: warn at most once per second to avoid log spam.
                     let now = Instant::now();
@@ -1066,6 +1095,17 @@ async fn haptic_loop(
                     if should_warn {
                         log::warn!("SmartKnob: RPDO send failed: {e}");
                         last_rpdo_warn = Some(now);
+                    }
+                }
+                let send_dt = send_started.elapsed();
+                if send_dt > HAPTIC_TIMING_WARN_THRESHOLD {
+                    let now = Instant::now();
+                    let should_warn = last_timing_warn
+                        .map(|t| now.duration_since(t) >= Duration::from_secs(1))
+                        .unwrap_or(true);
+                    if should_warn {
+                        log::warn!("SmartKnob: RPDO send took {:.2} ms", send_dt.as_secs_f64() * 1000.0);
+                        last_timing_warn = Some(now);
                     }
                 }
             }
@@ -1313,36 +1353,40 @@ mod tests {
 
     #[test]
     fn click_inactive_returns_zero() {
-        let mut c = ClickState { prev_current_position: 0, ticks_remaining: 10, dir: 1.0 };
-        let result = compute_click_torque(&mut c, 0.5, false);
+        let now = Instant::now();
+        let mut c = ClickState { prev_current_position: 0, started_at: Some(now), dir: 1.0 };
+        let result = compute_click_torque(&mut c, 0.5, false, now);
         assert_eq!(result, 0.0);
         // State should not change when inactive.
-        assert_eq!(c.ticks_remaining, 10);
+        assert!(c.started_at.is_some());
     }
 
     #[test]
-    fn click_active_decrements_and_returns_torque() {
-        let mut c = ClickState { prev_current_position: 0, ticks_remaining: 6, dir: 1.0 };
+    fn click_first_phase_returns_dir_torque() {
+        let now = Instant::now();
+        let mut c = ClickState { prev_current_position: 0, started_at: Some(now), dir: 1.0 };
         // ticks: 6 → 5, phase = 5/5 = 1, sign = +dir = +1.0
-        let result = compute_click_torque(&mut c, 0.5, true);
+        let result = compute_click_torque(&mut c, 0.5, true, now + Duration::from_millis(2));
         assert_eq!(result, 0.5);
-        assert_eq!(c.ticks_remaining, 5);
+        assert!(c.started_at.is_some());
     }
 
     #[test]
     fn click_second_phase_reverses_sign() {
         // Phase 0: dir=-1.0, ticks_remaining=4 → 3, phase = 3/5 = 0, sign = -(-1.0) = +1.0
-        let mut c = ClickState { prev_current_position: 0, ticks_remaining: 4, dir: -1.0 };
-        let result = compute_click_torque(&mut c, 0.3, true);
+        let now = Instant::now();
+        let mut c = ClickState { prev_current_position: 0, started_at: Some(now), dir: -1.0 };
+        let result = compute_click_torque(&mut c, 0.3, true, now + Duration::from_millis(7));
         assert_eq!(result, 0.3); // +0.3 (reversed from dir=-1.0)
-        assert_eq!(c.ticks_remaining, 3);
     }
 
     #[test]
     fn click_exhausted_returns_zero() {
-        let mut c = ClickState { prev_current_position: 0, ticks_remaining: 0, dir: 1.0 };
-        let result = compute_click_torque(&mut c, 0.5, true);
+        let now = Instant::now();
+        let mut c = ClickState { prev_current_position: 0, started_at: Some(now), dir: 1.0 };
+        let result = compute_click_torque(&mut c, 0.5, true, now + Duration::from_millis(10));
         assert_eq!(result, 0.0);
+        assert!(c.started_at.is_none());
     }
 
     // ── build_rpdo_frame ──
