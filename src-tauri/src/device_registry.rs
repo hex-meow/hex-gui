@@ -68,9 +68,7 @@ pub const NON_MOTOR_DEVICES: &[KnownDevice] = &[
 pub fn classify(vendor_id: u32, product_code: u32) -> DeviceKind {
     NON_MOTOR_DEVICES
         .iter()
-        .find(|d| {
-            d.vendor_id == vendor_id && d.product_code.map_or(true, |pc| pc == product_code)
-        })
+        .find(|d| d.vendor_id == vendor_id && d.product_code.map_or(true, |pc| pc == product_code))
         .map(|d| d.kind)
         .unwrap_or(DeviceKind::Motor)
 }

@@ -243,6 +243,7 @@ const STRINGS = {
   catRobotAppHint: { en: "Base, arm and integrated demos", zh: "底盘、机械臂与综合演示" },
   tagLiveControl: { en: "Live control", zh: "实时控制" },
   tagHaptics: { en: "Haptics", zh: "力反馈" },
+  tagRawCan: { en: "Raw CAN", zh: "Raw CAN" },
   tagRobotApi: { en: "Robot API", zh: "Robot API" },
   tagManipulator: { en: "Manipulator", zh: "机械臂" },
   tagMobileBase: { en: "Mobile base", zh: "移动底盘" },
@@ -259,6 +260,11 @@ const STRINGS = {
   toolSmartKnobDesc: {
     en: "Turn a single 4310/4342 into a haptic knob: software detents, endstops & return-to-center via high-rate MIT torque streaming. No press sensor — switch modes with the on-screen button.",
     zh: "把单个 4310/4342 变成力反馈旋钮：高频 MIT 力矩流实现软件卡位、限位与回中。无下压传感器——用界面按钮切换模式。",
+  },
+  toolRollerCan: { en: "Unit RollerCAN", zh: "Unit RollerCAN" },
+  toolRollerCanDesc: {
+    en: "Trial host for the Unit RollerCAN motor protocol: raw CAN 2.0 extended frames, mode/target writes and live feedback.",
+    zh: "Unit RollerCAN 电机试用上位机：CAN 2.0 扩展帧、模式/目标写入与实时反馈。",
   },
   toolBaseZenoh: { en: "Base(Zenoh)", zh: "Base(Zenoh)" },
   toolBaseZenohDesc: {

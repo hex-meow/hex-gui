@@ -141,6 +141,7 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
   const start = useCallback(async () => {
     if (selectedNid == null) return;
     setStarting(true);
+    let backendStarted = false;
     try {
       const saved = perModeTuning.current.get(modeIndex);
       const cfg = configs[modeIndex];
@@ -152,6 +153,7 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
       const startTorqueLimit = saved?.torqueLimit ?? torqueLimit;
       const startMaxTorque = saved?.maxTorque ?? maxTorque;
       await api.smartknobStart(selectedNid, modeIndex);
+      backendStarted = true;
       // If starting in custom mode, push the current custom config.
       if (modeIndex === 0 && customConfig) {
         await api.smartknobSetCustomConfig({
@@ -175,6 +177,11 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
       setRunning(true);
       message.success(t("skRunning"));
     } catch (e) {
+      if (backendStarted) {
+        await api.smartknobStop().catch(() => {});
+      }
+      setRunning(false);
+      setState(null);
       message.error(`${t("skStartFailed")}: ${errMsg(e)}`);
     } finally {
       setStarting(false);

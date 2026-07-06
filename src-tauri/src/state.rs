@@ -42,6 +42,9 @@ pub struct AppState {
     /// directly, no `Cia402Manager`), so it is stopped unconditionally on
     /// `disconnect` / tool switch, independent of `manager`.
     pub analyzer: Mutex<Option<crate::analyzer::CanAnalyzer>>,
+    /// Trial Unit RollerCAN session. It owns a raw CAN 2.0 extended-frame bus
+    /// and is intentionally separate from both the CiA402 manager and analyzer.
+    pub rollercan: Mutex<Option<crate::rollercan::RollerCanSession>>,
 }
 
 impl AppState {

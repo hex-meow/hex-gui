@@ -7,7 +7,14 @@ fn main() {
     }
     let proto_dir = std::env::var("ROBOT_PROTO_DIR")
         .unwrap_or_else(|_| "../../hex-robot-proto/proto".to_string());
-    let files = ["common.proto", "controller.proto", "robot.proto", "base.proto", "arm.proto", "events.proto"];
+    let files = [
+        "common.proto",
+        "controller.proto",
+        "robot.proto",
+        "base.proto",
+        "arm.proto",
+        "events.proto",
+    ];
     let paths: Vec<String> = files.iter().map(|f| format!("{proto_dir}/{f}")).collect();
     prost_build::compile_protos(&paths, &[&proto_dir]).expect("compile protos");
     for p in &paths {

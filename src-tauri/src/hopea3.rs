@@ -227,7 +227,10 @@ impl Kinematics {
             (CONTACTS_M[0][0] + CONTACTS_M[1][0] + CONTACTS_M[2][0]) / 3.0,
             (CONTACTS_M[0][1] + CONTACTS_M[1][1] + CONTACTS_M[2][1]) / 3.0,
         ];
-        let origin = [centroid[0] + BODY_OFFSET_M[0], centroid[1] + BODY_OFFSET_M[1]];
+        let origin = [
+            centroid[0] + BODY_OFFSET_M[0],
+            centroid[1] + BODY_OFFSET_M[1],
+        ];
 
         let mut j = [[0.0f64; 3]; 3];
         for i in 0..3 {
@@ -354,7 +357,8 @@ impl Hopea3 {
                     p.current = (slice + 1) as u8;
                     p.attempt = attempt;
                 }
-                match init_one_motor(&mgr, &bus, sdo_timeout, slice, nid, default_torque[slice]).await
+                match init_one_motor(&mgr, &bus, sdo_timeout, slice, nid, default_torque[slice])
+                    .await
                 {
                     Ok(factor) => {
                         log::info!("HopeA3: motor 0x{nid:02X} ready (slice {slice}, attempt {attempt}, kd_factor {factor})");
@@ -372,7 +376,9 @@ impl Hopea3 {
             }
             if let Some(e) = last_err {
                 progress.lock().unwrap().active = false;
-                return Err(e.context(format!("motor 0x{nid:02X} failed after {INIT_ATTEMPTS} attempts")));
+                return Err(e.context(format!(
+                    "motor 0x{nid:02X} failed after {INIT_ATTEMPTS} attempts"
+                )));
             }
         }
         progress.lock().unwrap().active = false;
@@ -424,13 +430,17 @@ impl Hopea3 {
                     return Ok(());
                 }
                 Err(e) => {
-                    log::warn!("HopeA3: re-init 0x{nid:02X} attempt {attempt}/{INIT_ATTEMPTS}: {e}");
+                    log::warn!(
+                        "HopeA3: re-init 0x{nid:02X} attempt {attempt}/{INIT_ATTEMPTS}: {e}"
+                    );
                     last_err = Some(e);
                     tokio::time::sleep(Duration::from_millis(300)).await;
                 }
             }
         }
-        Err(last_err.unwrap().context(format!("re-init 0x{nid:02X} failed")))
+        Err(last_err
+            .unwrap()
+            .context(format!("re-init 0x{nid:02X} failed")))
     }
 
     /// Update the commanded twist (clamped to the current limits, never errored).
@@ -579,9 +589,21 @@ fn rpdo_entries_for_slice(slice: usize) -> Vec<TpdoEntry> {
     let mut entries = Vec::with_capacity(3 + 4);
     for j in 0..3 {
         if j == slice {
-            entries.push(TpdoEntry { index: OD_MIT, subindex: MIT_SUB_VDES, bit_len: 32 }); // velocity
-            entries.push(TpdoEntry { index: OD_MIT, subindex: MIT_SUB_KD, bit_len: 16 }); // KD
-            entries.push(TpdoEntry { index: OD_MAX_TORQUE, subindex: 0, bit_len: 16 }); // max torque
+            entries.push(TpdoEntry {
+                index: OD_MIT,
+                subindex: MIT_SUB_VDES,
+                bit_len: 32,
+            }); // velocity
+            entries.push(TpdoEntry {
+                index: OD_MIT,
+                subindex: MIT_SUB_KD,
+                bit_len: 16,
+            }); // KD
+            entries.push(TpdoEntry {
+                index: OD_MAX_TORQUE,
+                subindex: 0,
+                bit_len: 16,
+            }); // max torque
         } else {
             entries.push(PAD_ENTRY);
             entries.push(PAD_ENTRY);

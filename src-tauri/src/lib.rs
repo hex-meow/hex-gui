@@ -12,6 +12,7 @@ mod dto;
 mod hopea3;
 mod imu;
 mod logging;
+mod rollercan;
 mod sdo_client;
 mod smartknob;
 mod state;
@@ -84,6 +85,19 @@ pub fn run() {
             commands::analyzer_send,
             commands::analyzer_sdo_read,
             commands::analyzer_sdo_write,
+            commands::rollercan_connect,
+            commands::rollercan_disconnect,
+            commands::rollercan_get_state,
+            commands::rollercan_ping,
+            commands::rollercan_enable,
+            commands::rollercan_stop_motor,
+            commands::rollercan_release_stall,
+            commands::rollercan_save_flash,
+            commands::rollercan_set_can_id,
+            commands::rollercan_set_bitrate,
+            commands::rollercan_set_stall_protection,
+            commands::rollercan_read_param,
+            commands::rollercan_write_param,
             commands::zenoh_connect,
             commands::zenoh_disconnect,
             commands::zenoh_discover,

@@ -12,9 +12,7 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hex_motor::cia402::{
-    Cia402Manager, LiveState, Logic, StatusStreamItem, StreamOptions,
-};
+use hex_motor::cia402::{Cia402Manager, LiveState, Logic, StatusStreamItem, StreamOptions};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 

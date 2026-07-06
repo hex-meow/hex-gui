@@ -123,10 +123,14 @@ fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, String> {
     // Guard before byte-slicing: multibyte input (e.g. full-width ＤＥＡＤ from a
     // CJK IME) would otherwise panic on a char boundary inside `compact[i..i+2]`.
     if !compact.is_ascii() {
-        return Err(format!("invalid hex bytes `{s}`: only ASCII hex digits allowed"));
+        return Err(format!(
+            "invalid hex bytes `{s}`: only ASCII hex digits allowed"
+        ));
     }
     if compact.len() % 2 != 0 {
-        return Err(format!("invalid hex bytes `{s}`: need an even number of hex digits"));
+        return Err(format!(
+            "invalid hex bytes `{s}`: need an even number of hex digits"
+        ));
     }
     let mut out = Vec::with_capacity(compact.len() / 2);
     let mut i = 0;
@@ -155,16 +159,34 @@ pub fn encode(ty: DataType, s: &str) -> Result<Vec<u8>, String> {
         Bool => match s {
             "1" | "true" | "on" | "True" => vec![1],
             "0" | "false" | "off" | "False" => vec![0],
-            _ => return Err(format!("invalid boolean `{s}` (use 0/1, true/false, on/off)")),
+            _ => {
+                return Err(format!(
+                    "invalid boolean `{s}` (use 0/1, true/false, on/off)"
+                ))
+            }
         },
-        U8 => (parse_u(s, u8::MAX as u64, "u8")? as u8).to_le_bytes().to_vec(),
-        U16 => (parse_u(s, u16::MAX as u64, "u16")? as u16).to_le_bytes().to_vec(),
-        U32 => (parse_u(s, u32::MAX as u64, "u32")? as u32).to_le_bytes().to_vec(),
+        U8 => (parse_u(s, u8::MAX as u64, "u8")? as u8)
+            .to_le_bytes()
+            .to_vec(),
+        U16 => (parse_u(s, u16::MAX as u64, "u16")? as u16)
+            .to_le_bytes()
+            .to_vec(),
+        U32 => (parse_u(s, u32::MAX as u64, "u32")? as u32)
+            .to_le_bytes()
+            .to_vec(),
         U64 => parse_u(s, u64::MAX, "u64")?.to_le_bytes().to_vec(),
-        I8 => (parse_i(s, i8::MIN as i64, i8::MAX as i64, "i8")? as i8).to_le_bytes().to_vec(),
-        I16 => (parse_i(s, i16::MIN as i64, i16::MAX as i64, "i16")? as i16).to_le_bytes().to_vec(),
-        I32 => (parse_i(s, i32::MIN as i64, i32::MAX as i64, "i32")? as i32).to_le_bytes().to_vec(),
-        I64 => parse_i(s, i64::MIN, i64::MAX, "i64")?.to_le_bytes().to_vec(),
+        I8 => (parse_i(s, i8::MIN as i64, i8::MAX as i64, "i8")? as i8)
+            .to_le_bytes()
+            .to_vec(),
+        I16 => (parse_i(s, i16::MIN as i64, i16::MAX as i64, "i16")? as i16)
+            .to_le_bytes()
+            .to_vec(),
+        I32 => (parse_i(s, i32::MIN as i64, i32::MAX as i64, "i32")? as i32)
+            .to_le_bytes()
+            .to_vec(),
+        I64 => parse_i(s, i64::MIN, i64::MAX, "i64")?
+            .to_le_bytes()
+            .to_vec(),
         F32 => s
             .parse::<f32>()
             .map_err(|e| format!("invalid float `{s}`: {e}"))?
@@ -205,7 +227,9 @@ pub fn format(ty: DataType, radix: Radix, raw: &[u8]) -> String {
         I64 => i64::from_le_bytes(fixed::<8>(raw)).to_string(),
         F32 => f32::from_le_bytes(fixed::<4>(raw)).to_string(),
         F64 => f64::from_le_bytes(fixed::<8>(raw)).to_string(),
-        VisibleString => String::from_utf8_lossy(raw).trim_end_matches('\0').to_string(),
+        VisibleString => String::from_utf8_lossy(raw)
+            .trim_end_matches('\0')
+            .to_string(),
         HexBytes => hex_join(raw),
     }
 }
@@ -218,7 +242,11 @@ pub fn format_raw(raw: &[u8]) -> String {
     }
     if raw.len() <= 4 {
         let v = le_u(raw);
-        format!("{} bytes: {hex}  (u{}=0x{v:X}, {v})", raw.len(), raw.len() * 8)
+        format!(
+            "{} bytes: {hex}  (u{}=0x{v:X}, {v})",
+            raw.len(),
+            raw.len() * 8
+        )
     } else {
         format!("{} bytes: {hex}", raw.len())
     }
@@ -239,7 +267,10 @@ fn fixed<const N: usize>(raw: &[u8]) -> [u8; N] {
 }
 
 fn hex_join(raw: &[u8]) -> String {
-    raw.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ")
+    raw.iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // ───────────────────────── abort decoding (ported from comeow) ─────────────────────────
@@ -283,7 +314,8 @@ pub fn abort_help(code: SdoAbortCode) -> &'static str {
 
 fn err_string(e: AsyncSdoError) -> String {
     match e {
-        AsyncSdoError::Sdo(SdoError::ServerAborted(c)) | AsyncSdoError::Sdo(SdoError::ClientAborted(c)) => {
+        AsyncSdoError::Sdo(SdoError::ServerAborted(c))
+        | AsyncSdoError::Sdo(SdoError::ClientAborted(c)) => {
             format!("ABORT {c} — {}", abort_help(c))
         }
         AsyncSdoError::Sdo(other) => other.to_string(),
@@ -334,7 +366,11 @@ pub async fn write(
     download_bytes_retry(&**bus, node, index, sub, &data, Some(timeout), retries)
         .await
         .map_err(err_string)?;
-    Ok(format!("0x{index:04X}:{sub:02X} ← {} ({} bytes) OK", value, data.len()))
+    Ok(format!(
+        "0x{index:04X}:{sub:02X} ← {} ({} bytes) OK",
+        value,
+        data.len()
+    ))
 }
 
 #[cfg(test)]
@@ -351,9 +387,18 @@ mod tests {
 
     #[test]
     fn hex_input_and_bytes() {
-        assert_eq!(encode(DataType::U32, "0x04CE").unwrap(), vec![0xCE, 0x04, 0x00, 0x00]);
-        assert_eq!(encode(DataType::HexBytes, "DE AD BE EF").unwrap(), vec![0xDE, 0xAD, 0xBE, 0xEF]);
-        assert_eq!(encode(DataType::HexBytes, "deadbeef").unwrap(), vec![0xDE, 0xAD, 0xBE, 0xEF]);
+        assert_eq!(
+            encode(DataType::U32, "0x04CE").unwrap(),
+            vec![0xCE, 0x04, 0x00, 0x00]
+        );
+        assert_eq!(
+            encode(DataType::HexBytes, "DE AD BE EF").unwrap(),
+            vec![0xDE, 0xAD, 0xBE, 0xEF]
+        );
+        assert_eq!(
+            encode(DataType::HexBytes, "deadbeef").unwrap(),
+            vec![0xDE, 0xAD, 0xBE, 0xEF]
+        );
     }
 
     #[test]

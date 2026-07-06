@@ -3,7 +3,7 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, SmartKnobState, ZenohArmState, ZenohBaseState } from "./types";
+import type { ArmInfo, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RollerCanState, SmartKnobState, ZenohArmState, ZenohBaseState } from "./types";
 
 export const api = {
   connect: (iface: string, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -128,6 +128,31 @@ export const api = {
     invoke<string>("analyzer_sdo_read", { node, index, sub, dtype, timeoutMs, retries }),
   analyzerSdoWrite: (node: number, index: number, sub: number, dtype: string, value: string, timeoutMs: number, retries: number) =>
     invoke<string>("analyzer_sdo_write", { node, index, sub, dtype, value, timeoutMs, retries }),
+
+  // Unit RollerCAN trial panel
+  rollercanConnect: (spec: string) => invoke<void>("rollercan_connect", { spec }),
+  rollercanDisconnect: () => invoke<void>("rollercan_disconnect"),
+  rollercanGetState: () => invoke<RollerCanState>("rollercan_get_state"),
+  rollercanPing: (hostId: number, targetId: number) =>
+    invoke<void>("rollercan_ping", { hostId, targetId }),
+  rollercanEnable: (hostId: number, targetId: number) =>
+    invoke<void>("rollercan_enable", { hostId, targetId }),
+  rollercanStopMotor: (hostId: number, targetId: number) =>
+    invoke<void>("rollercan_stop_motor", { hostId, targetId }),
+  rollercanReleaseStall: (hostId: number, targetId: number) =>
+    invoke<void>("rollercan_release_stall", { hostId, targetId }),
+  rollercanSaveFlash: (hostId: number, targetId: number) =>
+    invoke<void>("rollercan_save_flash", { hostId, targetId }),
+  rollercanSetCanId: (hostId: number, targetId: number, newId: number) =>
+    invoke<void>("rollercan_set_can_id", { hostId, targetId, newId }),
+  rollercanSetBitrate: (hostId: number, targetId: number, bitrate: number) =>
+    invoke<void>("rollercan_set_bitrate", { hostId, targetId, bitrate }),
+  rollercanSetStallProtection: (hostId: number, targetId: number, enabled: boolean) =>
+    invoke<void>("rollercan_set_stall_protection", { hostId, targetId, enabled }),
+  rollercanReadParam: (hostId: number, targetId: number, index: number) =>
+    invoke<void>("rollercan_read_param", { hostId, targetId, index }),
+  rollercanWriteParam: (hostId: number, targetId: number, index: number, value: number) =>
+    invoke<void>("rollercan_write_param", { hostId, targetId, index, value }),
 
   // Base(Zenoh)
   zenohConnect: (connect: string) => invoke<void>("zenoh_connect", { connect }),

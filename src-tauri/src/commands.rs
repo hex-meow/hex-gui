@@ -15,8 +15,8 @@ use crate::backend;
 use crate::diag::{EventsSnapshot, LogLine};
 use crate::dto::{LiveStateDto, MotorInfoDto, MotorModeDto, MotorTargetDto};
 use crate::state::AppState;
-use crate::zenoh_base::{BaseInfo, ZenohBaseState, ZenohConn};
 use crate::zenoh_arm::{ArmInfo, ZenohArmConn, ZenohArmState};
+use crate::zenoh_base::{BaseInfo, ZenohBaseState, ZenohConn};
 
 /// Anything we hand back to the frontend.
 type CmdResult<T> = Result<T, String>;
@@ -73,6 +73,9 @@ pub async fn disconnect(state: State<'_, AppState>) -> CmdResult<()> {
     if let Some(app) = state.analyzer.lock().await.take() {
         app.stop().await;
     }
+    if let Some(app) = state.rollercan.lock().await.take() {
+        app.stop().await;
+    }
     // Stop any running CSV recorders first so their files flush cleanly.
     for handle in state.drain_logs() {
         crate::logging::stop(handle).await;
@@ -121,11 +124,7 @@ pub async fn initialize_all(state: State<'_, AppState>) -> CmdResult<Vec<(u8, Op
 }
 
 #[tauri::command]
-pub async fn set_mode(
-    state: State<'_, AppState>,
-    nid: u8,
-    mode: MotorModeDto,
-) -> CmdResult<()> {
+pub async fn set_mode(state: State<'_, AppState>, nid: u8, mode: MotorModeDto) -> CmdResult<()> {
     let mgr = manager(&state).await?;
     let mode: MotorMode = mode.into();
     mgr.set_mode(nid, mode).await.map_err(err)
@@ -142,11 +141,7 @@ pub async fn set_target(
 }
 
 #[tauri::command]
-pub async fn set_max_torque(
-    state: State<'_, AppState>,
-    nid: u8,
-    permille: u16,
-) -> CmdResult<()> {
+pub async fn set_max_torque(state: State<'_, AppState>, nid: u8, permille: u16) -> CmdResult<()> {
     let mgr = manager(&state).await?;
     mgr.set_max_torque(nid, permille).await.map_err(err)
 }
@@ -165,11 +160,7 @@ pub async fn clear_error(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
 
 /// Change a motor's Node-ID (0x2001:01 + save). Power-cycle to apply.
 #[tauri::command]
-pub async fn change_node_id(
-    state: State<'_, AppState>,
-    nid: u8,
-    new_id: u8,
-) -> CmdResult<()> {
+pub async fn change_node_id(state: State<'_, AppState>, nid: u8, new_id: u8) -> CmdResult<()> {
     let mgr = manager(&state).await?;
     mgr.change_node_id(nid, new_id).await.map_err(err)
 }
@@ -187,11 +178,7 @@ pub async fn forget_offline(state: State<'_, AppState>) -> CmdResult<()> {
 /// 0x3001 user-position-preset. Motor must be in Switch On Disabled (it is on
 /// fresh power-up). See huayi.md §3.6.
 #[tauri::command]
-pub async fn set_position_preset(
-    state: State<'_, AppState>,
-    nid: u8,
-    pos: f32,
-) -> CmdResult<()> {
+pub async fn set_position_preset(state: State<'_, AppState>, nid: u8, pos: f32) -> CmdResult<()> {
     let mgr = manager(&state).await?;
     mgr.set_position_preset(nid, pos).await.map_err(err)
 }
@@ -367,9 +354,7 @@ pub async fn hopea3_reset_odom(state: State<'_, AppState>) -> CmdResult<()> {
 
 /// Poll the current chassis state (pose, twist, per-motor status).
 #[tauri::command]
-pub async fn hopea3_get_state(
-    state: State<'_, AppState>,
-) -> CmdResult<crate::hopea3::Hopea3State> {
+pub async fn hopea3_get_state(state: State<'_, AppState>) -> CmdResult<crate::hopea3::Hopea3State> {
     Ok(match state.hopea3.lock().await.as_ref() {
         Some(app) => app.state(),
         None => crate::hopea3::Hopea3State::default(),
@@ -567,7 +552,9 @@ pub async fn imu_get_state(state: State<'_, AppState>) -> CmdResult<crate::imu::
 #[tauri::command]
 pub async fn imu_bias_trim(state: State<'_, AppState>) -> CmdResult<()> {
     let guard = state.imu.lock().await;
-    let app = guard.as_ref().ok_or_else(|| "IMU not running".to_string())?;
+    let app = guard
+        .as_ref()
+        .ok_or_else(|| "IMU not running".to_string())?;
     app.bias_trim().await.map_err(err)
 }
 
@@ -575,7 +562,9 @@ pub async fn imu_bias_trim(state: State<'_, AppState>) -> CmdResult<()> {
 #[tauri::command]
 pub async fn imu_yaw_reset(state: State<'_, AppState>) -> CmdResult<()> {
     let guard = state.imu.lock().await;
-    let app = guard.as_ref().ok_or_else(|| "IMU not running".to_string())?;
+    let app = guard
+        .as_ref()
+        .ok_or_else(|| "IMU not running".to_string())?;
     app.yaw_reset().await.map_err(err)
 }
 
@@ -586,7 +575,11 @@ pub async fn imu_yaw_reset(state: State<'_, AppState>) -> CmdResult<()> {
 /// bus. `hw_ts` requests device hardware timestamps (gs_usb, firmware-gated;
 /// silently degrades to host timestamps — see the status `hw_ts` flag).
 #[tauri::command]
-pub async fn analyzer_start(state: State<'_, AppState>, spec: String, hw_ts: bool) -> CmdResult<()> {
+pub async fn analyzer_start(
+    state: State<'_, AppState>,
+    spec: String,
+    hw_ts: bool,
+) -> CmdResult<()> {
     let mut guard = state.analyzer.lock().await;
     if guard.is_some() {
         return Err("analyzer already running; stop it first".into());
@@ -760,6 +753,183 @@ pub async fn analyzer_sdo_write(
     .await
 }
 
+// ───────────────────────── RollerCAN trial ─────────────────────────
+
+#[tauri::command]
+pub async fn rollercan_connect(state: State<'_, AppState>, spec: String) -> CmdResult<()> {
+    let mut guard = state.rollercan.lock().await;
+    if guard.is_some() {
+        return Err("RollerCAN already connected; disconnect it first".into());
+    }
+    let app = crate::rollercan::RollerCanSession::start(&spec)
+        .await
+        .map_err(err)?;
+    *guard = Some(app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rollercan_disconnect(state: State<'_, AppState>) -> CmdResult<()> {
+    if let Some(app) = state.rollercan.lock().await.take() {
+        app.stop().await;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rollercan_get_state(
+    state: State<'_, AppState>,
+) -> CmdResult<crate::rollercan::RollerCanStateDto> {
+    Ok(match state.rollercan.lock().await.as_ref() {
+        Some(app) => app.snapshot(),
+        None => crate::rollercan::RollerCanStateDto::default(),
+    })
+}
+
+#[tauri::command]
+pub async fn rollercan_ping(
+    state: State<'_, AppState>,
+    host_id: u8,
+    target_id: u8,
+) -> CmdResult<()> {
+    let guard = state.rollercan.lock().await;
+    let app = guard
+        .as_ref()
+        .ok_or_else(|| "RollerCAN not connected".to_string())?;
+    app.ping(host_id, target_id).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_enable(
+    state: State<'_, AppState>,
+    host_id: u8,
+    target_id: u8,
+) -> CmdResult<()> {
+    let guard = state.rollercan.lock().await;
+    let app = guard
+        .as_ref()
+        .ok_or_else(|| "RollerCAN not connected".to_string())?;
+    app.enable(host_id, target_id).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_stop_motor(
+    state: State<'_, AppState>,
+    host_id: u8,
+    target_id: u8,
+) -> CmdResult<()> {
+    let guard = state.rollercan.lock().await;
+    let app = guard
+        .as_ref()
+        .ok_or_else(|| "RollerCAN not connected".to_string())?;
+    app.stop_motor(host_id, target_id).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_release_stall(
+    state: State<'_, AppState>,
+    host_id: u8,
+    target_id: u8,
+) -> CmdResult<()> {
+    let guard = state.rollercan.lock().await;
+    let app = guard
+        .as_ref()
+        .ok_or_else(|| "RollerCAN not connected".to_string())?;
+    app.release_stall(host_id, target_id).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_save_flash(
+    state: State<'_, AppState>,
+    host_id: u8,
+    target_id: u8,
+) -> CmdResult<()> {
+    let guard = state.rollercan.lock().await;
+    let app = guard
+        .as_ref()
+        .ok_or_else(|| "RollerCAN not connected".to_string())?;
+    app.save_flash(host_id, target_id).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_set_can_id(
+    state: State<'_, AppState>,
+    host_id: u8,
+    target_id: u8,
+    new_id: u8,
+) -> CmdResult<()> {
+    let guard = state.rollercan.lock().await;
+    let app = guard
+        .as_ref()
+        .ok_or_else(|| "RollerCAN not connected".to_string())?;
+    app.set_can_id(host_id, target_id, new_id)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_set_bitrate(
+    state: State<'_, AppState>,
+    host_id: u8,
+    target_id: u8,
+    bitrate: u8,
+) -> CmdResult<()> {
+    let guard = state.rollercan.lock().await;
+    let app = guard
+        .as_ref()
+        .ok_or_else(|| "RollerCAN not connected".to_string())?;
+    app.set_bitrate(host_id, target_id, bitrate)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_set_stall_protection(
+    state: State<'_, AppState>,
+    host_id: u8,
+    target_id: u8,
+    enabled: bool,
+) -> CmdResult<()> {
+    let guard = state.rollercan.lock().await;
+    let app = guard
+        .as_ref()
+        .ok_or_else(|| "RollerCAN not connected".to_string())?;
+    app.set_stall_protection(host_id, target_id, enabled)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_read_param(
+    state: State<'_, AppState>,
+    host_id: u8,
+    target_id: u8,
+    index: u16,
+) -> CmdResult<()> {
+    let guard = state.rollercan.lock().await;
+    let app = guard
+        .as_ref()
+        .ok_or_else(|| "RollerCAN not connected".to_string())?;
+    app.read_param(host_id, target_id, index).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_write_param(
+    state: State<'_, AppState>,
+    host_id: u8,
+    target_id: u8,
+    index: u16,
+    value: i32,
+) -> CmdResult<()> {
+    let guard = state.rollercan.lock().await;
+    let app = guard
+        .as_ref()
+        .ok_or_else(|| "RollerCAN not connected".to_string())?;
+    app.write_param(host_id, target_id, index, value)
+        .await
+        .map_err(err)
+}
+
 // ───────────────────────── Base(Zenoh) ─────────────────────────
 
 /// 连接到控制器网络。`connect` 如 `tcp/127.0.0.1:7447`(空=仅多播发现)。
@@ -792,7 +962,11 @@ pub async fn zenoh_discover(state: State<'_, AppState>) -> CmdResult<Vec<BaseInf
 
 /// 取得某底盘的控制权。
 #[tauri::command]
-pub async fn zenoh_acquire(state: State<'_, AppState>, prefix: String, model: String) -> CmdResult<()> {
+pub async fn zenoh_acquire(
+    state: State<'_, AppState>,
+    prefix: String,
+    model: String,
+) -> CmdResult<()> {
     let g = state.zenoh.lock().await;
     let c = g.as_ref().ok_or_else(|| "未连接 Zenoh".to_string())?;
     c.acquire(&prefix, &model).await.map_err(err)
@@ -817,7 +991,13 @@ pub async fn zenoh_set_cmd(state: State<'_, AppState>, vx: f64, vy: f64, wz: f64
 
 #[tauri::command]
 pub async fn zenoh_get_state(state: State<'_, AppState>) -> CmdResult<ZenohBaseState> {
-    Ok(state.zenoh.lock().await.as_ref().map(|c| c.state()).unwrap_or_default())
+    Ok(state
+        .zenoh
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.state())
+        .unwrap_or_default())
 }
 
 #[tauri::command]
@@ -848,12 +1028,24 @@ pub async fn zenoh_refresh_diag(state: State<'_, AppState>) -> CmdResult<()> {
 
 #[tauri::command]
 pub async fn zenoh_get_events(state: State<'_, AppState>) -> CmdResult<EventsSnapshot> {
-    Ok(state.zenoh.lock().await.as_ref().map(|c| c.get_events()).unwrap_or_default())
+    Ok(state
+        .zenoh
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.get_events())
+        .unwrap_or_default())
 }
 
 #[tauri::command]
 pub async fn zenoh_get_logs(state: State<'_, AppState>) -> CmdResult<Vec<LogLine>> {
-    Ok(state.zenoh.lock().await.as_ref().map(|c| c.get_logs()).unwrap_or_default())
+    Ok(state
+        .zenoh
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.get_logs())
+        .unwrap_or_default())
 }
 
 /// P1-3 clear_fault:清除底盘锁存的 FATAL(需先取控)。
@@ -869,7 +1061,9 @@ pub async fn zenoh_clear_fault(state: State<'_, AppState>) -> CmdResult<()> {
 #[tauri::command]
 pub async fn arm_connect(state: State<'_, AppState>, connect: String) -> CmdResult<()> {
     let mut g = state.zenoh_arm.lock().await;
-    if g.is_some() { return Err("Arm Zenoh 已连接;先 disconnect".into()); }
+    if g.is_some() {
+        return Err("Arm Zenoh 已连接;先 disconnect".into());
+    }
     *g = Some(ZenohArmConn::open(&connect).await.map_err(err)?);
     log::info!("Arm Zenoh 已连接: {connect}");
     Ok(())
@@ -892,7 +1086,11 @@ pub async fn arm_discover(state: State<'_, AppState>) -> CmdResult<Vec<ArmInfo>>
 }
 
 #[tauri::command]
-pub async fn arm_acquire(state: State<'_, AppState>, prefix: String, model: String) -> CmdResult<()> {
+pub async fn arm_acquire(
+    state: State<'_, AppState>,
+    prefix: String,
+    model: String,
+) -> CmdResult<()> {
     let g = state.zenoh_arm.lock().await;
     let c = g.as_ref().ok_or_else(|| "未连接 Arm Zenoh".to_string())?;
     c.acquire(&prefix, &model).await.map_err(err)
@@ -924,7 +1122,13 @@ pub async fn arm_goto(state: State<'_, AppState>, q: Vec<f32>, kp: f32, kd: f32)
 
 #[tauri::command]
 pub async fn arm_get_state(state: State<'_, AppState>) -> CmdResult<ZenohArmState> {
-    Ok(state.zenoh_arm.lock().await.as_ref().map(|c| c.state()).unwrap_or_default())
+    Ok(state
+        .zenoh_arm
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.state())
+        .unwrap_or_default())
 }
 
 #[tauri::command]
@@ -955,12 +1159,24 @@ pub async fn arm_refresh_diag(state: State<'_, AppState>) -> CmdResult<()> {
 
 #[tauri::command]
 pub async fn arm_get_events(state: State<'_, AppState>) -> CmdResult<EventsSnapshot> {
-    Ok(state.zenoh_arm.lock().await.as_ref().map(|c| c.get_events()).unwrap_or_default())
+    Ok(state
+        .zenoh_arm
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.get_events())
+        .unwrap_or_default())
 }
 
 #[tauri::command]
 pub async fn arm_get_logs(state: State<'_, AppState>) -> CmdResult<Vec<LogLine>> {
-    Ok(state.zenoh_arm.lock().await.as_ref().map(|c| c.get_logs()).unwrap_or_default())
+    Ok(state
+        .zenoh_arm
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.get_logs())
+        .unwrap_or_default())
 }
 
 /// P1-3 clear_fault:清除机械臂锁存的 FATAL(需先取控)。

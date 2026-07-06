@@ -60,12 +60,47 @@ pub async fn open_bus(spec: &str, hw_timestamp: bool) -> Result<(Arc<dyn CanBus>
     }
 }
 
+/// Open a classic CAN 2.0 bus at 1 Mbit/s for protocols that are explicitly
+/// not CAN-FD. SocketCAN devices are assumed to be pre-configured by the OS.
+pub async fn open_classic_1m_bus(spec: &str) -> Result<Arc<dyn CanBus>> {
+    if let Some(channel) = gs_usb_channel(spec) {
+        use can_transport::gs_usb::{GsUsbBus, GsUsbConfig};
+        let bus = GsUsbBus::open(GsUsbConfig::classic_1m().with_channel(channel))
+            .await
+            .with_context(|| format!("opening classic gs_usb / candleLight channel {channel}"))?;
+        log::info!(
+            "classic gs_usb ch{channel} opened: {:?}",
+            bus.capabilities()
+        );
+        return Ok(Arc::new(bus));
+    }
+
+    let (kind, _name) = match spec.split_once(':') {
+        Some((k, n)) => (k, n),
+        None => ("socketcan", spec),
+    };
+    match kind {
+        #[cfg(target_os = "linux")]
+        "socketcan" => {
+            let bus = can_transport::socketcan::SocketCanBus::open(_name)
+                .with_context(|| format!("opening SocketCAN interface '{_name}'"))?;
+            Ok(Arc::new(bus))
+        }
+        other => bail!(
+            "backend '{other}' is not available on this build \
+             (known: 'socketcan' on Linux, 'gs_usb<channel>' everywhere)"
+        ),
+    }
+}
+
 /// Parse a gs_usb interface spec into a channel number, or `None` if `spec`
 /// is not a gs_usb spec. Accepts `gs_usb`, `gs_usb0`, `gs_usb1`, `gs_usb:1`,
 /// and the underscore-less `gsusb2` variants.
 fn gs_usb_channel(spec: &str) -> Option<u16> {
     let s = spec.trim().to_ascii_lowercase();
-    let rest = s.strip_prefix("gs_usb").or_else(|| s.strip_prefix("gsusb"))?;
+    let rest = s
+        .strip_prefix("gs_usb")
+        .or_else(|| s.strip_prefix("gsusb"))?;
     let rest = rest.strip_prefix(':').unwrap_or(rest);
     if rest.is_empty() {
         Some(0)

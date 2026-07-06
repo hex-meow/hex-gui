@@ -333,6 +333,45 @@ export interface CanSendSpec {
   data: number[];
 }
 
+// Unit RollerCAN trial panel (raw CAN 2.0 extended-frame protocol).
+export interface RollerCanFeedback {
+  node_id: number;
+  host_id: number;
+  speed_rpm: number;
+  position_deg: number;
+  current_ma: number;
+  voltage_v: number;
+  mode: number;
+  state: number;
+  fault_raw: number;
+  fault_over_range: boolean;
+  fault_stall: boolean;
+  fault_over_voltage: boolean;
+  age_ms: number;
+}
+
+export interface RollerCanParamValue {
+  index: number;
+  value: number;
+  raw_u32: number;
+  age_ms: number;
+}
+
+export interface RollerCanEvent {
+  t_ms: number;
+  dir: "rx" | "tx";
+  id: number;
+  data: string;
+  note: string;
+}
+
+export interface RollerCanState {
+  connected: boolean;
+  feedback: RollerCanFeedback | null;
+  last_param: RollerCanParamValue | null;
+  events: RollerCanEvent[];
+}
+
 // Tagged target union the backend deserializes (dto::MotorTargetDto).
 export type MotorTarget =
   | { kind: "Disable" }
