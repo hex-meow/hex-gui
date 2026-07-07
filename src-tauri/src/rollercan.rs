@@ -23,6 +23,7 @@ const CURRENT_MODE: i32 = 3;
 const CURRENT_X100_LIMIT: i32 = 120_000;
 const MA_X100_PER_AMP: f64 = 100_000.0;
 const ROLLER_DEFAULT_CURRENT_LIMIT_A: f64 = 1.2;
+const ROLLER_OUTPUT_DEADBAND_A: f64 = 0.06;
 const ROLLER_CURRENT_DIRECTION: f64 = 1.0;
 const ROLLER_SENSOR_DIRECTION: f64 = 1.0;
 const DEG: f64 = std::f64::consts::PI / 180.0;
@@ -69,8 +70,8 @@ const IDLE_CORRECTION_MAX_ANGLE_RAD: f64 = 5.0 * std::f64::consts::PI / 180.0;
 const IDLE_CORRECTION_RATE_ALPHA: f64 = 0.0005;
 const MAX_VEL_RAD_S: f64 = 60.0;
 const PID_LIMIT: f64 = 10.0;
-const CLICK_PHASE_DURATION: Duration = Duration::from_millis(5);
-const CLICK_TOTAL_DURATION: Duration = Duration::from_millis(10);
+const CLICK_PHASE_DURATION: Duration = Duration::from_millis(2);
+const CLICK_TOTAL_DURATION: Duration = Duration::from_millis(4);
 const HAPTIC_TIMING_WARN_THRESHOLD: Duration = Duration::from_millis(4);
 
 #[derive(Clone, Default, Serialize)]
@@ -392,7 +393,7 @@ pub fn preset_configs() -> Vec<KnobConfig> {
             219,
         ),
         KnobConfig {
-            click_torque_nm: 0.0925,
+            click_torque_nm: 0.1,
             ..p(
                 "Fine values\nWith detents",
                 127,
@@ -401,12 +402,12 @@ pub fn preset_configs() -> Vec<KnobConfig> {
                 1.0,
                 1.0,
                 1.0,
-                1.1,
+                0.9,
                 0.0,
                 crate::smartknob::DEFAULT_FRICTION_COMPENSATION * 0.0,
                 0.0625,
-                4.0,
                 0.0,
+                0.1,
                 25,
             )
         },
@@ -422,12 +423,12 @@ pub fn preset_configs() -> Vec<KnobConfig> {
             0.0,
             0.0,
             0.2,
-            25.0,
+            28.0,
             0.16,
             200,
         ),
         KnobConfig {
-            click_torque_nm: 0.30,
+            click_torque_nm: 0.35,
             ..p(
                 "Coarse values\nWeak detents",
                 0,
@@ -436,12 +437,12 @@ pub fn preset_configs() -> Vec<KnobConfig> {
                 8.225806452,
                 0.2,
                 1.0,
-                1.1,
+                0.9,
                 0.0,
                 0.0,
-                0.375,
-                0.8,
-                0.05,
+                0.2,
+                5.0,
+                0.16,
                 0,
             )
         },
@@ -1392,6 +1393,9 @@ fn estimate_velocity_rad_s(
 }
 
 fn effort_to_current_x100(current_a: f64, max_torque_permille: u16) -> i32 {
+    if !current_a.is_finite() || current_a.abs() < ROLLER_OUTPUT_DEADBAND_A {
+        return 0;
+    }
     let safety = (CURRENT_X100_LIMIT as i64 * max_torque_permille.min(1000) as i64 / 1000) as i32;
     (ROLLER_CURRENT_DIRECTION * current_a * MA_X100_PER_AMP)
         .round()
@@ -1454,5 +1458,44 @@ mod tests {
         assert_eq!(tuning.strength_scale, cfg.strength_scale);
         assert_eq!(tuning.friction_compensation, cfg.friction_compensation);
         assert_eq!(tuning.click_torque_nm, cfg.click_torque_nm);
+    }
+
+    #[test]
+    fn output_deadband_suppresses_small_current_commands() {
+        assert_eq!(
+            effort_to_current_x100(ROLLER_OUTPUT_DEADBAND_A * 0.5, 1000),
+            0
+        );
+        assert_eq!(
+            effort_to_current_x100(-ROLLER_OUTPUT_DEADBAND_A * 0.5, 1000),
+            0
+        );
+        assert_ne!(
+            effort_to_current_x100(ROLLER_OUTPUT_DEADBAND_A * 1.5, 1000),
+            0
+        );
+    }
+
+    #[test]
+    fn click_pulse_uses_two_millisecond_phases() {
+        let now = Instant::now();
+        let mut click = ClickState {
+            prev_current_position: 0,
+            started_at: Some(now),
+            dir: 1.0,
+        };
+
+        assert_eq!(
+            compute_click_torque(&mut click, 0.5, true, now + Duration::from_millis(1)),
+            0.5
+        );
+        assert_eq!(
+            compute_click_torque(&mut click, 0.5, true, now + Duration::from_millis(3)),
+            -0.5
+        );
+        assert_eq!(
+            compute_click_torque(&mut click, 0.5, true, now + Duration::from_millis(4)),
+            0.0
+        );
     }
 }
