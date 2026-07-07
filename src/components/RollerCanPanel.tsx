@@ -94,16 +94,15 @@ export function RollerCanPanel() {
   const EDIT_GRACE_MS = 1200;
 
   useEffect(() => {
-    api.smartknobConfigs().then((cfgs) => {
-      const rollerCfgs = cfgs.map(toRollerConfig);
-      setConfigs(rollerCfgs);
-      if (rollerCfgs.length > 0) {
-        setCustomConfig(rollerCfgs[0]);
-        setStrength(rollerCfgs[0].strength_scale);
-        setFrictionComp(rollerCfgs[0].friction_compensation);
-        setClickTorque(rollerCfgs[0].click_torque_nm);
-        setPGain(rollerCfgs[0].p_gain);
-        setDGain(rollerCfgs[0].d_gain);
+    api.rollercanConfigs().then((cfgs) => {
+      setConfigs(cfgs);
+      if (cfgs.length > 0) {
+        setCustomConfig(cfgs[0]);
+        setStrength(cfgs[0].strength_scale);
+        setFrictionComp(cfgs[0].friction_compensation);
+        setClickTorque(cfgs[0].click_torque_nm);
+        setPGain(cfgs[0].p_gain);
+        setDGain(cfgs[0].d_gain);
       }
     }).catch(() => {});
   }, []);
@@ -568,16 +567,6 @@ async function pushCustomConfig(cfg: KnobConfig, motorId: number) {
 
 const DEG = Math.PI / 180;
 const CLICK_WIDTH_THRESHOLD_RAD = 3 * DEG;
-const ROLLER_CURRENT_SCALE = 0.25;
-
-function toRollerConfig(cfg: KnobConfig): KnobConfig {
-  return {
-    ...cfg,
-    strength_scale: cfg.strength_scale * ROLLER_CURRENT_SCALE,
-    friction_compensation: cfg.friction_compensation * ROLLER_CURRENT_SCALE,
-    click_torque_nm: cfg.click_torque_nm * ROLLER_CURRENT_SCALE,
-  };
-}
 
 function recommendedPGain(cfg: KnobConfig): number {
   return cfg.detent_strength_unit * 4.0;

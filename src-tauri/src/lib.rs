@@ -86,6 +86,7 @@ pub fn run() {
             commands::analyzer_sdo_read,
             commands::analyzer_sdo_write,
             commands::rollercan_connect,
+            commands::rollercan_configs,
             commands::rollercan_disconnect,
             commands::rollercan_get_state,
             commands::rollercan_ping,

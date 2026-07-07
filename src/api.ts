@@ -130,6 +130,7 @@ export const api = {
     invoke<string>("analyzer_sdo_write", { node, index, sub, dtype, value, timeoutMs, retries }),
 
   // Unit RollerCAN trial panel
+  rollercanConfigs: () => invoke<KnobConfig[]>("rollercan_configs"),
   rollercanConnect: (spec: string) => invoke<void>("rollercan_connect", { spec }),
   rollercanDisconnect: () => invoke<void>("rollercan_disconnect"),
   rollercanGetState: () => invoke<RollerCanState>("rollercan_get_state"),

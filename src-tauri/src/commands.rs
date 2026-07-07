@@ -370,6 +370,12 @@ pub fn smartknob_configs() -> Vec<crate::smartknob::KnobConfig> {
     crate::smartknob::preset_configs()
 }
 
+/// RollerCAN haptic presets. Static; does not require a bus connection.
+#[tauri::command]
+pub fn rollercan_configs() -> Vec<crate::rollercan::KnobConfig> {
+    crate::rollercan::preset_configs()
+}
+
 /// Initialize the chosen motor as a haptic knob and start the haptic loop.
 #[tauri::command]
 pub async fn smartknob_start(

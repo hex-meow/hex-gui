@@ -18,14 +18,14 @@ use tokio::task::JoinHandle;
 pub use crate::smartknob::KnobConfig;
 
 const HISTORY_CAP: usize = 80;
-const CONTROL_HZ: u64 = 250;
+const CONTROL_HZ: u64 = 500;
 const CURRENT_MODE: i32 = 3;
 const CURRENT_X100_LIMIT: i32 = 120_000;
 const MA_X100_PER_AMP: f64 = 100_000.0;
-const ROLLER_DEFAULT_CURRENT_LIMIT_A: f64 = 0.45;
-const ROLLER_DEFAULT_STRENGTH_SCALE: f64 = 0.25;
+const ROLLER_DEFAULT_CURRENT_LIMIT_A: f64 = 1.2;
 const ROLLER_CURRENT_DIRECTION: f64 = 1.0;
 const ROLLER_SENSOR_DIRECTION: f64 = 1.0;
+const DEG: f64 = std::f64::consts::PI / 180.0;
 
 const OD_SAVE_FLASH: u16 = 0x7002;
 const OD_RELEASE_PROTECTION: u16 = 0x7003;
@@ -162,8 +162,10 @@ impl RollerCanState {
             .realtime
             .position_deg
             .filter(|(_, at)| now.duration_since(*at) < Duration::from_millis(250));
-        let (position_deg, position_at) =
-            position.unwrap_or((feedback.position_deg as f64, now - Duration::from_millis(feedback.age_ms)));
+        let (position_deg, position_at) = position.unwrap_or((
+            feedback.position_deg as f64,
+            now - Duration::from_millis(feedback.age_ms),
+        ));
         let speed_rpm = self
             .realtime
             .speed_rpm
@@ -212,11 +214,11 @@ impl Tuning {
         Self {
             p_gain: config.p_gain,
             d_gain: config.d_gain,
-            strength_scale: config.strength_scale * ROLLER_DEFAULT_STRENGTH_SCALE,
+            strength_scale: config.strength_scale,
             torque_limit_nm: ROLLER_DEFAULT_CURRENT_LIMIT_A,
             max_torque_permille: crate::smartknob::DEFAULT_MAX_TORQUE_PERMILLE,
-            friction_compensation: config.friction_compensation * ROLLER_DEFAULT_STRENGTH_SCALE,
-            click_torque_nm: config.click_torque_nm * ROLLER_DEFAULT_STRENGTH_SCALE,
+            friction_compensation: config.friction_compensation,
+            click_torque_nm: config.click_torque_nm,
         }
         .sanitized()
     }
@@ -232,6 +234,253 @@ impl Tuning {
             click_torque_nm: finite_nonnegative(self.click_torque_nm),
         }
     }
+}
+
+fn preset(
+    text: &str,
+    position: i32,
+    min_position: i32,
+    max_position: i32,
+    width_deg: f64,
+    detent_strength_unit: f64,
+    endstop_strength_unit: f64,
+    snap_point: f64,
+    snap_point_bias: f64,
+    friction_compensation: f64,
+    strength_scale: f64,
+    p_gain: f64,
+    d_gain: f64,
+    led_hue: i32,
+) -> KnobConfig {
+    KnobConfig {
+        position,
+        min_position,
+        max_position,
+        position_width_radians: width_deg * DEG,
+        detent_strength_unit,
+        endstop_strength_unit,
+        snap_point,
+        snap_point_bias,
+        friction_compensation,
+        strength_scale,
+        p_gain,
+        d_gain,
+        text: text.to_string(),
+        led_hue,
+        ..Default::default()
+    }
+}
+
+/// RollerCAN-specific haptic presets.
+///
+/// These deliberately live next to the RollerCAN current-mode controller instead
+/// of sharing `smartknob::preset_configs()`: RollerCAN is direct-drive and uses
+/// current commands, while the native SmartKnob path targets the HEX actuator's
+/// torque interface.
+pub fn preset_configs() -> Vec<KnobConfig> {
+    let p = preset;
+    vec![
+        KnobConfig {
+            is_custom: true,
+            text: "Custom\nEdit me".into(),
+            led_hue: 120,
+            max_position: -1,
+            position_width_radians: 10.0 * DEG,
+            snap_point: 0.55,
+            friction_compensation: 0.0,
+            strength_scale: 0.0875,
+            p_gain: 0.0,
+            d_gain: 0.0,
+            ..p(
+                "", 0, 0, -1, 10.0, 0.0, 1.0, 0.55, 0.0, 0.0, 0.0875, 0.0, 0.0, 120,
+            )
+        },
+        p(
+            "Unbounded\nNo detents",
+            0,
+            0,
+            -1,
+            10.0,
+            0.0,
+            1.0,
+            0.75,
+            0.0,
+            0.02,
+            0.0375,
+            0.0,
+            0.0,
+            200,
+        ),
+        p(
+            "Bounded 0-10\nNo detents",
+            0,
+            0,
+            10,
+            10.0,
+            0.0,
+            1.0,
+            1.1,
+            0.0,
+            0.0,
+            0.0625,
+            0.0,
+            0.0,
+            0,
+        ),
+        p(
+            "Multi-rev\nNo detents",
+            0,
+            0,
+            72,
+            10.0,
+            0.0,
+            5.0,
+            0.75,
+            0.0,
+            0.0,
+            crate::smartknob::DEFAULT_STRENGTH_SCALE * 0.25,
+            0.0,
+            0.0,
+            73,
+        ),
+        p(
+            "On/off\nStrong detent",
+            0,
+            0,
+            1,
+            60.0,
+            1.0,
+            1.0,
+            0.55,
+            0.0,
+            0.0,
+            0.1,
+            38.0,
+            0.55,
+            157,
+        ),
+        p(
+            "Return-to-center",
+            0,
+            0,
+            0,
+            60.0,
+            0.01,
+            0.6,
+            1.1,
+            0.0,
+            crate::smartknob::DEFAULT_FRICTION_COMPENSATION * 0.25,
+            0.2,
+            40.0,
+            0.1,
+            45,
+        ),
+        p(
+            "Fine values\nNo detents",
+            127,
+            0,
+            255,
+            1.0,
+            0.0,
+            1.0,
+            1.1,
+            0.0,
+            0.0,
+            0.075,
+            0.0,
+            0.1,
+            219,
+        ),
+        KnobConfig {
+            click_torque_nm: 0.0925,
+            ..p(
+                "Fine values\nWith detents",
+                127,
+                0,
+                255,
+                1.0,
+                1.0,
+                1.0,
+                1.1,
+                0.0,
+                crate::smartknob::DEFAULT_FRICTION_COMPENSATION * 0.0,
+                0.0625,
+                4.0,
+                0.0,
+                25,
+            )
+        },
+        p(
+            "Coarse values\nStrong detents",
+            0,
+            0,
+            31,
+            8.225806452,
+            2.5,
+            1.0,
+            0.75,
+            0.0,
+            0.0,
+            0.2,
+            25.0,
+            0.16,
+            200,
+        ),
+        KnobConfig {
+            click_torque_nm: 0.30,
+            ..p(
+                "Coarse values\nWeak detents",
+                0,
+                0,
+                31,
+                8.225806452,
+                0.2,
+                1.0,
+                1.1,
+                0.0,
+                0.0,
+                0.375,
+                0.8,
+                0.05,
+                0,
+            )
+        },
+        KnobConfig {
+            detent_positions: vec![2, 10, 21, 22],
+            ..p(
+                "Magnetic detents",
+                0,
+                0,
+                31,
+                7.0,
+                2.5,
+                1.0,
+                0.7,
+                0.0,
+                0.0,
+                0.20,
+                40.0,
+                0.2,
+                73,
+            )
+        },
+        p(
+            "Return-to-center\nwith detents",
+            0,
+            -6,
+            6,
+            60.0,
+            1.0,
+            1.0,
+            0.55,
+            0.4,
+            0.0,
+            0.2,
+            10.0,
+            0.1,
+            157,
+        ),
+    ]
 }
 
 pub struct RollerCanSession {
@@ -260,7 +509,7 @@ impl RollerCanSession {
         let state = Arc::new(StdMutex::new(RollerCanState::default()));
         let t0 = Instant::now();
         let rx_task = tokio::spawn(drain_loop(rx, state.clone(), t0));
-        let configs = crate::smartknob::preset_configs();
+        let configs = preset_configs();
         let per_mode_tuning = configs.iter().map(Tuning::from_config).collect();
         let tuning = Tuning::from_config(&configs[0]);
         log::info!("RollerCAN SmartKnob connected on {spec:?}");
@@ -541,7 +790,7 @@ async fn haptic_loop(
     t0: Instant,
     target_id: u8,
 ) {
-    let configs = crate::smartknob::preset_configs();
+    let configs = preset_configs();
     let period = Duration::from_micros(1_000_000 / CONTROL_HZ);
     let mut tick = tokio::time::interval(period);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -574,15 +823,9 @@ async fn haptic_loop(
         let sensor = state.lock().unwrap().sensor();
         let Some(sensor) = sensor else {
             telemetry_phase = telemetry_phase.wrapping_add(1);
-            let _ = request_realtime_sample(
-                &bus,
-                &send_lock,
-                &state,
-                t0,
-                target_id,
-                telemetry_phase,
-            )
-            .await;
+            let _ =
+                request_realtime_sample(&bus, &send_lock, &state, t0, target_id, telemetry_phase)
+                    .await;
             continue;
         };
         let feedback = sensor.feedback.clone();
@@ -703,15 +946,8 @@ async fn haptic_loop(
             log::warn!("RollerCAN SmartKnob: current send failed: {e}");
         }
         telemetry_phase = telemetry_phase.wrapping_add(1);
-        if let Err(e) = request_realtime_sample(
-            &bus,
-            &send_lock,
-            &state,
-            t0,
-            target_id,
-            telemetry_phase,
-        )
-        .await
+        if let Err(e) =
+            request_realtime_sample(&bus, &send_lock, &state, t0, target_id, telemetry_phase).await
         {
             log::warn!("RollerCAN SmartKnob: realtime read failed: {e}");
         }
@@ -1188,4 +1424,35 @@ fn hex(data: &[u8]) -> String {
         s.push_str(&format!("{b:02X}"));
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roller_presets_are_separate_from_native_smartknob_presets() {
+        let roller = preset_configs();
+        let native = crate::smartknob::preset_configs();
+
+        assert_eq!(roller.len(), native.len());
+        assert!(roller[0].is_custom);
+        assert!(roller[0].strength_scale < native[0].strength_scale);
+        assert!(roller[0].friction_compensation < native[0].friction_compensation);
+    }
+
+    #[test]
+    fn tuning_uses_rollercan_config_values_without_extra_scaling() {
+        let cfg = preset_configs()
+            .into_iter()
+            .find(|cfg| cfg.text == "On/off\nStrong detent")
+            .expect("rollercan on/off preset");
+        let tuning = Tuning::from_config(&cfg);
+
+        assert_eq!(tuning.p_gain, cfg.p_gain);
+        assert_eq!(tuning.d_gain, cfg.d_gain);
+        assert_eq!(tuning.strength_scale, cfg.strength_scale);
+        assert_eq!(tuning.friction_compensation, cfg.friction_compensation);
+        assert_eq!(tuning.click_torque_nm, cfg.click_torque_nm);
+    }
 }
