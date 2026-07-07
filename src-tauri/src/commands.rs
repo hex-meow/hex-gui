@@ -16,7 +16,7 @@ use crate::diag::{EventsSnapshot, LogLine};
 use crate::dto::{LiveStateDto, MotorInfoDto, MotorModeDto, MotorTargetDto};
 use crate::state::AppState;
 use crate::zenoh_base::{BaseInfo, ZenohBaseState, ZenohConn};
-use crate::zenoh_arm::{ArmInfo, ZenohArmConn, ZenohArmState};
+use crate::zenoh_arm::{ArmInfo, ArmUrdf, ZenohArmConn, ZenohArmState};
 
 /// Anything we hand back to the frontend.
 type CmdResult<T> = Result<T, String>;
@@ -925,6 +925,14 @@ pub async fn arm_goto(state: State<'_, AppState>, q: Vec<f32>, kp: f32, kd: f32)
 #[tauri::command]
 pub async fn arm_get_state(state: State<'_, AppState>) -> CmdResult<ZenohArmState> {
     Ok(state.zenoh_arm.lock().await.as_ref().map(|c| c.state()).unwrap_or_default())
+}
+
+/// 取某臂 URDF 供前端 3D 渲染(选中即拉,与取控解耦)。优先机器人级整机(arm+EE),退到臂-only;无则回 None。
+#[tauri::command]
+pub async fn arm_get_urdf(state: State<'_, AppState>, prefix: String) -> CmdResult<Option<ArmUrdf>> {
+    let g = state.zenoh_arm.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Arm Zenoh".to_string())?;
+    Ok(c.get_urdf(&prefix).await)
 }
 
 #[tauri::command]

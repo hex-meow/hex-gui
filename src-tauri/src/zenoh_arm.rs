@@ -99,6 +99,15 @@ pub struct ZenohArmState {
     pub fatal: bool,         // RobotStatus.mode==FATAL_ERROR(电机故障/离线锁存,P1-3)→ 需 clear_fault
 }
 
+/// 一次 URDF 拉取的结果(推给前端 3D 渲染)。`assembled` 由 XML 内容判定:机器人级
+/// `<prefix>/urdf` 在 EE 拼装完成前也会回退供臂-only XML,故只按是否含 `ee_mount` fixed joint 判真装配。
+#[derive(Serialize, Clone, Default)]
+pub struct ArmUrdf {
+    pub xml: String,
+    pub assembled: bool,   // 含 EE(整机)→ true;臂-only 或回退 → false
+    pub tip_link: String,  // 工具安装 link 名(EE 拼接处)
+}
+
 struct Ctrl {
     prefix: StdMutex<Option<String>>,
     session_id: AtomicU32,
@@ -340,6 +349,21 @@ impl ZenohArmConn {
 
     pub fn state(&self) -> ZenohArmState {
         self.ctrl.state.lock().unwrap().clone()
+    }
+
+    /// 取某臂的 URDF 供前端 3D 渲染(选中即拉,与取控解耦)。先试机器人级 `<prefix>/urdf`
+    /// (supervisor 预拼的整机 arm+EE);无/空 xml 则退到 device 级 `<prefix>/arm/urdf`(仅臂)。
+    /// `assembled` 按 XML 是否含 `ee_mount` fixed joint 判定(机器人级键在 EE 拼装完成前也回退臂-only)。
+    pub async fn get_urdf(&self, prefix: &str) -> Option<ArmUrdf> {
+        if let Some(u) = query_one::<pb::UrdfResource>(&self.session, &format!("{prefix}/urdf"), vec![]).await {
+            if !u.xml.is_empty() {
+                let assembled = u.xml.contains("<joint name=\"ee_mount\"");
+                return Some(ArmUrdf { xml: u.xml, assembled, tip_link: u.tip_link });
+            }
+        }
+        let u = query_one::<pb::UrdfResource>(&self.session, &format!("{prefix}/arm/urdf"), vec![]).await?;
+        if u.xml.is_empty() { return None; }
+        Some(ArmUrdf { xml: u.xml, assembled: false, tip_link: u.tip_link })
     }
 
     // ───────────────────────── 诊断视图(log / events)─────────────────────────

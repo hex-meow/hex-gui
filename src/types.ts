@@ -247,6 +247,13 @@ export interface ZenohArmState {
   fatal: boolean; // RobotStatus.mode == FATAL_ERROR (latched motor fault/offline)
 }
 
+// mirrors zenoh_arm::ArmUrdf —— 供 3D 渲染的 URDF(整机 arm+EE 或臂-only)
+export interface ArmUrdf {
+  xml: string;
+  assembled: boolean; // 含 EE(整机)→ true;臂-only 或回退 → false
+  tip_link: string;   // 工具安装 link 名(EE 拼接处)
+}
+
 // ── CAN Analyzer (mirrors analyzer.rs DTOs) ──
 export interface CanTraceFrame {
   seq: number;

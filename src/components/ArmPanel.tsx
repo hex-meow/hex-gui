@@ -30,6 +30,8 @@ export function ArmPanel() {
   const [gy, setGy] = useState(0);
   const [gz, setGz] = useState(-9.81);
   const [busy, setBusy] = useState(false);
+  const [urdfXml, setUrdfXml] = useState<string | null>(null); // 选中臂的 URDF(整机 arm+EE 或臂-only);null=退到捆的 firefly
+  const [assembled, setAssembled] = useState(false); // URDF 含 EE(整机)→ 显示“整机(含EE)”标签
   const [previewQ, setPreviewQ] = useState<number[] | null>(null); // 预设悬浮预览
   const [kp, setKp] = useState(10); // host 侧增益(控制器忠实执行);有重力前馈后 kp=10 已够,更柔和
   const [kd, setKd] = useState(1.5);
@@ -51,6 +53,17 @@ export function ArmPanel() {
   useEffect(() => () => { api.armDisconnect().catch(() => {}); }, []);
   // 选中(手动或自动)某臂即诊断聚焦:订阅其 events/logs + 播种历史(与取控解耦,只读也生效)。
   useEffect(() => { if (connected && selected) api.armSetDiagFocus(selected).catch(() => {}); }, [connected, selected]);
+  // 选中即拉一次 URDF 供 3D 渲染(整机 arm+EE 或臂-only);取回 null/空则退到捆的 firefly。
+  useEffect(() => {
+    if (!connected || !selected) { setUrdfXml(null); setAssembled(false); return; }
+    let alive = true;
+    api.armGetUrdf(selected).then((u) => {
+      if (!alive) return;
+      setUrdfXml(u?.xml || null);
+      setAssembled(!!u?.assembled);
+    }).catch(() => { if (alive) { setUrdfXml(null); setAssembled(false); } });
+    return () => { alive = false; };
+  }, [connected, selected]);
 
   const connect = useCallback(async () => {
     setBusy(true);
@@ -144,7 +157,7 @@ export function ArmPanel() {
       <Card size="small">
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
           <div style={{ flex: "1 1 480px", minWidth: 380 }}>
-            <ArmViewer q={st?.q ?? []} gravity={grav} jointNames={st?.joint_names ?? []} previewQ={previewQ} armQuat={armQuat} />
+            <ArmViewer q={st?.q ?? []} gravity={grav} jointNames={st?.joint_names ?? []} previewQ={previewQ} armQuat={armQuat} urdfXml={urdfXml} />
           </div>
           <div style={{ flex: "1 1 320px", minWidth: 300 }}>
             <Space direction="vertical" size={12} style={{ width: "100%" }}>
@@ -152,6 +165,7 @@ export function ArmPanel() {
                 {controlling ? <Tag color="green">控制中</Tag> : st && st.holder !== 0 ? <Tag color="orange">被占 #{st.holder}</Tag> : <Tag>未取控</Tag>}
                 <Tag color="blue">{st?.mode ?? "—"}</Tag>
                 {st?.has_ee ? <Tag color="purple">EE: {st.ee_model || "?"}</Tag> : <Tag>无 EE</Tag>}
+                {assembled && <Tag color="green">整机(含EE)</Tag>}
               </Space>
 
               <Typography.Text strong>模式</Typography.Text>

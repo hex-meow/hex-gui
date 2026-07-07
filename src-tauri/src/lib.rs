@@ -104,6 +104,7 @@ pub fn run() {
             commands::arm_set_gravity,
             commands::arm_goto,
             commands::arm_get_state,
+            commands::arm_get_urdf,
             commands::arm_release,
             commands::arm_set_diag_focus,
             commands::arm_refresh_diag,
