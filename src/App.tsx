@@ -221,7 +221,6 @@ export default function App() {
 
 function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
   const { t, lang, toggle } = useI18n();
-  const [tutorialOpen, setTutorialOpen] = useState(false);
   return (
     <div className="tool-picker">
       <div className="tool-picker__actions">
@@ -302,17 +301,8 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
             accent="cyan"
             onClick={() => onPick("canalyzer")}
           />
-          <ToolCard
-            title={t("toolTutorial")}
-            desc={t("toolTutorialDesc")}
-            tag={t("tagQuickStart")}
-            accent="slate"
-            onClick={() => setTutorialOpen(true)}
-          />
         </ToolSection>
       </div>
-
-      <TutorialModal open={tutorialOpen} onClose={() => setTutorialOpen(false)} />
     </div>
   );
 }
