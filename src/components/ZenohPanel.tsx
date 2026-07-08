@@ -4,7 +4,7 @@ import { api, errMsg } from "../api";
 import { useI18n } from "../i18n";
 import type { BaseInfo, ZenohBaseState } from "../types";
 import { BasePoseViewer } from "./BasePoseViewer";
-import { DiagnosticsCard, FaultAlert } from "./DiagnosticsPanel";
+import { DiagnosticsCard, FaultAlert, RobotModeTag } from "./DiagnosticsPanel";
 import "./ZenohPanel.css";
 
 const POLL_MS = 10;
@@ -162,6 +162,8 @@ export function ZenohPanel() {
   });
 
   const controlling = !!st?.controlling;
+  // 观察对象的身份取自发现列表 + 选中项(权威):只读观察别台时,不复用取控作用域的 st.model/st.prefix。
+  const selInfo = bases.find((b) => b.prefix === selected);
   const driveReady = controlling && armed;
   const statusTag = controlling
     ? <Tag color="green">{t("zControlling")}</Tag>
@@ -260,6 +262,7 @@ export function ZenohPanel() {
           <span className="zenoh-dock-status">
             {connected ? <Tag color="blue">{t("zConnected")}</Tag> : <Tag>{t("zDisconnected")}</Tag>}
             {statusTag}
+            <RobotModeTag mode={st?.robot_mode} overtaken={st?.overtaken_reason} />
           </span>
         </div>
       </section>
@@ -344,7 +347,7 @@ export function ZenohPanel() {
           <div className="zenoh-card__heading">
             <div>
               <h2>{t("zTelemetry")}</h2>
-              <Typography.Text type="secondary">{st?.model || t("toolBaseZenoh")}</Typography.Text>
+              <Typography.Text type="secondary">{selInfo?.model || st?.model || t("toolBaseZenoh")}</Typography.Text>
             </div>
           </div>
           <MetricGroup

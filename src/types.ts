@@ -207,6 +207,10 @@ export interface ZenohBaseState {
   controlling: boolean;
   holder: number;
   running: boolean;
+  /** Controller RobotMode name (read-only observe): STANDBY/RUNNING/OVERTAKEN/FATAL_ERROR/"" */
+  robot_mode: string;
+  /** When OVERTAKEN, the takeover reason (human_readable or OvertakenMode name); "" otherwise. */
+  overtaken_reason: string;
   model: string;
   prefix: string;
   pose_x: number;
@@ -230,7 +234,11 @@ export interface ArmInfo {
 export interface ZenohArmState {
   controlling: boolean;
   holder: number;
-  mode: string;           // our last-set OperatingMode name
+  mode: string;           // our last-set OperatingMode name (only meaningful while controlling)
+  /** Controller RobotMode name (read-only observe): STANDBY/RUNNING/OVERTAKEN/FATAL_ERROR/"" */
+  robot_mode: string;
+  /** When OVERTAKEN, the takeover reason (human_readable or OvertakenMode name); "" otherwise. */
+  overtaken_reason: string;
   model: string;
   prefix: string;
   dof: number;

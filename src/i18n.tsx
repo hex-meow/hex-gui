@@ -474,6 +474,13 @@ const STRINGS = {
   diagClearFault: { en: "Clear fault", zh: "清除故障" },
   diagClearNeedControl: { en: "Take control first to clear the fault", zh: "需先取得控制权才能清除故障" },
   diagFaultCleared: { en: "Fault cleared", zh: "故障已清除" },
+
+  // Controller RobotMode (read-only observe; base + arm). Distinct from our own control/holder status.
+  rmTip: { en: "Robot mode reported by the controller (observed, read-only)", zh: "控制器上报的机器运行模式(只读观察)" },
+  rmStandby: { en: "Standby", zh: "待机" },
+  rmRunning: { en: "Running", zh: "运行中" },
+  rmOvertaken: { en: "Overtaken", zh: "被接管" },
+  rmFatal: { en: "Fatal", zh: "严重故障" },
 } satisfies Record<string, Entry>;
 
 export type I18nKey = keyof typeof STRINGS;

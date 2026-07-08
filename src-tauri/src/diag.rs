@@ -137,6 +137,40 @@ pub fn push_capped<T>(ring: &mut VecDeque<T>, item: T, cap: usize) {
     ring.push_back(item);
 }
 
+/// 控制器 RobotMode(proto 枚举)i32 → 稳定短名。base/arm 只读观察统一展示(设计 §3:
+/// STANDBY 无 holder / RUNNING API 在控 / OVERTAKEN 被遥控器/安全接管 / FATAL_ERROR 需显式恢复)。
+/// 用原始 i32 而非各 app 的 `pb::RobotMode`——两 app 各自 include! 生成的是**不同** Rust 类型,
+/// 而枚举整数值同源,故以 i32 收口到一处映射,避免重复。
+pub fn robot_mode_name(mode: i32) -> &'static str {
+    match mode {
+        1 => "STANDBY",
+        2 => "RUNNING",
+        3 => "OVERTAKEN",
+        4 => "FATAL_ERROR",
+        _ => "UNSPECIFIED",
+    }
+}
+
+/// 接管原因 OvertakenMode(proto)i32 → 稳定短名(仅 OVERTAKEN 时有意义)。
+pub fn overtaken_mode_name(mode: i32) -> &'static str {
+    match mode {
+        1 => "JOYSTICK",
+        2 => "COLLISION",
+        3 => "CALIBRATING",
+        4 => "MOTOR_ERROR",
+        5 => "BATTERY_ERROR",
+        _ => "UNSPECIFIED",
+    }
+}
+
+/// OVERTAKEN 时给前端的原因文本:优先 `human_readable`,否则退到 OvertakenMode 短名。
+pub fn overtaken_text(mode: i32, human: Option<&str>) -> String {
+    match human {
+        Some(h) if !h.is_empty() => h.to_string(),
+        _ => overtaken_mode_name(mode).to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +205,24 @@ mod tests {
         assert_eq!(l.ts_ns, 0);
         assert_eq!(l.level, "");
         assert_eq!(l.msg, "not-a-timestamp line", "解析失败保留原始整行");
+    }
+
+    #[test]
+    fn robot_mode_name_maps_known_and_unknown() {
+        assert_eq!(robot_mode_name(1), "STANDBY");
+        assert_eq!(robot_mode_name(2), "RUNNING");
+        assert_eq!(robot_mode_name(3), "OVERTAKEN");
+        assert_eq!(robot_mode_name(4), "FATAL_ERROR");
+        assert_eq!(robot_mode_name(0), "UNSPECIFIED");
+        assert_eq!(robot_mode_name(99), "UNSPECIFIED", "未知值退化为 UNSPECIFIED,不 panic");
+    }
+
+    #[test]
+    fn overtaken_text_prefers_human_then_mode_name() {
+        assert_eq!(overtaken_text(1, Some("摇杆接管")), "摇杆接管", "有 human_readable 用之");
+        assert_eq!(overtaken_text(1, Some("")), "JOYSTICK", "空 human_readable 退到短名");
+        assert_eq!(overtaken_text(2, None), "COLLISION");
+        assert_eq!(overtaken_text(0, None), "UNSPECIFIED");
     }
 
     #[test]

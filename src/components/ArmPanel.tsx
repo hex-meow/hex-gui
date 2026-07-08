@@ -5,7 +5,7 @@ import { App as AntdApp, Button, Card, Input, InputNumber, Select, Space, Table,
 import { api, errMsg } from "../api";
 import type { ArmInfo, ZenohArmState } from "../types";
 import { ArmViewer } from "./ArmViewer";
-import { DiagnosticsCard, FaultAlert } from "./DiagnosticsPanel";
+import { DiagnosticsCard, FaultAlert, RobotModeTag } from "./DiagnosticsPanel";
 import { useI18n } from "../i18n";
 
 const POLL_MS = 33; // ~30fps for the twin
@@ -162,8 +162,11 @@ export function ArmPanel() {
           <div style={{ flex: "1 1 320px", minWidth: 300 }}>
             <Space direction="vertical" size={12} style={{ width: "100%" }}>
               <Space wrap>
-                {controlling ? <Tag color="green">控制中</Tag> : st && st.holder !== 0 ? <Tag color="orange">被占 #{st.holder}</Tag> : <Tag>未取控</Tag>}
-                <Tag color="blue">{st?.mode ?? "—"}</Tag>
+                {controlling ? <Tag color="green">控制中</Tag> : st && st.holder !== 0 ? <Tag color="orange">被占 #{st.holder}</Tag> : <Tag>只读观察</Tag>}
+                {/* 控制器上报的 RobotMode(只读观察,base/arm 统一):STANDBY/RUNNING/OVERTAKEN/FATAL */}
+                <RobotModeTag mode={st?.robot_mode} overtaken={st?.overtaken_reason} />
+                {/* mode 是我方所设 OperatingMode(控制器不回传),只读观察别台时无意义 → 仅取控时显示 */}
+                {controlling && <Tag color="blue">{st?.mode || "—"}</Tag>}
                 {st?.has_ee ? <Tag color="purple">EE: {st.ee_model || "?"}</Tag> : <Tag>无 EE</Tag>}
                 {assembled && <Tag color="green">整机(含EE)</Tag>}
               </Space>

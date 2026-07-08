@@ -82,7 +82,9 @@ pub struct ArmInfo {
 pub struct ZenohArmState {
     pub controlling: bool,
     pub holder: u32,
-    pub mode: String,        // 我方所设 OperatingMode 名(控制器不回传 OperatingMode)
+    pub mode: String,        // 我方所设 OperatingMode 名(控制器不回传 OperatingMode)——仅取控时有意义
+    pub robot_mode: String,  // 控制器 RobotMode 名(只读观察):STANDBY/RUNNING/OVERTAKEN/FATAL_ERROR
+    pub overtaken_reason: String, // OVERTAKEN 时的接管原因(human_readable 或 OvertakenMode 名),否则空
     pub model: String,
     pub prefix: String,
     pub dof: u32,
@@ -115,8 +117,9 @@ struct Ctrl {
     gains: StdMutex<(f32, f32)>,        // (kp, kd) —— host 侧定增益(控制器忠实执行)
     dynamics: StdMutex<Option<Arc<ArmDynamics>>>, // 取控时从 arm/urdf 建;host 端重力前馈 tau_ff=G(q) 用
     state: StdMutex<ZenohArmState>,
-    // 诊断视图(log/events 查看)——与取控解耦:选中即聚焦,只读也能看。
-    diag_prefix: StdMutex<Option<String>>,   // 当前聚焦的机器 prefix(过滤 events/logs)
+    // 观察视图(joint_state/status/log/events)——与取控解耦:选中即聚焦,只读也能看(设计:读永远开放,
+    // 任意多客户订阅状态不需要会话,独占只针对控制)。取控隐含观察(见 acquire)。
+    view_prefix: StdMutex<Option<String>>,   // 当前观察的机器 prefix(过滤 joint_state/status/events/logs)
     logs: StdMutex<VecDeque<diag::LogLine>>,
     events: StdMutex<diag::EventBuf>,        // 环形缓冲 + 单调 seq + 通知 baseline(同锁原子)
 }
@@ -144,7 +147,7 @@ impl ZenohArmConn {
             gains: StdMutex::new((10.0, 1.5)), // 有重力前馈后 kp=10 已够,更柔和
             dynamics: StdMutex::new(None),
             state: StdMutex::new(s0),
-            diag_prefix: StdMutex::new(None),
+            view_prefix: StdMutex::new(None),
             logs: StdMutex::new(VecDeque::new()),
             events: StdMutex::new(diag::EventBuf::default()),
         });
@@ -187,12 +190,13 @@ impl ZenohArmConn {
                 }
             });
         }
-        // joint_state 订阅(通配,按 prefix 精确匹配 —— 避免 arm0 前缀吃到 arm00 的帧)。
+        // joint_state 订阅(通配,按当前**观察**的 prefix 精确匹配 —— 避免 arm0 前缀吃到 arm00 的帧)。
+        // 只读:据 view_prefix 过滤,不需要取控(设计:读永远开放)。
         if let Ok(sub) = session.declare_subscriber("hexmeow/**/arm/joint_state").await {
             let c = ctrl.clone();
             tokio::spawn(async move {
                 while let Ok(sample) = sub.recv_async().await {
-                    let Some(p) = c.prefix.lock().unwrap().clone() else { continue };
+                    let Some(p) = c.view_prefix.lock().unwrap().clone() else { continue };
                     if sample.key_expr().as_str() != format!("{p}/arm/joint_state") { continue; }
                     if let Ok(js) = pb::JointState::decode(&*sample.payload().to_bytes()) {
                         let mut st = c.state.lock().unwrap();
@@ -201,43 +205,47 @@ impl ZenohArmConn {
                 }
             });
         }
-        // status 订阅 → holder(按取控 prefix)+ FATAL_ERROR 灯(按诊断聚焦 prefix,只读/仅选中也可见)。
+        // status 订阅:FATAL 灯 + holder 据"当前观察的机器"(view_prefix)判定 —— 取控/只读/仅选中都能看到
+        // 故障灯与谁在控,不需要会话(设计:读永远开放)。失控检测另按我们**取控**的 prefix。
         if let Ok(sub) = session.declare_subscriber("hexmeow/**/status").await {
             let c = ctrl.clone();
             tokio::spawn(async move {
                 while let Ok(sample) = sub.recv_async().await {
                     let Ok(s) = pb::RobotStatus::decode(&*sample.payload().to_bytes()) else { continue };
                     let key = sample.key_expr().as_str();
-                    // P1-3:FATAL_ERROR 锁存据当前聚焦机器判定,取控/只读/仅选中都能看到故障灯并去 clear。
-                    let dp = c.diag_prefix.lock().unwrap().clone();
-                    if let Some(dp) = dp {
-                        if key == format!("{dp}/status") {
-                            c.state.lock().unwrap().fatal = s.mode == pb::RobotMode::FatalError as i32;
+                    // 只读观测:FATAL 灯 + holder 按当前观察的机器刷新(holder != 0 且非我方 → 前端"被占 #N")。
+                    if let Some(vp) = c.view_prefix.lock().unwrap().clone() {
+                        if key == format!("{vp}/status") {
+                            let mut st = c.state.lock().unwrap();
+                            st.fatal = s.mode == pb::RobotMode::FatalError as i32;
+                            st.holder = s.session_holder;
+                            st.robot_mode = diag::robot_mode_name(s.mode).into();
+                            st.overtaken_reason = s.overtaken_reason.as_ref()
+                                .map(|r| diag::overtaken_text(r.mode, r.human_readable.as_deref()))
+                                .unwrap_or_default();
                         }
                     }
-                    // holder / 失控判定:仍按我们取控的 prefix。
+                    // 失控判定:仅针对我们取控的 prefix —— 自以为在控但 holder 已不是我们(看门狗超时/被
+                    // 接管)→ 放弃控制权(读流不受影响,仍可继续只读观察)。
                     let Some(p) = c.prefix.lock().unwrap().clone() else { continue };
                     if key != format!("{p}/status") { continue; }
                     let our_sid = c.session_id.load(Ordering::Relaxed);
-                    // 我们自以为在控,但 holder 已不是我们(看门狗超时/被接管)→ 失去控制权。
                     if our_sid != 0 && s.session_holder != our_sid {
                         c.session_id.store(0, Ordering::Relaxed);
                         *c.target.lock().unwrap() = None;
                         let mut st = c.state.lock().unwrap();
                         st.controlling = false; st.holder = s.session_holder; st.mode = "DISABLED".into();
                         log::warn!("Arm: 失去控制权(当前 holder={})", s.session_holder);
-                    } else {
-                        c.state.lock().unwrap().holder = s.session_holder;
                     }
                 }
             });
         }
-        // 日志订阅(尽力层,P1-7):hexmeow/<cid>/*/log 全进程 tee;按 diag_prefix 的 cid 过滤后进环形缓冲。
+        // 日志订阅(尽力层,P1-7):hexmeow/<cid>/*/log 全进程 tee;按 view_prefix 的 cid 过滤后进环形缓冲。
         if let Ok(sub) = session.declare_subscriber("hexmeow/**/log").await {
             let c = ctrl.clone();
             tokio::spawn(async move {
                 while let Ok(sample) = sub.recv_async().await {
-                    let Some(dp) = c.diag_prefix.lock().unwrap().clone() else { continue };
+                    let Some(dp) = c.view_prefix.lock().unwrap().clone() else { continue };
                     let Some(cid) = diag::cid_prefix(&dp) else { continue };
                     let key = sample.key_expr().as_str();
                     if !key.starts_with(&format!("{cid}/")) || !key.ends_with("/log") { continue; }
@@ -248,12 +256,12 @@ impl ZenohArmConn {
                 }
             });
         }
-        // 事件订阅(可靠层,P1-3):<prefix>/events 逐条;按 diag_prefix 精确匹配后进环形缓冲(带单调 seq)。
+        // 事件订阅(可靠层,P1-3):<prefix>/events 逐条;按 view_prefix 精确匹配后进环形缓冲(带单调 seq)。
         if let Ok(sub) = session.declare_subscriber("hexmeow/**/events").await {
             let c = ctrl.clone();
             tokio::spawn(async move {
                 while let Ok(sample) = sub.recv_async().await {
-                    let Some(dp) = c.diag_prefix.lock().unwrap().clone() else { continue };
+                    let Some(dp) = c.view_prefix.lock().unwrap().clone() else { continue };
                     if sample.key_expr().as_str() != format!("{dp}/events") { continue; }
                     if let Ok(ev) = pb::Event::decode(&*sample.payload().to_bytes()) {
                         c.events.lock().unwrap().push_live(to_event(ev));
@@ -296,6 +304,8 @@ impl ZenohArmConn {
         }
         self.ctrl.session_id.store(resp.session_id, Ordering::Relaxed);
         *self.ctrl.prefix.lock().unwrap() = Some(prefix.to_string());
+        // 取控隐含观察:确保 joint_state/status 读流也跟到这台(即使前端漏调 set_diag_focus)。
+        *self.ctrl.view_prefix.lock().unwrap() = Some(prefix.to_string());
         // 取 arm/description 填关节名/限位
         let desc = query_one::<pb::ArmDescription>(&self.session, &format!("{prefix}/arm/description"), vec![]).await;
         // 取 arm/urdf 建重力前馈模型(host 端 tau_ff=G(q);失败则关闭前馈,退化为纯 kp/kd)
@@ -368,13 +378,30 @@ impl ZenohArmConn {
 
     // ───────────────────────── 诊断视图(log / events)─────────────────────────
 
-    /// 诊断聚焦:选中某机器即订阅其 events/logs(与取控解耦,只读/仅选中也生效)。清空旧缓冲并从
-    /// `.../events/recent` + `.../log/recent` 播种一次历史(事后连上也查得到,如 0x8130)。
+    /// 观察聚焦:选中某机器即观察它 —— joint_state/status(关节/holder/故障灯)实时刷新 + 拉 arm/description
+    /// 填关节名/限位/DOF + 订阅其 events/logs(全部与取控解耦,只读/仅选中也生效;设计:读永远开放)。
+    /// 清空旧缓冲、复位随机器变的观测量,再从 `.../events/recent` + `.../log/recent` 播种一次历史(事后连上也查得到,如 0x8130)。
     pub async fn set_diag_focus(&self, prefix: &str) {
-        *self.ctrl.diag_prefix.lock().unwrap() = Some(prefix.to_string());
-        self.ctrl.state.lock().unwrap().fatal = false; // 由 status 订阅按新 prefix 重新点亮
+        *self.ctrl.view_prefix.lock().unwrap() = Some(prefix.to_string());
+        // 复位随机器变的只读观测量,等新机器的 joint_state / status / description 覆盖(不残留上一台的关节/限位/holder)。
+        {
+            let mut st = self.ctrl.state.lock().unwrap();
+            st.fatal = false;   // 由 status 订阅按新 prefix 重新点亮
+            st.holder = 0;      // 由 status 订阅刷新
+            st.robot_mode.clear(); st.overtaken_reason.clear();
+            st.q.clear(); st.dq.clear(); st.tau.clear(); st.temp.clear();
+            st.dof = 0; st.joint_names.clear(); st.pos_min.clear(); st.pos_max.clear();
+            // mode 是"我方所设 OperatingMode"(控制器不回传),属**取控作用域** —— 只读时清空,
+            // 不把上一台受控机器的模式冒充成被观察机器的真实模式。取控时 acquire/set_mode 重填。
+            st.mode.clear();
+        }
         self.ctrl.events.lock().unwrap().clear();
         self.ctrl.logs.lock().unwrap().clear();
+        // 拉 arm/description 填关节名/限位/DOF(只读也要:供关节表标签 + 限位 + 3D 标注)。取控时 acquire 也会填。
+        if let Some(d) = query_one::<pb::ArmDescription>(&self.session, &format!("{prefix}/arm/description"), vec![]).await {
+            let mut st = self.ctrl.state.lock().unwrap();
+            st.dof = d.dof; st.joint_names = d.joint_names; st.pos_min = d.pos_min; st.pos_max = d.pos_max;
+        }
         self.refresh_diag().await;
     }
 
@@ -382,7 +409,7 @@ impl ZenohArmConn {
     /// [`EventBuf::reseed`](diag::EventBuf::reseed) 原子重建 + 重置 baseline,使前端不对刚拉回的旧事件
     /// 误弹通知(仅对之后的实时事件弹),且与并发实时 push 无竞态。
     pub async fn refresh_diag(&self) {
-        let Some(prefix) = self.ctrl.diag_prefix.lock().unwrap().clone() else { return };
+        let Some(prefix) = self.ctrl.view_prefix.lock().unwrap().clone() else { return };
         // 事件历史:<prefix>/events/recent → EventLog(单 queryable)。先 await 拿数据,再一把锁内原子重建。
         if let Some(log) = query_one::<pb::EventLog>(&self.session, &format!("{prefix}/events/recent"), vec![]).await {
             let history: Vec<diag::RobotEvent> = log.events.into_iter().map(to_event).collect();
