@@ -136,8 +136,8 @@ export const api = {
   rollercanGetState: () => invoke<RollerCanState>("rollercan_get_state"),
   rollercanPing: (hostId: number, targetId: number) =>
     invoke<void>("rollercan_ping", { hostId, targetId }),
-  rollercanEnable: (hostId: number, targetId: number) =>
-    invoke<void>("rollercan_enable", { hostId, targetId }),
+  rollercanEnable: (configIndex: number, targetId: number) =>
+    invoke<void>("rollercan_enable", { configIndex, targetId }),
   rollercanStopMotor: (hostId: number, targetId: number) =>
     invoke<void>("rollercan_stop_motor", { hostId, targetId }),
   rollercanReleaseStall: (hostId: number, targetId: number) =>

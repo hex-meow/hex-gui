@@ -11,6 +11,7 @@ import {
   Select,
   Space,
   Statistic,
+  Switch,
   Tag,
   Typography,
 } from "antd";
@@ -21,6 +22,11 @@ import "./RollerCanPanel.css";
 
 const POLL_MS = 40;
 const CMD_SET_CONFIG = 0x8001;
+const TELEMETRY = {
+  enable: 0x8002,
+  rateHz: 0x8003,
+  hostId: 0x8004,
+};
 const TUNING = {
   pGain: 0x8101,
   dGain: 0x8102,
@@ -78,6 +84,8 @@ export function RollerCanPanel() {
   const [running, setRunning] = useState(false);
   const [starting, setStarting] = useState(false);
   const [state, setState] = useState<RollerCanKnobState | null>(null);
+  const [telemetryEnabled, setTelemetryEnabled] = useState(true);
+  const [telemetryRateHz, setTelemetryRateHz] = useState(50);
 
   const [strength, setStrength] = useState(0.04);
   const [torqueLimit, setTorqueLimit] = useState(0.45);
@@ -171,13 +179,13 @@ export function RollerCanPanel() {
   const pushTuning = useCallback(
     async (s: number, tl: number, mt: number, fc: number, ct: number, pg: number, dg: number) => {
       await Promise.all([
-        writeScaled(TUNING.pGain, pg),
-        writeScaled(TUNING.dGain, dg),
-        writeScaled(TUNING.strength, s),
-        writeScaled(TUNING.torqueLimit, tl),
+        writeScaled(TUNING.pGain, pg, motorId),
+        writeScaled(TUNING.dGain, dg, motorId),
+        writeScaled(TUNING.strength, s, motorId),
+        writeScaled(TUNING.torqueLimit, tl, motorId),
         api.rollercanWriteParam(0, motorId, TUNING.maxTorque, Math.trunc(mt)),
-        writeScaled(TUNING.friction, fc),
-        writeScaled(TUNING.click, ct),
+        writeScaled(TUNING.friction, fc, motorId),
+        writeScaled(TUNING.click, ct, motorId),
       ]);
     },
     [motorId],
@@ -196,10 +204,14 @@ export function RollerCanPanel() {
       const startClick = saved?.clickTorque ?? cfg?.click_torque_nm ?? clickTorque;
       const startTorqueLimit = saved?.torqueLimit ?? torqueLimit;
       const startMaxTorque = saved?.maxTorque ?? maxTorque;
+      await api.rollercanWriteParam(0, motorId, CMD_SET_CONFIG, modeIndex);
       if (modeIndex === 0 && customConfig) await pushCustomConfig(customConfig, motorId);
       await pushTuning(startStrength, startTorqueLimit, startMaxTorque, startFriction, startClick, startPGain, startDGain);
       await api.rollercanEnable(modeIndex, motorId);
       backendStarted = true;
+      await api.rollercanWriteParam(0, motorId, TELEMETRY.hostId, 0);
+      await api.rollercanWriteParam(0, motorId, TELEMETRY.rateHz, telemetryRateHz);
+      await api.rollercanWriteParam(0, motorId, TELEMETRY.enable, telemetryEnabled ? 1 : 0);
       setRunning(true);
       message.success("RollerCAN SmartKnob running");
     } catch (e) {
@@ -210,7 +222,28 @@ export function RollerCanPanel() {
     } finally {
       setStarting(false);
     }
-  }, [modeIndex, configs, pGain, dGain, strength, torqueLimit, maxTorque, frictionComp, clickTorque, motorId, customConfig, pushTuning, message]);
+  }, [modeIndex, configs, pGain, dGain, strength, torqueLimit, maxTorque, frictionComp, clickTorque, motorId, customConfig, pushTuning, telemetryEnabled, telemetryRateHz, message]);
+
+  const changeTelemetryEnabled = useCallback(async (enabled: boolean) => {
+    setTelemetryEnabled(enabled);
+    if (!connected) return;
+    try {
+      await api.rollercanWriteParam(0, motorId, TELEMETRY.enable, enabled ? 1 : 0);
+    } catch (e) {
+      message.error(`Telemetry update failed: ${errMsg(e)}`);
+    }
+  }, [connected, motorId, message]);
+
+  const changeTelemetryRate = useCallback(async (rate: number | null) => {
+    const next = Math.max(1, Math.min(100, rate ?? 50));
+    setTelemetryRateHz(next);
+    if (!connected) return;
+    try {
+      await api.rollercanWriteParam(0, motorId, TELEMETRY.rateHz, next);
+    } catch (e) {
+      message.error(`Telemetry update failed: ${errMsg(e)}`);
+    }
+  }, [connected, motorId, message]);
 
   const stop = useCallback(async () => {
     try {
@@ -345,6 +378,17 @@ export function RollerCanPanel() {
                 </>
               )}
               <Tag color={running ? "green" : "default"}>{running ? t("skRunning") : t("skStopped")}</Tag>
+              <Typography.Text type="secondary">Firmware telemetry</Typography.Text>
+              <Switch checked={telemetryEnabled} onChange={changeTelemetryEnabled} />
+              <InputNumber
+                addonAfter="Hz"
+                min={1}
+                max={100}
+                value={telemetryRateHz}
+                disabled={!telemetryEnabled}
+                onChange={changeTelemetryRate}
+                style={{ width: 120 }}
+              />
               {state?.error && <Tag color="red">{state.error}</Tag>}
             </Space>
           </Card>
@@ -542,8 +586,8 @@ async function rollercanGetState(): Promise<RollerCanKnobState> {
   return await api.rollercanGetState() as unknown as RollerCanKnobState;
 }
 
-async function writeScaled(index: number, value: number) {
-  await api.rollercanWriteParam(0, 0, index, Math.round(value * 1000));
+async function writeScaled(index: number, value: number, motorId: number) {
+  await api.rollercanWriteParam(0, motorId, index, Math.round(value * 1000));
 }
 
 async function pushCustomConfig(cfg: KnobConfig, motorId: number) {

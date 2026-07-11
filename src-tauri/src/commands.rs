@@ -808,14 +808,14 @@ pub async fn rollercan_ping(
 #[tauri::command]
 pub async fn rollercan_enable(
     state: State<'_, AppState>,
-    host_id: u8,
+    config_index: u8,
     target_id: u8,
 ) -> CmdResult<()> {
     let guard = state.rollercan.lock().await;
     let app = guard
         .as_ref()
         .ok_or_else(|| "RollerCAN not connected".to_string())?;
-    app.enable(host_id, target_id).await.map_err(err)
+    app.enable(config_index, target_id).await.map_err(err)
 }
 
 #[tauri::command]

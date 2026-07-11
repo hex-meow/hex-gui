@@ -1,9 +1,12 @@
-//! RollerCAN SmartKnob session.
+//! RollerCAN firmware-owned SmartKnob session.
 //!
 //! Unit RollerCAN is not a HEX/CiA402 motor. The default device speaks a
 //! proprietary CAN 2.0 29-bit extended-frame protocol at 1 Mbps, with default
-//! node id `0xA8`. This module keeps the original `rollercan_*` command surface
-//! but implements the SmartKnob feel directly over RollerCAN current mode.
+//! node id `0xA8`. The STM32 owns the 1 kHz haptic loop; this module sends mode
+//! and tuning parameters and decodes the firmware's unsolicited telemetry.
+//!
+//! The old host-side haptic helpers remain below temporarily as test/reference
+//! code, but no runtime path starts that loop or streams current commands.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,6 +41,9 @@ const OD_POSITION_READBACK: u16 = 0x7031;
 const OD_CURRENT_READBACK: u16 = 0x7032;
 
 const RC_CMD_SET_CONFIG: u16 = 0x8001;
+const RC_TELEMETRY_ENABLE: u16 = 0x8002;
+const RC_TELEMETRY_RATE_HZ: u16 = 0x8003;
+const RC_TELEMETRY_HOST_ID: u16 = 0x8004;
 const RC_TUNING_P_GAIN: u16 = 0x8101;
 const RC_TUNING_D_GAIN: u16 = 0x8102;
 const RC_TUNING_STRENGTH: u16 = 0x8103;
@@ -554,28 +560,50 @@ impl RollerCanSession {
         let index = config_index as usize;
         *self.requested_config.lock().unwrap() = index;
         *self.target_id.lock().unwrap() = Some(target_id);
-        self.write_param_raw(0, target_id, OD_RUN_MODE, CURRENT_MODE, "current mode")
+        if index >= preset_configs().len() {
+            return Err(anyhow!("invalid RollerCAN SmartKnob mode {index}"));
+        }
+        self.write_param_raw(0, target_id, OD_RUN_MODE, 4, "firmware SmartKnob mode")
             .await?;
         self.write_param_raw(0, target_id, OD_CURRENT, 0, "zero current")
+            .await?;
+        self.write_param_raw(
+            0,
+            target_id,
+            RC_CMD_SET_CONFIG,
+            index as i32,
+            "select firmware preset",
+        )
+        .await?;
+        self.write_param_raw(0, target_id, RC_TELEMETRY_HOST_ID, 0, "telemetry host")
+            .await?;
+        self.write_param_raw(0, target_id, RC_TELEMETRY_RATE_HZ, 50, "telemetry rate")
+            .await?;
+        self.write_param_raw(0, target_id, RC_TELEMETRY_ENABLE, 1, "telemetry on")
             .await?;
         self.write_param_raw(0, target_id, OD_ENABLE, 1, "enable")
             .await?;
         self.running.store(true, Ordering::SeqCst);
-        let task = tokio::spawn(haptic_loop(
-            self.bus.clone(),
-            self.state.clone(),
-            self.running.clone(),
-            self.requested_config.clone(),
-            self.tuning.clone(),
-            self.per_mode_tuning.clone(),
-            self.custom_config.clone(),
-            self.custom_config_dirty.clone(),
-            self.send_lock.clone(),
-            self.t0,
-            target_id,
-        ));
-        *self.haptic_task.lock().unwrap() = Some(task);
-        log::info!("RollerCAN SmartKnob started on 0x{target_id:02X}");
+        let config = preset_configs()[index].clone();
+        let tuning = *self.tuning.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        state.knob.running = true;
+        state.knob.config_index = index;
+        state.knob.config = Some(config.clone());
+        state.knob.current_position = config.position;
+        state.knob.min_position = config.min_position;
+        state.knob.max_position = config.max_position;
+        state.knob.num_positions = position_count(&config);
+        state.knob.node_id = target_id;
+        state.knob.strength_scale = tuning.strength_scale;
+        state.knob.torque_limit_nm = tuning.torque_limit_nm;
+        state.knob.max_torque_permille = tuning.max_torque_permille;
+        state.knob.friction_compensation = tuning.friction_compensation;
+        state.knob.click_torque_nm = tuning.click_torque_nm;
+        state.knob.p_gain = tuning.p_gain;
+        state.knob.d_gain = tuning.d_gain;
+        drop(state);
+        log::info!("RollerCAN firmware SmartKnob started on 0x{target_id:02X}");
         Ok(())
     }
 
@@ -656,7 +684,31 @@ impl RollerCanSession {
             RC_CMD_SET_CONFIG => {
                 let idx = value.max(0) as usize;
                 *self.requested_config.lock().unwrap() = idx;
-                Ok(())
+                if let Some(config) = preset_configs().get(idx).cloned() {
+                    let tuning = self
+                        .per_mode_tuning
+                        .lock()
+                        .unwrap()
+                        .get(idx)
+                        .copied()
+                        .unwrap_or_else(|| Tuning::from_config(&config));
+                    *self.tuning.lock().unwrap() = tuning;
+                    let mut state = self.state.lock().unwrap();
+                    state.knob.config_index = idx;
+                    state.knob.config = Some(config.clone());
+                    state.knob.min_position = config.min_position;
+                    state.knob.max_position = config.max_position;
+                    state.knob.num_positions = position_count(&config);
+                    state.knob.p_gain = tuning.p_gain;
+                    state.knob.d_gain = tuning.d_gain;
+                    state.knob.strength_scale = tuning.strength_scale;
+                    state.knob.torque_limit_nm = tuning.torque_limit_nm;
+                    state.knob.max_torque_permille = tuning.max_torque_permille;
+                    state.knob.friction_compensation = tuning.friction_compensation;
+                    state.knob.click_torque_nm = tuning.click_torque_nm;
+                }
+                self.write_param_raw(host_id, target_id, index, value, "select firmware preset")
+                    .await
             }
             RC_TUNING_P_GAIN
             | RC_TUNING_D_GAIN
@@ -682,7 +734,18 @@ impl RollerCanSession {
                 if let Some(slot) = self.per_mode_tuning.lock().unwrap().get_mut(idx) {
                     *slot = t;
                 }
-                Ok(())
+                {
+                    let mut state = self.state.lock().unwrap();
+                    state.knob.p_gain = t.p_gain;
+                    state.knob.d_gain = t.d_gain;
+                    state.knob.strength_scale = t.strength_scale;
+                    state.knob.torque_limit_nm = t.torque_limit_nm;
+                    state.knob.max_torque_permille = t.max_torque_permille;
+                    state.knob.friction_compensation = t.friction_compensation;
+                    state.knob.click_torque_nm = t.click_torque_nm;
+                }
+                self.write_param_raw(host_id, target_id, index, value, "firmware tuning")
+                    .await
             }
             RC_CUSTOM_POSITION
             | RC_CUSTOM_MIN_POSITION
@@ -720,7 +783,14 @@ impl RollerCanSession {
                 }
                 *self.custom_config.lock().unwrap() = sanitize_custom_config(cfg);
                 self.custom_config_dirty.store(true, Ordering::SeqCst);
-                Ok(())
+                {
+                    let mut state = self.state.lock().unwrap();
+                    if state.knob.config_index == 0 {
+                        state.knob.config = Some(self.custom_config.lock().unwrap().clone());
+                    }
+                }
+                self.write_param_raw(host_id, target_id, index, value, "firmware custom config")
+                    .await
             }
             _ => {
                 self.write_param_raw(host_id, target_id, index, value, "write param")
@@ -1101,6 +1171,14 @@ async fn drain_loop(mut rx: Box<dyn CanRx>, state: Arc<StdMutex<RollerCanState>>
                         update_realtime_param(&mut st, data);
                         st.push_event(t_ms, "rx", raw, data, "param".to_string());
                     }
+                    0x17 if data.len() >= 8 => {
+                        update_firmware_state(&mut st, data, raw);
+                        st.push_event(t_ms, "rx", raw, data, "SmartKnob state push".to_string());
+                    }
+                    0x18 if data.len() >= 8 => {
+                        update_firmware_motion(&mut st, data);
+                        st.push_event(t_ms, "rx", raw, data, "SmartKnob motion push".to_string());
+                    }
                     0x00 => st.push_event(t_ms, "rx", raw, data, "id response".to_string()),
                     _ => st.push_event(t_ms, "rx", raw, data, format!("cmd 0x{cmd:02X}")),
                 }
@@ -1112,6 +1190,40 @@ async fn drain_loop(mut rx: Box<dyn CanRx>, state: Arc<StdMutex<RollerCanState>>
             Err(e) => log::warn!("RollerCAN rx: {e}"),
         }
     }
+}
+
+fn update_firmware_state(state: &mut RollerCanState, data: &[u8], raw_id: u32) {
+    let mode = data[0] as usize;
+    let flags = data[1];
+    let position = i32::from_le_bytes([data[2], data[3], data[4], data[5]]);
+    let sub_position = i16::from_le_bytes([data[6], data[7]]) as f64 / 10_000.0;
+    if mode != 0 || state.knob.config.is_none() {
+        state.knob.config = preset_configs().get(mode).cloned();
+    }
+    if let Some(config) = state.knob.config.as_ref() {
+        state.knob.min_position = config.min_position;
+        state.knob.max_position = config.max_position;
+        state.knob.num_positions = position_count(config);
+    }
+    state.knob.running = (flags & (1 << 1)) != 0;
+    state.knob.enabled = (flags & (1 << 1)) != 0;
+    state.knob.at_endstop = (flags & (1 << 2)) != 0;
+    state.knob.online = true;
+    state.knob.config_index = mode;
+    state.knob.current_position = position;
+    state.knob.sub_position_unit = sub_position;
+    state.knob.node_id = ((raw_id >> 8) & 0xff) as u8;
+    state.knob.error = ((flags & (1 << 6)) != 0).then(|| "firmware fault".to_string());
+}
+
+fn update_firmware_motion(state: &mut RollerCanState, data: &[u8]) {
+    let angle_cdeg = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+    let commanded_ma = i16::from_le_bytes([data[4], data[5]]);
+    let measured_ma = i16::from_le_bytes([data[6], data[7]]);
+    state.knob.shaft_angle_rad = (angle_cdeg as f64 / 100.0).to_radians();
+    state.knob.applied_torque_nm = commanded_ma as f64 / 1000.0;
+    state.knob.measured_torque_nm = Some(measured_ma as f32 / 1000.0);
+    state.knob.online = true;
 }
 
 struct AngleTracker {
