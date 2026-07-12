@@ -105,7 +105,7 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }
 
     const loader = new URDFLoader();
     // package:// 解析:firefly(捆的)+ gp80 夹爪(整机 URDF 里 EE 网格用 hex_gp80_description)。
-    loader.packages = { xpkg_urdf_firefly_y6: "/urdf", hex_gp80_description: "/urdf/gp80" };
+    loader.packages = { xpkg_urdf_firefly_y6: "/urdf", hex_gp80_description: "/urdf/gp80", hex_gr80_description: "/urdf/gr80" };
     // ⚠️ 真实签名是 (path, manager, material, onComplete) —— 4 个参数(.d.ts 漏了 material)。
     (loader as any).loadMeshCb = (
       url: string,
