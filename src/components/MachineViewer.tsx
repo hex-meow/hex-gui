@@ -33,9 +33,9 @@ type Slot = {
   placeholder: THREE.Mesh | null;
   loading: boolean;
   lastFetch: number;                // 上次 URDF 拉取时刻(ms;臂未拼装时周期重拉)
-  highlighted: boolean;
+  hlMode: "off" | "full" | "ee";    // 高亮:整机 / 仅 ee_ 子树(被绑 EE 选中时)
   mountedTo: string | null;         // 已挂到的 "parentPrefix/link"(M3 拼接;null=散装在地面)
-  dimmed: boolean;                  // 聚焦时被淡化/隐藏
+  dimMode: "none" | "all" | "body"; // 聚焦淡化:全部 / 仅臂身(ee_ 子树保亮)
   warned: boolean;                  // 挂载失败告警只打一次
 };
 
@@ -86,10 +86,22 @@ export function MachineViewer({ robots, selected, spacing, machines, focusMode, 
       ray.setFromCamera(ndc, camera);
       const hits = ray.intersectObjects(world.children, true);
       for (const h of hits) {
+        // 命中 ee_ 子树(整机臂模型内)→ 选中被绑 EE 本体;否则选中所属 robot
+        let hitEe = false;
         let o: THREE.Object3D | null = h.object;
         while (o) {
+          if (o.name.startsWith("ee_")) hitEe = true;
           const pfx = (o.userData as { prefix?: string }).prefix;
-          if (pfx) { onSelectRef.current?.(pfx); return; }
+          if (pfx) {
+            if (hitEe) {
+              const { robots } = propsRef.current;
+              const host = robots.find((r) => r.prefix === pfx);
+              const ee = host && robots.find((r) => r.kind_name === "ee" && r.cid === host.cid);
+              if (ee) { onSelectRef.current?.(ee.prefix); return; }
+            }
+            onSelectRef.current?.(pfx);
+            return;
+          }
           o = o.parent;
         }
       }
@@ -187,7 +199,7 @@ export function MachineViewer({ robots, selected, spacing, machines, focusMode, 
         const robot = loader.parse(u.xml);
         disposeRobot(slot); // 拼装形态升级(臂-only → 整机):替换旧模型
         slot.robot = robot;
-        slot.highlighted = false; // 新模型重新走高亮着色
+        slot.hlMode = "off"; slot.dimMode = "none"; // 新模型新材质,重走着色
         slot.assembled = u.assembled;
         if (slot.placeholder) { slot.group.remove(slot.placeholder); slot.placeholder = null; }
         slot.group.add(robot);
@@ -195,6 +207,16 @@ export function MachineViewer({ robots, selected, spacing, machines, focusMode, 
         console.warn("URDF parse failed", prefix, e);
       }
     }).catch(() => { slot.loading = false; });
+  }
+
+  /** o 是否在某 URDF 模型的 ee_ 子树里(被绑 EE 的可视化长在宿主臂的整机模型内)。 */
+  function inEeSubtree(o: THREE.Object3D, stopAt: THREE.Object3D): boolean {
+    let cur: THREE.Object3D | null = o;
+    while (cur && cur !== stopAt) {
+      if (cur.name.startsWith("ee_")) return true;
+      cur = cur.parent;
+    }
+    return false;
   }
 
   function applyFrame() {
@@ -227,16 +249,28 @@ export function MachineViewer({ robots, selected, spacing, machines, focusMode, 
         box.position.z = 0.125;
         group.add(box);
         world.add(group);
-        const slot: Slot = { group, robot: null, assembled: false, kind: r.kind_name, placeholder: box, loading: false, lastFetch: 0, highlighted: false, mountedTo: null, dimmed: false, warned: false };
+        const slot: Slot = { group, robot: null, assembled: false, kind: r.kind_name, placeholder: box, loading: false, lastFetch: 0, hlMode: "off", mountedTo: null, dimMode: "none", warned: false };
         group.userData.prefix = r.prefix; // 3D 点击选中:命中网格向上找到 slot 组
         slots.set(r.prefix, slot);
         loadUrdfInto(slot, r.prefix, r.kind_name);
       }
     });
+    // 视觉载体解析:被绑 EE 没有自己的 slot——它的可视化在宿主臂整机模型的 ee_ 子树里。
+    // 聚焦/隐藏/高亮/环绕全部以载体为准(否则选中 ee0 → 找不到 slot → 原点环绕/全场隐藏)。
+    let visualSelected = selected;
+    let eeSubtree = false;
+    if (selected && !slots.has(selected)) {
+      const selRobot = robots.find((r) => r.prefix === selected);
+      if (selRobot?.kind_name === "ee") {
+        const host = robots.find((r) => r.kind_name === "arm" && r.cid === selRobot.cid && slots.get(r.prefix)?.assembled);
+        if (host) { visualSelected = host.prefix; eeSubtree = true; }
+      }
+    }
+
     slots.forEach((s, prefix) => {
       const inScene = seen.has(prefix);
-      // 聚焦-隐藏:选中存在且 focusMode=hide 时,非选中一并隐藏
-      const focusHidden = focusMode === "hide" && !!selected && prefix !== selected;
+      // 聚焦-隐藏:非"视觉载体"隐藏(被绑 EE 选中时宿主臂 = 载体,保住不藏)
+      const focusHidden = focusMode === "hide" && !!visualSelected && prefix !== visualSelected;
       s.group.visible = inScene && !focusHidden; // 被绑 EE / 消失的 robot:隐藏但保留(再现时秒回)
     });
 
@@ -312,51 +346,65 @@ export function MachineViewer({ robots, selected, spacing, machines, focusMode, 
       }
     });
 
-    // 视角跟随:orbit 目标平滑趋向选中 robot(未选中 → 场景原点)
+    // 视角跟随:orbit 目标平滑趋向选中 robot;被绑 EE → 环绕宿主臂模型里的 ee_base_link(爪的真实位置)
     const controls = controlsRef.current;
     if (controls) {
       const tgt = new THREE.Vector3(0, 0, 0.2);
-      if (selected) {
-        const s = slots.get(selected);
-        if (s) { s.group.getWorldPosition(tgt); tgt.z += 0.25; }
+      if (visualSelected) {
+        const s = slots.get(visualSelected);
+        if (s) {
+          const eeLink = eeSubtree ? s.robot?.links?.["ee_base_link"] : null;
+          if (eeLink) { eeLink.getWorldPosition(tgt); }
+          else { s.group.getWorldPosition(tgt); tgt.z += 0.25; }
+        }
       }
       controls.target.lerp(tgt, 0.08); // 平滑跟随,不瞬跳
     }
 
-    // 聚焦-幽灵:选中存在且 focusMode=ghost 时,非选中半透明(材质透明度缓存原值,变更时才遍历)
+    // 聚焦-幽灵:非载体全淡化;被绑 EE 选中时宿主臂 = "仅臂身淡化"(ee_ 子树保亮)
+    const setDim = (mat: THREE.MeshPhongMaterial, dim: boolean) => {
+      if (dim) {
+        if (mat.userData.origOpacity === undefined) {
+          mat.userData.origOpacity = mat.opacity;
+          mat.userData.origTransparent = mat.transparent;
+        }
+        mat.transparent = true; mat.opacity = 0.22; mat.depthWrite = false;
+      } else if (mat.userData.origOpacity !== undefined) {
+        mat.opacity = mat.userData.origOpacity as number;
+        mat.transparent = mat.userData.origTransparent as boolean;
+        mat.depthWrite = true;
+      }
+    };
     slots.forEach((s, prefix) => {
-      const wantDim = focusMode === "ghost" && !!selected && prefix !== selected;
-      if (wantDim === s.dimmed) return;
-      s.dimmed = wantDim;
+      let mode: Slot["dimMode"] = "none";
+      if (focusMode === "ghost" && visualSelected) {
+        if (prefix !== visualSelected) mode = "all";
+        else if (eeSubtree) mode = "body";
+      }
+      if (mode === s.dimMode) return;
+      s.dimMode = mode;
       s.group.traverse((o) => {
         const m = o as THREE.Mesh;
         if (m.isMesh && !Array.isArray(m.material)) {
           const mat = m.material as THREE.MeshPhongMaterial;
-          if (wantDim) {
-            if (mat.userData.origOpacity === undefined) {
-              mat.userData.origOpacity = mat.opacity;
-              mat.userData.origTransparent = mat.transparent;
-            }
-            mat.transparent = true; mat.opacity = 0.22; mat.depthWrite = false;
-          } else if (mat.userData.origOpacity !== undefined) {
-            mat.opacity = mat.userData.origOpacity as number;
-            mat.transparent = mat.userData.origTransparent as boolean;
-            mat.depthWrite = true;
-          }
+          const dim = mode === "all" || (mode === "body" && !inEeSubtree(o, s.group));
+          setDim(mat, dim);
         }
       });
     });
 
-    // 选中高亮(emissive 着色)
+    // 选中高亮(emissive):整机 / 仅 ee_ 子树(被绑 EE 选中时只亮爪)
     slots.forEach((s, prefix) => {
-      const want = prefix === selected;
-      if (want === s.highlighted) return;
-      s.highlighted = want;
+      let mode: Slot["hlMode"] = "off";
+      if (prefix === visualSelected) mode = eeSubtree ? "ee" : "full";
+      if (mode === s.hlMode) return;
+      s.hlMode = mode;
       s.group.traverse((o) => {
         const m = o as THREE.Mesh;
         if (m.isMesh && !Array.isArray(m.material)) {
           const mat = m.material as THREE.MeshPhongMaterial;
-          if (mat.emissive) mat.emissive.set(want ? HIGHLIGHT : 0x000000);
+          const lit = mode === "full" || (mode === "ee" && inEeSubtree(o, s.group));
+          if (mat.emissive) mat.emissive.set(lit ? HIGHLIGHT : 0x000000);
         }
       });
     });
