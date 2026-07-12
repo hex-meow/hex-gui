@@ -41,7 +41,7 @@ fn kind_name(kind: i32) -> &'static str {
         1 => "arm",
         2 => "base",
         3 => "lift",
-        4 => "hand",
+        4 => "ee",
         _ => "unknown",
     }
 }

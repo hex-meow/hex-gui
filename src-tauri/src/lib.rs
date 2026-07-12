@@ -18,6 +18,7 @@ mod state;
 mod zenoh_arm;
 mod zenoh_base;
 mod zenoh_config;
+mod zenoh_ee;
 
 use state::AppState;
 
@@ -97,6 +98,18 @@ pub fn run() {
             commands::zenoh_get_events,
             commands::zenoh_get_logs,
             commands::zenoh_clear_fault,
+            commands::ee_connect,
+            commands::ee_disconnect,
+            commands::ee_discover,
+            commands::ee_discover_all,
+            commands::ee_acquire,
+            commands::ee_set_focus,
+            commands::ee_goto,
+            commands::ee_set_mode,
+            commands::ee_set_estop_behavior,
+            commands::ee_clear_fault,
+            commands::ee_get_state,
+            commands::ee_release,
             commands::arm_connect,
             commands::arm_disconnect,
             commands::arm_discover,

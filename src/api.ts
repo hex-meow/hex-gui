@@ -3,7 +3,7 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfo, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState } from "./types";
+import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfo, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState} from "./types";
 
 export const api = {
   connect: (iface: string, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -162,6 +162,20 @@ export const api = {
   armGetEvents: () => invoke<EventsSnapshot>("arm_get_events"),
   armGetLogs: () => invoke<LogLine[]>("arm_get_logs"),
   armClearFault: () => invoke<void>("arm_clear_fault"),
+
+  // EE(Zenoh)
+  eeConnect: (connect: string) => invoke<void>("ee_connect", { connect }),
+  eeDisconnect: () => invoke<void>("ee_disconnect"),
+  eeDiscover: () => invoke<EeInfo[]>("ee_discover"),
+  eeDiscoverAll: () => invoke<RobotNode[]>("ee_discover_all"),
+  eeAcquire: (prefix: string, model: string) => invoke<void>("ee_acquire", { prefix, model }),
+  eeSetFocus: (prefix: string) => invoke<void>("ee_set_focus", { prefix }),
+  eeGoto: (q: number, kp?: number) => invoke<void>("ee_goto", { q, kp: kp ?? null }),
+  eeSetMode: (mode: number) => invoke<void>("ee_set_mode", { mode }),
+  eeSetEstopBehavior: (behavior: number) => invoke<void>("ee_set_estop_behavior", { behavior }),
+  eeClearFault: () => invoke<void>("ee_clear_fault"),
+  eeGetState: () => invoke<ZenohEeState>("ee_get_state"),
+  eeRelease: () => invoke<void>("ee_release"),
 
   // Controller Config(Zenoh)
   configConnect: (connect: string) => invoke<void>("config_connect", { connect }),

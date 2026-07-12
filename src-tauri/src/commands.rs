@@ -17,6 +17,7 @@ use crate::dto::{LiveStateDto, MotorInfoDto, MotorModeDto, MotorTargetDto};
 use crate::state::AppState;
 use crate::zenoh_base::{BaseInfo, ZenohBaseState, ZenohConn};
 use crate::zenoh_arm::{ArmInfo, ArmUrdf, ZenohArmConn, ZenohArmState};
+use crate::zenoh_ee::{EeInfo, RobotNode, ZenohEeConn, ZenohEeState};
 use crate::zenoh_config::{
     ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfoDto, RestartResult, ZenohConfigConn,
 };
@@ -1049,4 +1050,101 @@ pub async fn config_restart(state: State<'_, AppState>, cid: String, confirm: bo
     let g = state.config.lock().await;
     let c = g.as_ref().ok_or_else(|| "未连接 Config Zenoh".to_string())?;
     c.restart(&cid, confirm, force).await.map_err(err)
+}
+
+
+// ───────────────────────── EE(Zenoh)─────────────────────────
+// 镜像 arm_* 的形状(commands 仅解锁转发,逻辑在 zenoh_ee.rs)。机器人控制台
+// 共用本连接的 ee_discover_all 做设备树全量发现。
+
+#[tauri::command]
+pub async fn ee_connect(state: State<'_, AppState>, connect: String) -> CmdResult<()> {
+    let mut g = state.zenoh_ee.lock().await;
+    if g.is_some() { return Err("EE Zenoh 已连接;先 disconnect".into()); }
+    *g = Some(ZenohEeConn::open(&connect).await.map_err(err)?);
+    log::info!("EE Zenoh 已连接: {connect}");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn ee_disconnect(state: State<'_, AppState>) -> CmdResult<()> {
+    if let Some(c) = state.zenoh_ee.lock().await.take() {
+        c.release().await;
+    }
+    Ok(())
+}
+
+/// 发现网络里的 EE(kind==EE),含 ee/description 细节(限位/OpeningMap)。
+#[tauri::command]
+pub async fn ee_discover(state: State<'_, AppState>) -> CmdResult<Vec<EeInfo>> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    Ok(c.discover().await)
+}
+
+/// 全量发现(机器人控制台设备树):所有 kind 的 robot,按 cid 分组由前端完成。
+#[tauri::command]
+pub async fn ee_discover_all(state: State<'_, AppState>) -> CmdResult<Vec<RobotNode>> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    Ok(c.discover_all().await)
+}
+
+#[tauri::command]
+pub async fn ee_acquire(state: State<'_, AppState>, prefix: String, model: String) -> CmdResult<()> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    c.acquire(&prefix, &model).await.map_err(err)
+}
+
+/// 观察聚焦(只读,与取控解耦):设备树选中即观察。
+#[tauri::command]
+pub async fn ee_set_focus(state: State<'_, AppState>, prefix: String) -> CmdResult<()> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    c.set_focus(&prefix).await;
+    Ok(())
+}
+
+/// 开合到 q(进 ACTIVE + 50Hz 流)。kp 省略 → 控制器默认增益;小 kp = 柔顺/限力抓取。
+#[tauri::command]
+pub async fn ee_goto(state: State<'_, AppState>, q: f32, kp: Option<f32>) -> CmdResult<()> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    c.goto(q, kp).await.map_err(err)
+}
+
+/// 设 OperatingMode(2=ACTIVE,1=DISABLED;EE v1 只支持这两个)。
+#[tauri::command]
+pub async fn ee_set_mode(state: State<'_, AppState>, mode: i32) -> CmdResult<()> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    c.set_mode(mode).await.map_err(err)
+}
+
+/// estop 期间姿态(1=保位 2=松开 3=抗拒张开;11 §10)。
+#[tauri::command]
+pub async fn ee_set_estop_behavior(state: State<'_, AppState>, behavior: i32) -> CmdResult<()> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    c.set_estop_behavior(behavior).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn ee_clear_fault(state: State<'_, AppState>) -> CmdResult<()> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    c.clear_fault().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn ee_get_state(state: State<'_, AppState>) -> CmdResult<ZenohEeState> {
+    Ok(state.zenoh_ee.lock().await.as_ref().map(|c| c.state()).unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn ee_release(state: State<'_, AppState>) -> CmdResult<()> {
+    let g = state.zenoh_ee.lock().await;
+    if let Some(c) = g.as_ref() { c.release().await; }
+    Ok(())
 }

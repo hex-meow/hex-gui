@@ -10,6 +10,7 @@ import { ChangeIdTool } from "./components/ChangeIdTool";
 import { ZeroTool } from "./components/ZeroTool";
 import { Hopea3Panel } from "./components/Hopea3Panel";
 import { SmartKnobPanel } from "./components/SmartKnobPanel";
+import RobotConsole from "./components/RobotConsole";
 import { ZenohPanel } from "./components/ZenohPanel";
 import { ArmPanel } from "./components/ArmPanel";
 import { ControllerConfigPanel } from "./components/ControllerConfigPanel";
@@ -18,7 +19,7 @@ import { TutorialModal, TUTORIALS } from "./components/Tutorial";
 import type { MotorInfo } from "./types";
 import "./App.css";
 
-type Tool = "control" | "changeId" | "zero" | "hopea3" | "smartknob" | "zenoh" | "arm" | "config" | "canalyzer";
+type Tool = "control" | "changeId" | "zero" | "hopea3" | "smartknob" | "zenoh" | "arm" | "config" | "canalyzer" | "console";
 
 const DEVICE_POLL_MS = 700;
 
@@ -123,19 +124,21 @@ export default function App() {
     arm: { title: t("toolArmZenoh"), desc: t("toolArmZenohDesc") },
     config: { title: t("toolConfig"), desc: t("toolConfigDesc") },
     canalyzer: { title: t("toolCanalyzer"), desc: t("toolCanalyzerDesc") },
+    console: { title: t("toolConsole"), desc: t("toolConsoleDesc") },
   } satisfies Record<Tool, { title: string; desc: string }>;
   const { title: toolTitle, desc: toolDesc } = toolMeta[tool];
   const needsHeartbeat = tool === "control" || tool === "hopea3" || tool === "smartknob";
   // hopea3 / smartknob / zenoh / arm / canalyzer 都是整屏面板;zenoh/arm 走 Zenoh,
   // canalyzer 自带总线连接,都不使用顶栏的电机 ConnectBar。
   const showSidebar =
+    tool !== "console" &&
     tool !== "hopea3" &&
     tool !== "smartknob" &&
     tool !== "zenoh" &&
     tool !== "arm" &&
     tool !== "config" &&
     tool !== "canalyzer";
-  const showConnectBar = tool !== "zenoh" && tool !== "arm" && tool !== "config" && tool !== "canalyzer";
+  const showConnectBar = tool !== "console" && tool !== "zenoh" && tool !== "arm" && tool !== "config" && tool !== "canalyzer";
 
   return (
     <Layout className={`app-shell app-shell--${tool}`}>
@@ -184,7 +187,9 @@ export default function App() {
           </Layout.Sider>
         )}
         <Layout.Content className="app-content">
-          {tool === "hopea3" ? (
+          {tool === "console" ? (
+            <RobotConsole />
+          ) : tool === "hopea3" ? (
             <Hopea3Panel connected={connected} />
           ) : tool === "smartknob" ? (
             <SmartKnobPanel connected={connected} devices={devices} />
@@ -265,6 +270,13 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
         </ToolSection>
 
         <ToolSection title={t("catRobotApp")} hint={t("catRobotAppHint")}>
+          <ToolCard
+            title={t("toolConsole")}
+            desc={t("toolConsoleDesc")}
+            tag={t("tagRobotApi")}
+            accent="cyan"
+            onClick={() => onPick("console")}
+          />
           <ToolCard
             title={t("toolBaseZenoh")}
             desc={t("toolBaseZenohDesc")}

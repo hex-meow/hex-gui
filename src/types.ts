@@ -417,3 +417,45 @@ export type MotorTarget =
   | { kind: "Velocity"; rev_per_s: number }
   | { kind: "Torque"; nm: number }
   | { kind: "Mit"; pos: number; vel: number; tor: number; kp: number; kd: number };
+
+// ── EE(Zenoh)── 镜像 src-tauri/src/zenoh_ee.rs 的 DTO(11-ee-api)。
+export interface EeInfo {
+  prefix: string;
+  model: string;
+  dof: number;
+  joint_names: string[];
+  pos_min: number[];
+  pos_max: number[];
+  tau_max: number[];
+  opening_poly: number[]; // width(q)=Σ poly[i]·q^i;空 = 无宽度映射
+  width_max: number;
+}
+
+/** 设备树节点(机器人控制台全量发现,所有 kind)。 */
+export interface RobotNode {
+  prefix: string;
+  cid: string;
+  robot_index: string;
+  kind: number;      // 1=arm 2=base 3=lift 4=ee
+  kind_name: string;
+  model: string;
+}
+
+export interface ZenohEeState {
+  controlling: boolean;
+  holder: number;
+  mode: string;
+  robot_mode: string;
+  model: string;
+  prefix: string;
+  q: number[];
+  dq: number[];
+  tau: number[];
+  grasp_state: string;   // MOVING/AT_POSITION/HOLDING/LOST(设备侧 1kHz 判定)
+  estop_behavior: number; // 1=保位 2=松开 3=抗拒张开
+  pos_min: number[];
+  pos_max: number[];
+  opening_poly: number[];
+  width_max: number;
+  fatal: boolean;
+}
