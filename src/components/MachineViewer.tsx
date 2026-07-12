@@ -3,7 +3,8 @@
 // 被绑 EE 不再单独摆(同 cid 有 assembled 臂 ⇒ 隐藏该 cid 的 ee 节点;精确 ee↔arm 映射 TODO)。
 // 关节驱动:全 kind joint_state 聚合(SceneRobot.q × joint_names);EE 关节以 ee_ 前缀写进
 // 臂的整机模型(mimic 从动由 urdf-loader 0.13 原生联动)。无 URDF 的 robot(如 base)画占位盒。
-// 选中高亮(其余 ghost/隐藏切换与 3D 点击选中 = M3)。
+// M3:machine 段拼接(MountEdge:child 挂 parent 的 mount link + offset;parent URDF/link 缺失 →
+// 告警 + 该分支散装,不拼错不猜,13 §3)、选中聚焦(其余 ghost 半透明/隐藏可切)、3D 点击选中。
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
@@ -12,12 +13,15 @@ import { STLLoader } from "three/addons/loaders/STLLoader.js";
 import URDFLoader from "urdf-loader";
 import type { URDFRobot } from "urdf-loader";
 import { api } from "../api";
-import type { SceneRobot } from "../types";
+import type { MountEdge, SceneRobot } from "../types";
 
 interface Props {
   robots: SceneRobot[];       // ee_scene 轮询(~30Hz)
   selected: string | null;    // 选中 robot prefix(高亮)
   spacing: number;            // 散装网格间距 m
+  machines: Record<string, MountEdge[]>; // cid → 挂载边(M3;空 = 散装)
+  focusMode: "ghost" | "hide" | "off";   // 选中聚焦:其余半透明/隐藏/不处理
+  onSelect?: (prefix: string) => void;   // 3D 点击选中
   height?: number;
 }
 
@@ -30,17 +34,23 @@ type Slot = {
   loading: boolean;
   lastFetch: number;                // 上次 URDF 拉取时刻(ms;臂未拼装时周期重拉)
   highlighted: boolean;
+  mountedTo: string | null;         // 已挂到的 "parentPrefix/link"(M3 拼接;null=散装在地面)
+  dimmed: boolean;                  // 聚焦时被淡化/隐藏
+  warned: boolean;                  // 挂载失败告警只打一次
 };
 
 const HIGHLIGHT = new THREE.Color(0x2a6fbb);
 
-export function MachineViewer({ robots, selected, spacing, height = 340 }: Props) {
+export function MachineViewer({ robots, selected, spacing, machines, focusMode, onSelect, height = 340 }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const slotsRef = useRef<Map<string, Slot>>(new Map());
   const worldRef = useRef<THREE.Group | null>(null);
-  const propsRef = useRef({ robots, selected, spacing });
-  propsRef.current = { robots, selected, spacing };
+  const propsRef = useRef({ robots, selected, spacing, machines, focusMode });
+  propsRef.current = { robots, selected, spacing, machines, focusMode };
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
 
   useEffect(() => {
     const mount = mountRef.current!;
@@ -48,6 +58,7 @@ export function MachineViewer({ robots, selected, spacing, height = 340 }: Props
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x1a1d23);
     const camera = new THREE.PerspectiveCamera(50, W / height, 0.01, 200);
+    cameraRef.current = camera;
     camera.position.set(2.2, -2.6, 1.8);
     camera.up.set(0, 0, 1); // URDF Z-up
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -57,6 +68,34 @@ export function MachineViewer({ robots, selected, spacing, height = 340 }: Props
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(0, 0, 0.2);
     controlsRef.current = controls;
+
+    // 3D 点击选中:pointerdown/up 位移 <6px 视为点击(区别于 orbit 拖拽)→ raycast → 祖先链找 slot 组
+    let downXY: [number, number] | null = null;
+    const onDown = (e: PointerEvent) => { downXY = [e.clientX, e.clientY]; };
+    const onUp = (e: PointerEvent) => {
+      if (!downXY) return;
+      const moved = Math.hypot(e.clientX - downXY[0], e.clientY - downXY[1]);
+      downXY = null;
+      if (moved > 6) return;
+      const rect = renderer.domElement.getBoundingClientRect();
+      const ndc = new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(ndc, camera);
+      const hits = ray.intersectObjects(world.children, true);
+      for (const h of hits) {
+        let o: THREE.Object3D | null = h.object;
+        while (o) {
+          const pfx = (o.userData as { prefix?: string }).prefix;
+          if (pfx) { onSelectRef.current?.(pfx); return; }
+          o = o.parent;
+        }
+      }
+    };
+    renderer.domElement.addEventListener("pointerdown", onDown);
+    renderer.domElement.addEventListener("pointerup", onUp);
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.75));
     const dir = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -88,6 +127,8 @@ export function MachineViewer({ robots, selected, spacing, height = 340 }: Props
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", onResize);
+      renderer.domElement.removeEventListener("pointerdown", onDown);
+      renderer.domElement.removeEventListener("pointerup", onUp);
       renderer.dispose();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
       slotsRef.current.forEach((s) => disposeSlot(s));
@@ -159,7 +200,7 @@ export function MachineViewer({ robots, selected, spacing, height = 340 }: Props
   function applyFrame() {
     const world = worldRef.current;
     if (!world) return;
-    const { robots, selected, spacing } = propsRef.current;
+    const { robots, selected, spacing, machines, focusMode } = propsRef.current;
     const slots = slotsRef.current;
 
     // 被绑 EE 隐藏:同 cid 存在 assembled 臂 ⇒ 该 cid 的 ee 不单独摆(13 §1;精确映射 TODO)。
@@ -186,20 +227,58 @@ export function MachineViewer({ robots, selected, spacing, height = 340 }: Props
         box.position.z = 0.125;
         group.add(box);
         world.add(group);
-        const slot: Slot = { group, robot: null, assembled: false, kind: r.kind_name, placeholder: box, loading: false, lastFetch: 0, highlighted: false };
+        const slot: Slot = { group, robot: null, assembled: false, kind: r.kind_name, placeholder: box, loading: false, lastFetch: 0, highlighted: false, mountedTo: null, dimmed: false, warned: false };
+        group.userData.prefix = r.prefix; // 3D 点击选中:命中网格向上找到 slot 组
         slots.set(r.prefix, slot);
         loadUrdfInto(slot, r.prefix, r.kind_name);
       }
     });
     slots.forEach((s, prefix) => {
       const inScene = seen.has(prefix);
-      s.group.visible = inScene;      // 被绑 EE / 消失的 robot:隐藏但保留(再现时秒回)
+      // 聚焦-隐藏:选中存在且 focusMode=hide 时,非选中一并隐藏
+      const focusHidden = focusMode === "hide" && !!selected && prefix !== selected;
+      s.group.visible = inScene && !focusHidden; // 被绑 EE / 消失的 robot:隐藏但保留(再现时秒回)
     });
 
-    // 散装网格布局(按 visible 顺序 = 后端已按 cid+robot_index 排序)
-    const n = visible.length;
+    // ── M3 拼接:machine 边把 child 挂到 parent 的 mount link 下(offset = xyz+rpy,URDF 语义)。
+    // parent URDF 未加载 / mount link 不存在 → 告警一次 + 该分支散装(13 §3:不拼错不猜)。
+    const mounted = new Set<string>();
+    visible.forEach((r) => {
+      const s = slots.get(r.prefix)!;
+      const edges = machines[r.cid] ?? [];
+      const edge = edges.find((e) => `hexmeow/${r.cid}/${e.child}` === r.prefix);
+      let want: string | null = null;
+      let parentLinkObj: THREE.Object3D | null = null;
+      if (edge) {
+        const parentPrefix = `hexmeow/${r.cid}/${edge.parent}`;
+        const ps = slots.get(parentPrefix);
+        const linkObj = ps?.robot?.links?.[edge.parent_link];
+        if (linkObj) { want = `${parentPrefix}/${edge.parent_link}`; parentLinkObj = linkObj; }
+        else if (!s.warned && ps?.robot) {
+          s.warned = true;
+          console.warn(`machine: ${r.prefix} 挂载点 ${edge.parent_link} 不在 ${parentPrefix} 的 URDF 里 → 散装回退(13 §3)`);
+        }
+      }
+      if (s.mountedTo !== want) {
+        s.mountedTo = want;
+        if (want && parentLinkObj) {
+          parentLinkObj.add(s.group);
+          s.group.position.set(edge!.xyz[0], edge!.xyz[1], edge!.xyz[2]);
+          // URDF rpy(extrinsic XYZ)= three.js Euler 'ZYX' 语序:R = Rz(y)·Ry(p)·Rx(r)
+          s.group.rotation.set(edge!.rpy[0], edge!.rpy[1], edge!.rpy[2], "ZYX");
+        } else {
+          worldRef.current!.add(s.group);
+          s.group.rotation.set(0, 0, 0);
+        }
+      }
+      if (want) mounted.add(r.prefix);
+    });
+
+    // 散装网格布局(仅未挂载的根;按 visible 顺序 = 后端已按 cid+robot_index 排序)
+    const grounded = visible.filter((r) => !mounted.has(r.prefix));
+    const n = grounded.length;
     const cols = Math.max(1, Math.ceil(Math.sqrt(n)));
-    visible.forEach((r, i) => {
+    grounded.forEach((r, i) => {
       const s = slots.get(r.prefix)!;
       const col = i % cols, row = Math.floor(i / cols);
       s.group.position.set(col * spacing - ((cols - 1) * spacing) / 2, -row * spacing, 0);
@@ -244,7 +323,31 @@ export function MachineViewer({ robots, selected, spacing, height = 340 }: Props
       controls.target.lerp(tgt, 0.08); // 平滑跟随,不瞬跳
     }
 
-    // 选中高亮(emissive 着色;ghost/隐藏切换 = M3)
+    // 聚焦-幽灵:选中存在且 focusMode=ghost 时,非选中半透明(材质透明度缓存原值,变更时才遍历)
+    slots.forEach((s, prefix) => {
+      const wantDim = focusMode === "ghost" && !!selected && prefix !== selected;
+      if (wantDim === s.dimmed) return;
+      s.dimmed = wantDim;
+      s.group.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh && !Array.isArray(m.material)) {
+          const mat = m.material as THREE.MeshPhongMaterial;
+          if (wantDim) {
+            if (mat.userData.origOpacity === undefined) {
+              mat.userData.origOpacity = mat.opacity;
+              mat.userData.origTransparent = mat.transparent;
+            }
+            mat.transparent = true; mat.opacity = 0.22; mat.depthWrite = false;
+          } else if (mat.userData.origOpacity !== undefined) {
+            mat.opacity = mat.userData.origOpacity as number;
+            mat.transparent = mat.userData.origTransparent as boolean;
+            mat.depthWrite = true;
+          }
+        }
+      });
+    });
+
+    // 选中高亮(emissive 着色)
     slots.forEach((s, prefix) => {
       const want = prefix === selected;
       if (want === s.highlighted) return;

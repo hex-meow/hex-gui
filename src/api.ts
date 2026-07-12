@@ -3,7 +3,7 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfo, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf} from "./types";
+import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfo, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge} from "./types";
 
 export const api = {
   connect: (iface: string, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -178,6 +178,7 @@ export const api = {
   eeRelease: () => invoke<void>("ee_release"),
   eeScene: () => invoke<SceneRobot[]>("ee_scene"),
   consoleGetUrdf: (prefix: string, kindName: string) => invoke<ConsoleUrdf | null>("console_get_urdf", { prefix, kindName }),
+  eeMachines: () => invoke<Record<string, MountEdge[]>>("ee_machines"),
 
   // Controller Config(Zenoh)
   configConnect: (connect: string) => invoke<void>("config_connect", { connect }),

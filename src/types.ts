@@ -475,3 +475,12 @@ export interface ConsoleUrdf {
   xml: string;
   assembled: boolean; // 臂已拼 EE(含 ee_mount)
 }
+
+/** 整机挂载边(M3;<cid>/machine 的 DTO,13 §4)。 */
+export interface MountEdge {
+  parent: string;
+  parent_link: string;
+  child: string;
+  xyz: [number, number, number];
+  rpy: [number, number, number];
+}

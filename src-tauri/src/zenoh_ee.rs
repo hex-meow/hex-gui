@@ -85,6 +85,16 @@ pub struct SceneRobot {
     pub q: Vec<f32>,
 }
 
+/// 整机挂载边(M3:<cid>/machine queryable 的 DTO 镜像;13 §4)。
+#[derive(Serialize, Clone)]
+pub struct MountEdgeDto {
+    pub parent: String,       // robot id(如 base0)
+    pub parent_link: String,  // 挂载点 link 名(如 arm_mount_0)
+    pub child: String,        // robot id(如 arm0)
+    pub xyz: [f32; 3],
+    pub rpy: [f32; 3],
+}
+
 /// 通用 URDF 取用结果(先机器人级 <prefix>/urdf——臂的整机拼装;退 <prefix>/<kind>/urdf)。
 #[derive(Serialize, Clone, Default)]
 pub struct ConsoleUrdf {
@@ -124,6 +134,7 @@ struct Ctrl {
     scene_joints: StdMutex<std::collections::HashMap<String, Vec<f32>>>, // robot prefix → q
     scene_nodes: StdMutex<Vec<RobotNode>>,                               // 最近一次 discover_all
     scene_names: StdMutex<std::collections::HashMap<String, Vec<String>>>, // prefix → joint_names
+    machines: StdMutex<std::collections::HashMap<String, Vec<MountEdgeDto>>>, // cid → 挂载边(M3)
 }
 
 pub struct ZenohEeConn {
@@ -150,6 +161,7 @@ impl ZenohEeConn {
             scene_joints: StdMutex::new(std::collections::HashMap::new()),
             scene_nodes: StdMutex::new(Vec::new()),
             scene_names: StdMutex::new(std::collections::HashMap::new()),
+            machines: StdMutex::new(std::collections::HashMap::new()),
         });
 
         // 50Hz 命令流:持有会话且有目标时发单点 JointTrajectory(断流 → 控制器 HOLD 保持抓握,11 §2)。
@@ -325,8 +337,27 @@ impl ZenohEeConn {
                 self.ctrl.scene_names.lock().unwrap().insert(n.prefix.clone(), names);
             }
         }
+        // M3:每 cid 取一次 <cid>/machine(无 machine 段 = 无 key = 散装,三态①)。
+        let cids: std::collections::HashSet<String> = out.iter().map(|n| n.cid.clone()).collect();
+        for cid in cids {
+            let key = format!("hexmeow/{cid}/machine");
+            let edges = query_one::<pb::MachineLayout>(&self.session, &key, vec![]).await.map(|m| {
+                m.edges.into_iter().map(|e| MountEdgeDto {
+                    parent: e.parent, parent_link: e.parent_link, child: e.child,
+                    xyz: e.xyz.map(|v| [v.x, v.y, v.z]).unwrap_or_default(),
+                    rpy: e.rpy.map(|v| [v.x, v.y, v.z]).unwrap_or_default(),
+                }).collect::<Vec<_>>()
+            });
+            let mut g = self.ctrl.machines.lock().unwrap();
+            match edges { Some(e) => { g.insert(cid, e); } None => { g.remove(&cid); } }
+        }
         *self.ctrl.scene_nodes.lock().unwrap() = out.clone();
         out
+    }
+
+    /// 整机挂载边快照(M3;cid → edges)。纯读缓存。
+    pub fn machines(&self) -> std::collections::HashMap<String, Vec<MountEdgeDto>> {
+        self.ctrl.machines.lock().unwrap().clone()
     }
 
     /// 场景快照(M2):纯读缓存(30Hz 轮询不触网)。q 缺省空(离线/未发布)。

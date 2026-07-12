@@ -17,7 +17,7 @@ use crate::dto::{LiveStateDto, MotorInfoDto, MotorModeDto, MotorTargetDto};
 use crate::state::AppState;
 use crate::zenoh_base::{BaseInfo, ZenohBaseState, ZenohConn};
 use crate::zenoh_arm::{ArmInfo, ArmUrdf, ZenohArmConn, ZenohArmState};
-use crate::zenoh_ee::{ConsoleUrdf, EeInfo, RobotNode, SceneRobot, ZenohEeConn, ZenohEeState};
+use crate::zenoh_ee::{ConsoleUrdf, EeInfo, MountEdgeDto, RobotNode, SceneRobot, ZenohEeConn, ZenohEeState};
 use crate::zenoh_config::{
     ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfoDto, RestartResult, ZenohConfigConn,
 };
@@ -1162,4 +1162,11 @@ pub async fn console_get_urdf(state: State<'_, AppState>, prefix: String, kind_n
     let g = state.zenoh_ee.lock().await;
     let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
     Ok(c.get_urdf(&prefix, &kind_name).await)
+}
+
+
+/// 整机挂载边(M3):cid → MountEdge 列表(随 3s 发现节拍刷新;无 machine 段 = 不含该 cid)。
+#[tauri::command]
+pub async fn ee_machines(state: State<'_, AppState>) -> CmdResult<std::collections::HashMap<String, Vec<MountEdgeDto>>> {
+    Ok(state.zenoh_ee.lock().await.as_ref().map(|c| c.machines()).unwrap_or_default())
 }

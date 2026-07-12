@@ -4,9 +4,10 @@
 // 连接复用 zenoh_ee 模块的会话(ee_discover_all 做全量发现,所有 kind 一次拿全)。
 
 import { useCallback, useEffect, useState } from "react";
-import { App as AntdApp, Button, Card, Empty, Input, InputNumber, Layout, Menu, Space, Tag } from "antd";
+import { App as AntdApp, Button, Card, Empty, Input, InputNumber, Layout, Menu, Segmented, Space, Tag } from "antd";
 import { api } from "../api";
 import type { RobotNode } from "../types";
+import type { MountEdge } from "../types";
 import { useI18n } from "../i18n";
 import EePanel from "./EePanel";
 import { ArmPanel } from "./ArmPanel";
@@ -29,6 +30,9 @@ export default function RobotConsole() {
   const [sel, setSel] = useState<RobotNode | null>(null);
   const [scene, setScene] = useState<SceneRobot[]>([]);
   const [held, setHeld] = useState<Set<string>>(new Set());
+  const [machines, setMachines] = useState<Record<string, MountEdge[]>>({});
+  const [focusMode, setFocusMode] = useState<"ghost" | "hide" | "off">(
+    () => (localStorage.getItem("console.focusMode") as "ghost" | "hide" | "off") || "ghost");
   const [spacing, setSpacing] = useState<number>(() => Number(localStorage.getItem("console.spacing")) || 2);
 
   const connect = useCallback(async () => {
@@ -51,6 +55,7 @@ export default function RobotConsole() {
     let stop = false;
     const tick = async () => {
       try { const ns = await api.eeDiscoverAll(); if (!stop) setNodes(ns); } catch { /* transient */ }
+      try { const ms = await api.eeMachines(); if (!stop) setMachines(ms); } catch { /* transient */ }
     };
     tick();
     const iv = setInterval(tick, DISCOVER_MS);
@@ -134,6 +139,15 @@ export default function RobotConsole() {
                 全部释放({held.size})
               </Button>
             )}
+            <div style={{ marginBottom: 6 }}>
+              <Segmented size="small" value={focusMode}
+                onChange={(v) => { const m = v as "ghost" | "hide" | "off"; setFocusMode(m); localStorage.setItem("console.focusMode", m); }}
+                options={[
+                  { label: "幽灵", value: "ghost" },
+                  { label: "隐藏", value: "hide" },
+                  { label: "关", value: "off" },
+                ]} />
+            </div>
             {t("consoleSpacing")}
             <InputNumber size="small" min={0.5} step={0.5} value={spacing} style={{ width: 70, marginLeft: 6 }}
               onChange={(v) => { const x = v ?? 2; setSpacing(x); localStorage.setItem("console.spacing", String(x)); }} /> m
@@ -151,7 +165,10 @@ export default function RobotConsole() {
       <Content style={{ padding: 14, overflow: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
         {connected && (
           <Card size="small" styles={{ body: { padding: 6 } }}>
-            <MachineViewer robots={scene} selected={sel?.prefix ?? null} spacing={spacing} height={340} />
+            <MachineViewer robots={scene} selected={sel?.prefix ?? null} spacing={spacing}
+              machines={machines} focusMode={focusMode}
+              onSelect={(prefix) => { const n = nodes.find((x) => x.prefix === prefix); if (n) setSel(n); }}
+              height={340} />
           </Card>
         )}
         {!sel && (
