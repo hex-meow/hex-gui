@@ -67,6 +67,16 @@
   min-width: 0;
 }
 
+.lift-electrical-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.lift-electrical-card--unhealthy {
+  border-color: rgba(255, 77, 79, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 77, 79, 0.12);
+}
+
 .lift-control-card {
   position: sticky;
   top: 0;

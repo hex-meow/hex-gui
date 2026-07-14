@@ -255,11 +255,18 @@ bus with the right settings:
 - **Lift (Raw CAN)** — direct CANopen commissioning for one `lift-driver`
   node (default `0x14`) on the already-open bus. Attach is observation-only:
   it reads identity, nameplate/CRC, effective limits, heartbeat, TPDOs and SDO
-  diagnostics without changing NMT or sending motion. Homing, velocity and
-  position remain locked until heartbeat and both TPDOs are fresh,
-  `CONFIG_VALID` is set, NMT is Operational, no fault is latched, and Homing
-  has completed where required. Velocity is hold-to-jog: Rust owns the RPDO
-  timing while the WebView renews a 250 ms operator lease. Lease loss sends a
+  diagnostics, including `0x4601:08..0B` sensor status, INA `DIAG_ALRT`, sample
+  age and failure count, without changing NMT or sending motion. TPDO2 frame
+  freshness and INA sample freshness are displayed and gated independently:
+  stale V/I remain visible only as explicitly marked last-successful values.
+  QEI readiness and the separately bench-qualified encoder direction are also
+  distinct status bits; an initialized QEI never implies that “up counts
+  positive” has been verified on the mechanism.
+  Homing, velocity and position remain locked until heartbeat and both TPDOs
+  are fresh, the encoder/INA sample is healthy, `CONFIG_VALID` is set, NMT is
+  Operational, no fault is latched, and Homing has completed where required.
+  Velocity is hold-to-jog: Rust owns the RPDO timing while the WebView renews a
+  250 ms operator lease. Lease loss sends a
   directed NMT Stop. Detach/Disconnect and normal window close report success
   only after a Pre-operational heartbeat and Disabled-command readback; a
   failed close keeps the window open with `STOP UNCONFIRMED`. Position is an

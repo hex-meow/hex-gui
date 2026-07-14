@@ -37,6 +37,21 @@ const STATUS_CONFIG_VALID: u8 = 1 << 0;
 const STATUS_HOMED: u8 = 1 << 1;
 const STATUS_FAULT: u8 = 1 << 7;
 
+const SENSOR_ENCODER_READY: u8 = 1 << 0;
+const SENSOR_INA_PRESENT: u8 = 1 << 1;
+const SENSOR_INA_FRESH: u8 = 1 << 2;
+const SENSOR_SAMPLE_VALID: u8 = 1 << 3;
+const SENSOR_INA_ALERT: u8 = 1 << 4;
+const SENSOR_INA_READ_ERROR: u8 = 1 << 5;
+const SENSOR_ENCODER_DIRECTION_QUALIFIED: u8 = 1 << 6;
+const SENSOR_MOTION_REQUIRED: u8 = SENSOR_ENCODER_READY
+    | SENSOR_INA_PRESENT
+    | SENSOR_INA_FRESH
+    | SENSOR_SAMPLE_VALID
+    | SENSOR_ENCODER_DIRECTION_QUALIFIED;
+const SENSOR_UNHEALTHY: u8 = SENSOR_INA_ALERT | SENSOR_INA_READ_ERROR;
+const INA_FRESH_MAX_AGE_MS: u16 = 100;
+
 const NMT_OPERATIONAL: u8 = 0x05;
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_millis(1_200);
 const TPDO_TIMEOUT: Duration = Duration::from_millis(500);
@@ -76,6 +91,10 @@ pub struct LiftState {
     pub encoder_count: i32,
     pub duty_command_permille: i16,
     pub control_loop_hz: u16,
+    pub sensor_status: u8,
+    pub ina_diag: u16,
+    pub ina_sample_age_ms: u16,
+    pub ina_fault_count: u32,
 
     pub counts_per_meter: f32,
     pub position_min_m: f32,
@@ -128,6 +147,10 @@ impl Default for LiftState {
             encoder_count: 0,
             duty_command_permille: 0,
             control_loop_hz: 0,
+            sensor_status: 0,
+            ina_diag: 0,
+            ina_sample_age_ms: u16::MAX,
+            ina_fault_count: 0,
             counts_per_meter: 0.0,
             position_min_m: 0.0,
             position_max_m: 0.0,
@@ -774,6 +797,13 @@ impl LiftSession {
         let encoder_count = read_i32(bus, nid, DIAGNOSTICS, 5, timeout).await?;
         let duty_command_permille = read_i16(bus, nid, DIAGNOSTICS, 6, timeout).await?;
         let control_loop_hz = sdo::upload_u16(bus, nid, DIAGNOSTICS, 7, timeout).await?;
+        // These are deliberately read separately from TPDO2. A fresh TPDO2 can
+        // legally repeat the last successful INA values after the sensor task
+        // has failed or gone stale.
+        let sensor_status = sdo::upload_u8(bus, nid, DIAGNOSTICS, 8, timeout).await?;
+        let ina_diag = sdo::upload_u16(bus, nid, DIAGNOSTICS, 9, timeout).await?;
+        let ina_sample_age_ms = sdo::upload_u16(bus, nid, DIAGNOSTICS, 10, timeout).await?;
+        let ina_fault_count = sdo::upload_u32(bus, nid, DIAGNOSTICS, 11, timeout).await?;
 
         let mut state = self.state.lock().unwrap();
         state.mode_command = mode_command;
@@ -790,6 +820,10 @@ impl LiftSession {
         state.encoder_count = encoder_count;
         state.duty_command_permille = duty_command_permille;
         state.control_loop_hz = control_loop_hz;
+        state.sensor_status = sensor_status;
+        state.ina_diag = ina_diag;
+        state.ina_sample_age_ms = ina_sample_age_ms;
+        state.ina_fault_count = ina_fault_count;
         Ok(())
     }
 
@@ -804,6 +838,13 @@ impl LiftSession {
                 "lift telemetry is stale (TPDO1={}, TPDO2={})",
                 state.tpdo1_fresh,
                 state.tpdo2_fresh
+            );
+        }
+        if !sensor_snapshot_healthy(state.sensor_status, state.ina_sample_age_ms) {
+            anyhow::bail!(
+                "lift sensor sample is not healthy (status=0x{:02X}, INA age={} ms)",
+                state.sensor_status,
+                state.ina_sample_age_ms
             );
         }
         if state.nmt_state != NMT_OPERATIONAL {
@@ -1067,6 +1108,8 @@ async fn velocity_loop(
                     Some("heartbeat became stale")
                 } else if !state.tpdo1_fresh || !state.tpdo2_fresh {
                     Some("TPDO telemetry became stale")
+                } else if !sensor_snapshot_healthy(state.sensor_status, state.ina_sample_age_ms) {
+                    Some("encoder/INA sensor sample became unhealthy")
                 } else if state.nmt_state != NMT_OPERATIONAL {
                     Some("NMT left Operational")
                 } else if state.mode_display != MODE_VELOCITY {
@@ -1194,6 +1237,12 @@ fn parse_tpdo2(data: &[u8]) -> Option<(f32, f32)> {
     ))
 }
 
+fn sensor_snapshot_healthy(status: u8, ina_age_ms: u16) -> bool {
+    status & SENSOR_MOTION_REQUIRED == SENSOR_MOTION_REQUIRED
+        && status & SENSOR_UNHEALTHY == 0
+        && ina_age_ms <= INA_FRESH_MAX_AGE_MS
+}
+
 fn lift_nameplate_crc(layout_id: u32, used: u8, payload: &[u32; 64]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for byte in layout_id.to_le_bytes().into_iter().chain([used]).chain(
@@ -1266,12 +1315,49 @@ mod tests {
             TPDO_TIMEOUT,
             now,
         ));
-        assert!(!is_fresh(
-            Some(now - TPDO_TIMEOUT),
-            TPDO_TIMEOUT,
-            now,
-        ));
+        assert!(!is_fresh(Some(now - TPDO_TIMEOUT), TPDO_TIMEOUT, now,));
         assert!(!is_fresh(None, TPDO_TIMEOUT, now));
+    }
+
+    #[test]
+    fn sensor_health_is_not_implied_by_fresh_tpdo2_frames() {
+        let required = SENSOR_MOTION_REQUIRED;
+        assert!(sensor_snapshot_healthy(required, INA_FRESH_MAX_AGE_MS));
+        assert!(!sensor_snapshot_healthy(required, INA_FRESH_MAX_AGE_MS + 1));
+
+        for missing in [
+            SENSOR_ENCODER_READY,
+            SENSOR_INA_PRESENT,
+            SENSOR_INA_FRESH,
+            SENSOR_SAMPLE_VALID,
+            SENSOR_ENCODER_DIRECTION_QUALIFIED,
+        ] {
+            assert!(!sensor_snapshot_healthy(required & !missing, 0));
+        }
+        assert!(!sensor_snapshot_healthy(required | SENSOR_INA_ALERT, 0));
+        assert!(!sensor_snapshot_healthy(
+            required | SENSOR_INA_READ_ERROR,
+            0
+        ));
+
+        // TPDO2 freshness is maintained by a separate receive timestamp and
+        // therefore cannot make a stale INA snapshot healthy.
+        let mut state = LiftState {
+            tpdo2_fresh: true,
+            sensor_status: required & !SENSOR_INA_FRESH,
+            ..Default::default()
+        };
+        assert!(state.tpdo2_fresh);
+        assert!(!sensor_snapshot_healthy(
+            state.sensor_status,
+            state.ina_sample_age_ms
+        ));
+        state.sensor_status = required;
+        state.ina_sample_age_ms = INA_FRESH_MAX_AGE_MS;
+        assert!(sensor_snapshot_healthy(
+            state.sensor_status,
+            state.ina_sample_age_ms
+        ));
     }
 
     /// Explicit commissioning smoke test for the current bridge-disabled

@@ -154,6 +154,10 @@ export interface LiftState {
   encoder_count: number;
   duty_command_permille: number;
   control_loop_hz: number;
+  sensor_status: number;
+  ina_diag: number;
+  ina_sample_age_ms: number;
+  ina_fault_count: number;
   counts_per_meter: number;
   position_min_m: number;
   position_max_m: number;

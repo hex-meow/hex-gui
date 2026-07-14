@@ -28,6 +28,15 @@ const STATUS_UPPER_LIMIT = 1 << 5;
 const STATUS_OUTPUT_LIMITED = 1 << 6;
 const STATUS_FAULT = 1 << 7;
 
+const SENSOR_ENCODER_READY = 1 << 0;
+const SENSOR_INA_PRESENT = 1 << 1;
+const SENSOR_INA_FRESH = 1 << 2;
+const SENSOR_SAMPLE_VALID = 1 << 3;
+const SENSOR_INA_ALERT = 1 << 4;
+const SENSOR_INA_READ_ERROR = 1 << 5;
+const SENSOR_ENCODER_DIRECTION_QUALIFIED = 1 << 6;
+const INA_FRESH_MAX_AGE_MS = 100;
+
 type HoldDirection = -1 | 0 | 1;
 
 function finite(value: number, digits = 3, suffix = ""): string {
@@ -265,6 +274,26 @@ export function LiftPanel({ connected }: { connected: boolean }) {
     state != null &&
     (((status & STATUS_FAULT) !== 0) || state.detailed_fault !== 0);
   const operational = state != null && isOperational(state.nmt_state);
+  const sensorStatus = state?.sensor_status ?? 0;
+  const encoderReady = (sensorStatus & SENSOR_ENCODER_READY) !== 0;
+  const inaPresent = (sensorStatus & SENSOR_INA_PRESENT) !== 0;
+  const inaFresh =
+    (sensorStatus & SENSOR_INA_FRESH) !== 0 &&
+    state != null &&
+    state.ina_sample_age_ms <= INA_FRESH_MAX_AGE_MS;
+  const sensorSampleValid = (sensorStatus & SENSOR_SAMPLE_VALID) !== 0;
+  const inaAlert = (sensorStatus & SENSOR_INA_ALERT) !== 0;
+  const inaReadError = (sensorStatus & SENSOR_INA_READ_ERROR) !== 0;
+  const encoderDirectionQualified =
+    (sensorStatus & SENSOR_ENCODER_DIRECTION_QUALIFIED) !== 0;
+  const sensorHealthy =
+    encoderReady &&
+    encoderDirectionQualified &&
+    inaPresent &&
+    inaFresh &&
+    sensorSampleValid &&
+    !inaAlert &&
+    !inaReadError;
 
   const commonBlockers: I18nKey[] = [];
   if (!connected) commonBlockers.push("liftBlockBus");
@@ -273,6 +302,7 @@ export function LiftPanel({ connected }: { connected: boolean }) {
   if (state != null && (!state.tpdo1_fresh || !state.tpdo2_fresh)) {
     commonBlockers.push("liftBlockTelemetry");
   }
+  if (state != null && !sensorHealthy) commonBlockers.push("liftBlockSensors");
   if (state != null && !operational) commonBlockers.push("liftBlockNmt");
   if (state != null && !configValid) commonBlockers.push("liftBlockConfig");
   if (state != null && faulted) commonBlockers.push("liftBlockFault");
@@ -287,6 +317,7 @@ export function LiftPanel({ connected }: { connected: boolean }) {
     state.online &&
     state.tpdo1_fresh &&
     state.tpdo2_fresh &&
+    sensorHealthy &&
     operational &&
     configValid &&
     !faulted;
@@ -459,6 +490,18 @@ export function LiftPanel({ connected }: { connected: boolean }) {
     [STATUS_OUTPUT_LIMITED, "liftStatusLimited"],
     [STATUS_FAULT, "liftStatusFault"],
   ];
+  const sensorBits: Array<[number, I18nKey, boolean]> = [
+    [SENSOR_ENCODER_READY, "liftEncoderReady", false],
+    [SENSOR_INA_PRESENT, "liftInaPresent", false],
+    [SENSOR_INA_FRESH, "liftInaFresh", false],
+    [SENSOR_SAMPLE_VALID, "liftSensorSampleValid", false],
+    [SENSOR_INA_ALERT, "liftInaAlert", true],
+    [SENSOR_INA_READ_ERROR, "liftInaReadError", true],
+    [SENSOR_ENCODER_DIRECTION_QUALIFIED, "liftEncoderDirectionQualified", false],
+  ];
+
+  const electricalValue = (value: string): string =>
+    inaFresh ? value : value + " · " + t("liftStale");
 
   const visibleError = closeError ?? sdoError ?? state?.last_error ?? null;
   const commandBusy = busy !== null || safetyBusy;
@@ -820,15 +863,78 @@ export function LiftPanel({ connected }: { connected: boolean }) {
                 />
               </Card>
 
-              <Card title={t("liftElectrical")}>
-                <MetricGrid
-                  items={[
-                    [t("liftBusVoltage"), finite(state.bus_voltage_v, 3, " V")],
-                    [t("liftBusCurrent"), finite(state.bus_current_a, 3, " A")],
-                    [t("liftBusPower"), finite(state.bus_power_w, 2, " W")],
-                    [t("liftInaTemp"), finite(state.ina_temperature_c, 1, " °C")],
-                  ]}
-                />
+              <Card
+                title={t("liftElectrical")}
+                className={sensorHealthy ? undefined : "lift-electrical-card--unhealthy"}
+                extra={
+                  <Space size={4} wrap>
+                    <Tag color={state.tpdo2_fresh ? "green" : "red"}>
+                      {t("liftTpdo2Frames")}: {t(state.tpdo2_fresh ? "liftFresh" : "liftStale")}
+                    </Tag>
+                    <Tag color={inaFresh ? "green" : "red"}>
+                      {t("liftInaSample")}: {t(inaFresh ? "liftFresh" : "liftStale")}
+                    </Tag>
+                    <Tag color={sensorSampleValid ? "green" : "red"}>
+                      {t("liftCombinedSample")}: {t(sensorSampleValid ? "liftValid" : "liftInvalid")}
+                    </Tag>
+                  </Space>
+                }
+              >
+                <div className="lift-electrical-stack">
+                  {!sensorHealthy && (
+                    <Alert
+                      type={inaFresh ? "warning" : "error"}
+                      showIcon
+                      message={t(inaFresh ? "liftSensorUnhealthyTitle" : "liftInaStaleTitle")}
+                      description={t(
+                        inaFresh ? "liftSensorUnhealthyDescription" : "liftInaStaleDescription"
+                      )}
+                    />
+                  )}
+                  <MetricGrid
+                    items={[
+                      [
+                        t("liftBusVoltage"),
+                        electricalValue(finite(state.bus_voltage_v, 3, " V")),
+                      ],
+                      [
+                        t("liftBusCurrent"),
+                        electricalValue(finite(state.bus_current_a, 3, " A")),
+                      ],
+                      [
+                        t("liftBusPower"),
+                        electricalValue(finite(state.bus_power_w, 2, " W")),
+                      ],
+                      [
+                        t("liftInaTemp"),
+                        electricalValue(finite(state.ina_temperature_c, 1, " °C")),
+                      ],
+                      [t("liftSensorStatus"), hex(state.sensor_status, 2)],
+                      [t("liftInaDiag"), hex(state.ina_diag, 4)],
+                      [
+                        t("liftInaSampleAge"),
+                        state.ina_sample_age_ms === 0xffff
+                          ? t("liftNoSuccessfulSample")
+                          : integer(state.ina_sample_age_ms) + " ms",
+                      ],
+                      [t("liftInaFaultCount"), integer(state.ina_fault_count)],
+                    ]}
+                  />
+                  <div className="lift-status-bits">
+                    {sensorBits.map(([mask, key, faultBit]) => {
+                      const active = (state.sensor_status & mask) !== 0;
+                      return (
+                        <Tag
+                          key={mask}
+                          color={active ? (faultBit ? "red" : "green") : "default"}
+                        >
+                          {active ? "● " : "○ "}
+                          {t(key)}
+                        </Tag>
+                      );
+                    })}
+                  </div>
+                </div>
               </Card>
 
               <Card title={t("liftEffectiveParameters")}>

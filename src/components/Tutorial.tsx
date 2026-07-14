@@ -239,8 +239,8 @@ const LIFT_SLIDES: Slide[] = [
   {
     title: { en: "2 · Read every safety gate", zh: "2 · 检查全部安全门控" },
     body: {
-      en: "Motion stays locked until heartbeat and both TPDOs are fresh, NMT is Operational, CONFIG_VALID is set, no fault is latched, and Homing has completed where required. Never bypass a red or amber blocker.",
-      zh: "只有 heartbeat 与两路 TPDO 都新鲜、NMT 为 Operational、CONFIG_VALID 有效、无锁存故障，并在需要时完成 Homing，运动才会解锁。不要绕过任何红色或黄色阻塞提示。",
+      en: "Motion stays locked until heartbeat and both TPDOs are fresh, the encoder/INA sample is independently healthy, NMT is Operational, CONFIG_VALID is set, no fault is latched, and Homing has completed where required. Never bypass a red or amber blocker.",
+      zh: "只有 heartbeat 与两路 TPDO 都新鲜、编码器/INA 联合样本也独立确认健康、NMT 为 Operational、CONFIG_VALID 有效、无锁存故障，并在需要时完成 Homing，运动才会解锁。不要绕过任何红色或黄色阻塞提示。",
     },
   },
   {
