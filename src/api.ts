@@ -3,7 +3,7 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfo, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge} from "./types";
+import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfo, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftState, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge} from "./types";
 
 export const api = {
   connect: (iface: string, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -55,6 +55,21 @@ export const api = {
   hopea3ReinitMotor: (nid: number) => invoke<void>("hopea3_reinit_motor", { nid }),
   hopea3ResetOdom: () => invoke<void>("hopea3_reset_odom"),
   hopea3GetState: () => invoke<Hopea3State>("hopea3_get_state"),
+
+  // Lift raw-CAN Robot Application
+  liftStart: (nid: number) => invoke<LiftState>("lift_start", { nid }),
+  liftStop: () => invoke<void>("lift_stop"),
+  liftGetState: () => invoke<LiftState>("lift_get_state"),
+  liftRefresh: () => invoke<LiftState>("lift_refresh"),
+  liftSetNmt: (command: string) => invoke<void>("lift_set_nmt", { command }),
+  liftDisable: () => invoke<void>("lift_disable"),
+  liftHome: () => invoke<void>("lift_home"),
+  liftClearFault: () => invoke<void>("lift_clear_fault"),
+  liftSetVelocity: (velocityMps: number) =>
+    invoke<void>("lift_set_velocity", { velocityMps }),
+  liftRenewVelocity: () => invoke<void>("lift_renew_velocity"),
+  liftSetPosition: (positionM: number) =>
+    invoke<void>("lift_set_position", { positionM }),
 
   // SmartKnob Robot Application
   smartknobConfigs: () => invoke<KnobConfig[]>("smartknob_configs"),

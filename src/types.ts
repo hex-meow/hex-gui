@@ -124,6 +124,55 @@ export interface Hopea3State {
   running: boolean;
 }
 
+// ── Lift raw-CAN application (mirrors lift::LiftState) ──
+export interface LiftState {
+  running: boolean;
+  node_id: number;
+  online: boolean;
+  tpdo1_fresh: boolean;
+  tpdo2_fresh: boolean;
+  nmt_state: number;
+  device_name: string;
+  firmware_version: string;
+  nameplate_kind: number;
+  model: string;
+  layout_id: number;
+  nameplate_used: number;
+  nameplate_crc32: number;
+  nameplate_crc_ok: boolean;
+  mode_command: number;
+  mode_display: number;
+  status_word: number;
+  detailed_fault: number;
+  actual_position_m: number;
+  actual_velocity_mps: number;
+  sample_timestamp_us: number;
+  bus_voltage_v: number;
+  bus_current_a: number;
+  bus_power_w: number;
+  ina_temperature_c: number;
+  encoder_count: number;
+  duty_command_permille: number;
+  control_loop_hz: number;
+  counts_per_meter: number;
+  position_min_m: number;
+  position_max_m: number;
+  velocity_max_mps: number;
+  acceleration_limit_mps2: number;
+  homing_speed_mps: number;
+  homing_stall_bus_current_a: number;
+  homing_stall_speed_mps: number;
+  homing_arm_time_ms: number;
+  homing_confirm_time_ms: number;
+  homing_timeout_ms: number;
+  velocity_watchdog_time_ms: number;
+  position_tolerance_m: number;
+  max_bus_current_a: number;
+  bus_voltage_min_v: number;
+  bus_voltage_max_v: number;
+  last_error: string | null;
+}
+
 // ── SmartKnob Robot Application (mirrors smartknob::KnobConfig / SmartKnobState) ──
 export interface KnobConfig {
   position: number;

@@ -6,12 +6,14 @@
 //! can run concurrently.
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use hex_motor::cia402::Cia402Manager;
 use tokio::sync::Mutex;
 
 use crate::hopea3::{Hopea3, InitProgress};
+use crate::lift::LiftSession;
 use crate::logging::LogHandle;
 use crate::smartknob::SmartKnob;
 
@@ -28,6 +30,12 @@ pub struct AppState {
     /// Live init progress for the UI to poll while `hopea3_start` runs. A `std`
     /// mutex: only short, await-free updates happen under it.
     pub hopea3_init: StdMutex<InitProgress>,
+    /// Direct-CANopen lift debug session. It owns heartbeat/TPDO subscriptions
+    /// and the velocity watchdog stream for exactly one lift node.
+    pub lift: Mutex<Option<Arc<LiftSession>>>,
+    /// Serializes normal window-close attempts while the lift performs its
+    /// confirmed Stop/Pre-op/Disabled handshake.
+    pub lift_close_in_progress: AtomicBool,
     /// Base(Zenoh):到 hex-controller 的连接(至多一条)。
     pub zenoh: Mutex<Option<crate::zenoh_base::ZenohConn>>,
     /// Arm(Zenoh):到 hex-controller 机械臂的连接(至多一条)。

@@ -9,6 +9,7 @@ import { ImuPanel } from "./components/ImuPanel";
 import { ChangeIdTool } from "./components/ChangeIdTool";
 import { ZeroTool } from "./components/ZeroTool";
 import { Hopea3Panel } from "./components/Hopea3Panel";
+import { LiftPanel } from "./components/LiftPanel";
 import { SmartKnobPanel } from "./components/SmartKnobPanel";
 import RobotConsole from "./components/RobotConsole";
 import { ZenohPanel } from "./components/ZenohPanel";
@@ -19,7 +20,7 @@ import { TutorialModal, TUTORIALS } from "./components/Tutorial";
 import type { MotorInfo } from "./types";
 import "./App.css";
 
-type Tool = "control" | "changeId" | "zero" | "hopea3" | "smartknob" | "zenoh" | "arm" | "config" | "canalyzer" | "console";
+type Tool = "control" | "changeId" | "zero" | "hopea3" | "lift" | "smartknob" | "zenoh" | "arm" | "config" | "canalyzer" | "console";
 
 const DEVICE_POLL_MS = 700;
 
@@ -77,8 +78,9 @@ export default function App() {
   const switchTool = useCallback(async () => {
     try {
       await api.disconnect();
-    } catch {
-      /* ignore */
+    } catch (e) {
+      message.error(`${t("disconnectFailed")}: ${errMsg(e)}`);
+      return;
     }
     setConnected(false);
     setSelectedNid(null);
@@ -86,7 +88,7 @@ export default function App() {
     setDevices([]);
     setTutorialOpen(false);
     setTool(null);
-  }, []);
+  }, [message, t]);
 
   const onToggleLog = useCallback(
     async (nid: number, on: boolean) => {
@@ -119,6 +121,7 @@ export default function App() {
     changeId: { title: t("toolChangeId"), desc: t("toolChangeIdDesc") },
     zero: { title: t("toolZero"), desc: t("toolZeroDesc") },
     hopea3: { title: t("toolHopeA3"), desc: t("toolHopeA3Desc") },
+    lift: { title: t("toolLift"), desc: t("toolLiftDesc") },
     smartknob: { title: t("toolSmartKnob"), desc: t("toolSmartKnobDesc") },
     zenoh: { title: t("toolBaseZenoh"), desc: t("toolBaseZenohDesc") },
     arm: { title: t("toolArmZenoh"), desc: t("toolArmZenohDesc") },
@@ -133,6 +136,7 @@ export default function App() {
   const showSidebar =
     tool !== "console" &&
     tool !== "hopea3" &&
+    tool !== "lift" &&
     tool !== "smartknob" &&
     tool !== "zenoh" &&
     tool !== "arm" &&
@@ -191,6 +195,8 @@ export default function App() {
             <RobotConsole />
           ) : tool === "hopea3" ? (
             <Hopea3Panel connected={connected} />
+          ) : tool === "lift" ? (
+            <LiftPanel connected={connected} />
           ) : tool === "smartknob" ? (
             <SmartKnobPanel connected={connected} devices={devices} />
           ) : tool === "zenoh" ? (
@@ -297,6 +303,13 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
             tag={t("tagMobileBase")}
             accent="orange"
             onClick={() => onPick("hopea3")}
+          />
+          <ToolCard
+            title={t("toolLift")}
+            desc={t("toolLiftDesc")}
+            tag={t("tagLift")}
+            accent="green"
+            onClick={() => onPick("lift")}
           />
           <ToolCard
             title={t("toolConfig")}

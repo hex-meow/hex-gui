@@ -228,6 +228,37 @@ const SMARTKNOB_SLIDES: Slide[] = [
   },
 ];
 
+const LIFT_SLIDES: Slide[] = [
+  {
+    title: { en: "1 · Connect and attach", zh: "1 · 连接并绑定" },
+    body: {
+      en: "Connect can0 (or the selected adapter), then attach the Lift worker to Node-ID 20 by default. Attach only reads identity, nameplate, configuration and telemetry; it never makes the node Operational.",
+      zh: "连接 can0（或所选适配器），再把 Lift worker 绑定到默认 Node-ID 20。绑定只读取身份、铭牌、配置与遥测，不会让节点进入 Operational。",
+    },
+  },
+  {
+    title: { en: "2 · Read every safety gate", zh: "2 · 检查全部安全门控" },
+    body: {
+      en: "Motion stays locked until heartbeat and both TPDOs are fresh, NMT is Operational, CONFIG_VALID is set, no fault is latched, and Homing has completed where required. Never bypass a red or amber blocker.",
+      zh: "只有 heartbeat 与两路 TPDO 都新鲜、NMT 为 Operational、CONFIG_VALID 有效、无锁存故障，并在需要时完成 Homing，运动才会解锁。不要绕过任何红色或黄色阻塞提示。",
+    },
+  },
+  {
+    title: { en: "3 · Velocity is hold-to-jog", zh: "3 · 速度只允许按住点动" },
+    body: {
+      en: "Press and hold Up or Down. Rust owns RPDO timing, while the WebView renews a short operator lease; release, blur or stale telemetry stops it. DISABLE OUTPUT is the always-available directed NMT Stop path.",
+      zh: "按住“上升”或“下降”才会点动。RPDO 时序由 Rust 管理，WebView 续租短时人机租约；松手、失焦或遥测过期都会停止。DISABLE OUTPUT 是始终可用的定向 NMT Stop 路径。",
+    },
+  },
+  {
+    title: { en: "4 · Homing and Position are autonomous", zh: "4 · Homing 与 Position 是自主运动" },
+    body: {
+      en: "Use a current-limited supply and keep physical power removal ready. A confirmed Detach/Disconnect cancels autonomous motion, but process crash or host power loss cannot guarantee cancellation. Commission free motor and Homing before Position.",
+      zh: "使用限流电源并随时准备物理断电。经确认的 Detach/Disconnect 会取消自主运动，但进程崩溃或主机掉电无法保证。应先完成自由电机与 Homing 调试，最后才测试 Position。",
+    },
+  },
+];
+
 const CANALYZER_SLIDES: Slide[] = [
   {
     media: { type: "image", src: "/tutorial/canalyzer/01.png" },
@@ -256,6 +287,7 @@ export const TUTORIALS: Record<string, Slide[]> = {
   changeId: CHANGE_ID_SLIDES,
   zero: ZERO_SLIDES,
   hopea3: placeholderSlides("hopea3"),
+  lift: LIFT_SLIDES,
   smartknob: SMARTKNOB_SLIDES,
   zenoh: placeholderSlides("zenoh"),
   arm: placeholderSlides("arm"),

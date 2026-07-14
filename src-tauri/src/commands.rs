@@ -36,6 +36,36 @@ async fn manager(state: &AppState) -> CmdResult<Arc<Cia402Manager>> {
         .ok_or_else(|| "not connected: call connect() first".to_string())
 }
 
+/// Clone the active lift session without keeping the application-state mutex
+/// across CAN I/O. In particular, directed NMT Stop/zero commands must not
+/// wait behind a slow SDO diagnostics refresh.
+async fn lift_session(state: &AppState) -> CmdResult<Arc<crate::lift::LiftSession>> {
+    state
+        .lift
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "lift is not attached".to_string())
+}
+
+/// Keep the handle registered until the device has acknowledged the safe
+/// detach sequence. A failed CAN stop must remain visible and retryable.
+pub(crate) async fn stop_lift_session(state: &AppState) -> CmdResult<()> {
+    let app = match state.lift.lock().await.clone() {
+        Some(app) => app,
+        None => return Ok(()),
+    };
+    app.stop().await.map_err(err)?;
+    let mut guard = state.lift.lock().await;
+    if guard
+        .as_ref()
+        .is_some_and(|current| Arc::ptr_eq(current, &app))
+    {
+        guard.take();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn connect(
     state: State<'_, AppState>,
@@ -63,6 +93,7 @@ pub async fn connect(
 #[tauri::command]
 pub async fn disconnect(state: State<'_, AppState>) -> CmdResult<()> {
     // Stop any running Robot Application first (disables its motors cleanly).
+    stop_lift_session(&state).await?;
     if let (Some(app), Some(mgr)) = (state.hopea3.lock().await.take(), state.manager().await) {
         app.stop(&mgr).await;
     }
@@ -1169,4 +1200,95 @@ pub async fn console_get_urdf(state: State<'_, AppState>, prefix: String, kind_n
 #[tauri::command]
 pub async fn ee_machines(state: State<'_, AppState>) -> CmdResult<std::collections::HashMap<String, Vec<MountEdgeDto>>> {
     Ok(state.zenoh_ee.lock().await.as_ref().map(|c| c.machines()).unwrap_or_default())
+}
+
+// ───────────────────────── Lift direct-CAN application ──────────────────────
+
+/// Attach to one lift node and read its identity/nameplate/configuration.
+/// This deliberately does not change NMT state or arm motion.
+#[tauri::command]
+pub async fn lift_start(
+    state: State<'_, AppState>,
+    nid: u8,
+) -> CmdResult<crate::lift::LiftState> {
+    let mgr = manager(&state).await?;
+    let mut guard = state.lift.lock().await;
+    if guard.is_some() {
+        return Err("a lift session is already attached; detach it first".into());
+    }
+    let app = crate::lift::LiftSession::start(mgr, nid).await.map_err(err)?;
+    let snapshot = app.state();
+    *guard = Some(Arc::new(app));
+    Ok(snapshot)
+}
+
+/// Safe detach: directed NMT Stop, then confirmed Pre-operational + Disabled.
+#[tauri::command]
+pub async fn lift_stop(state: State<'_, AppState>) -> CmdResult<()> {
+    stop_lift_session(&state).await
+}
+
+#[tauri::command]
+pub async fn lift_get_state(state: State<'_, AppState>) -> CmdResult<crate::lift::LiftState> {
+    let app = state.lift.lock().await.clone();
+    Ok(app
+        .map(|session| session.state())
+        .unwrap_or_default())
+}
+
+/// Refresh non-PDO diagnostics over serialized SDO transactions.
+#[tauri::command]
+pub async fn lift_refresh(state: State<'_, AppState>) -> CmdResult<crate::lift::LiftState> {
+    let app = lift_session(&state).await?;
+    app.refresh().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_set_nmt(state: State<'_, AppState>, command: String) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.set_nmt(&command).await.map_err(err)
+}
+
+/// Immediate safe action. This always sends directed NMT Stop before the SDO
+/// Disabled request, so it remains useful if the SDO path is unhealthy.
+#[tauri::command]
+pub async fn lift_disable(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.disable().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_home(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.home().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_clear_fault(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.clear_fault().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_set_velocity(
+    state: State<'_, AppState>,
+    velocity_mps: f32,
+) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.set_velocity(velocity_mps).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_renew_velocity(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.renew_velocity_lease().map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_set_position(
+    state: State<'_, AppState>,
+    position_m: f32,
+) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.set_position(position_m).await.map_err(err)
 }

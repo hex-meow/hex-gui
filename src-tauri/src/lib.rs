@@ -11,6 +11,7 @@ mod diag;
 mod dto;
 mod hopea3;
 mod imu;
+mod lift;
 mod logging;
 mod sdo_client;
 mod smartknob;
@@ -20,7 +21,40 @@ mod zenoh_base;
 mod zenoh_config;
 mod zenoh_ee;
 
+use std::sync::atomic::Ordering;
+
 use state::AppState;
+use tauri::{Emitter, Manager};
+
+const LIFT_STOP_UNCONFIRMED_EVENT: &str = "lift-stop-unconfirmed";
+
+/// A normal window close is a safety operation while an autonomous Position
+/// goal may exist. Keep the window alive until the device has acknowledged
+/// Pre-operational + Disabled. If acknowledgement fails, retain both the
+/// session and the window so the operator can retry or remove physical power.
+fn request_confirmed_close(window: tauri::Window) {
+    let handle = window.app_handle().clone();
+    let state = handle.state::<AppState>();
+    if state.lift_close_in_progress.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    tauri::async_runtime::spawn(async move {
+        let state = handle.state::<AppState>();
+        match commands::stop_lift_session(&state).await {
+            Ok(()) => handle.exit(0),
+            Err(error) => {
+                state.lift_close_in_progress.store(false, Ordering::SeqCst);
+                log::error!("normal close blocked: {error}");
+                if let Err(emit_error) = handle.emit(LIFT_STOP_UNCONFIRMED_EVENT, error.clone()) {
+                    log::error!("emit Lift close failure: {emit_error}");
+                }
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+    });
+}
 
 pub fn run() {
     let _ = env_logger::Builder::from_env(
@@ -30,6 +64,12 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(AppState::default())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                request_confirmed_close(window.clone());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::connect,
             commands::disconnect,
@@ -62,6 +102,17 @@ pub fn run() {
             commands::hopea3_reinit_motor,
             commands::hopea3_reset_odom,
             commands::hopea3_get_state,
+            commands::lift_start,
+            commands::lift_stop,
+            commands::lift_get_state,
+            commands::lift_refresh,
+            commands::lift_set_nmt,
+            commands::lift_disable,
+            commands::lift_home,
+            commands::lift_clear_fault,
+            commands::lift_set_velocity,
+            commands::lift_renew_velocity,
+            commands::lift_set_position,
             commands::smartknob_configs,
             commands::smartknob_start,
             commands::smartknob_stop,

@@ -97,7 +97,7 @@ together:
 
 ```bash
 cargo install tauri-cli --version "^2" --locked   # once
-cd tauri-test/src-tauri
+cd hex-motor-gui/src-tauri
 cargo tauri dev
 ```
 
@@ -106,7 +106,7 @@ cargo tauri dev
 Build the frontend, then run the Rust binary directly (it embeds `dist/`):
 
 ```bash
-cd tauri-test
+cd hex-motor-gui
 npm run build
 cd src-tauri && cargo run
 ```
@@ -252,6 +252,20 @@ bus with the right settings:
 
 - **Motor Control** — everything above. Broadcasts our heartbeat (the motor's
   `0x1016` consumer needs it).
+- **Lift (Raw CAN)** — direct CANopen commissioning for one `lift-driver`
+  node (default `0x14`) on the already-open bus. Attach is observation-only:
+  it reads identity, nameplate/CRC, effective limits, heartbeat, TPDOs and SDO
+  diagnostics without changing NMT or sending motion. Homing, velocity and
+  position remain locked until heartbeat and both TPDOs are fresh,
+  `CONFIG_VALID` is set, NMT is Operational, no fault is latched, and Homing
+  has completed where required. Velocity is hold-to-jog: Rust owns the RPDO
+  timing while the WebView renews a 250 ms operator lease. Lease loss sends a
+  directed NMT Stop. Detach/Disconnect and normal window close report success
+  only after a Pre-operational heartbeat and Disabled-command readback; a
+  failed close keeps the window open with `STOP UNCONFIRMED`. Position is an
+  autonomous goal: confirmed shutdown cancels it, but a process crash cannot,
+  so commissioning still requires a physical power-removal path. This tool
+  does not broadcast a host heartbeat.
 - **Change ID** — batch-friendly Node-ID changer. Connect, pick a motor (or
   type its current ID), enter a new ID, **Write & Save** (writes `0x2001:01`
   then `0x1010:01 = "save"`). The change takes effect **only after a
