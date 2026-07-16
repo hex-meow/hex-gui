@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
-import { listen } from "@tauri-apps/api/event";
 import {
   Alert,
   App as AntdApp,
@@ -24,6 +23,14 @@ const POLL_MS = 100;
 const SDO_REFRESH_MS = 1000;
 const VELOCITY_LEASE_RENEW_MS = 50;
 
+// Fallback for the firmware velocity release deadband used until the node is
+// read. The live value now comes from the wire (`0x4600:05` velocity_min_mps):
+// a commanded |speed| below it coasts (the self-locking screw holds), so the
+// jog control must never offer a lower non-zero setpoint or it would look dead.
+// The upper bound likewise comes from the wire (`velocity_max_mps`).
+const LIFT_MIN_JOG_MPS = 0.001;
+const LIFT_DEFAULT_JOG_MPS = 0.02;
+
 const STATUS_CONFIG_VALID = 1 << 0;
 const STATUS_HOMED = 1 << 1;
 const STATUS_TARGET_REACHED = 1 << 2;
@@ -33,14 +40,12 @@ const STATUS_UPPER_LIMIT = 1 << 5;
 const STATUS_OUTPUT_LIMITED = 1 << 6;
 const STATUS_FAULT = 1 << 7;
 
+// v0.4 sensor_status is five bits (docs/lift-object-dictionary.md §8).
 const SENSOR_ENCODER_READY = 1 << 0;
 const SENSOR_INA_PRESENT = 1 << 1;
 const SENSOR_INA_FRESH = 1 << 2;
 const SENSOR_SAMPLE_VALID = 1 << 3;
 const SENSOR_INA_ALERT = 1 << 4;
-const SENSOR_INA_READ_ERROR = 1 << 5;
-const SENSOR_ENCODER_DIRECTION_QUALIFIED = 1 << 6;
-const INA_FRESH_MAX_AGE_MS = 100;
 
 type HoldDirection = -1 | 0 | 1;
 
@@ -91,11 +96,10 @@ export function LiftPanel({ connected }: { connected: boolean }) {
   const [attached, setAttached] = useState(false);
   const [state, setState] = useState<LiftState | null>(null);
   const [sdoError, setSdoError] = useState<string | null>(null);
-  const [closeError, setCloseError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [safetyBusy, setSafetyBusy] = useState(false);
   const [positionGoal, setPositionGoal] = useState(0.1);
-  const [jogSpeed, setJogSpeed] = useState(0.02);
+  const [jogSpeed, setJogSpeed] = useState(LIFT_DEFAULT_JOG_MPS);
 
   const attachedRef = useRef(false);
   const holdDirection = useRef<HoldDirection>(0);
@@ -110,23 +114,6 @@ export function LiftPanel({ connected }: { connected: boolean }) {
   useEffect(() => {
     jogSpeedRef.current = jogSpeed;
   }, [jogSpeed]);
-
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let alive = true;
-    void listen<string>("lift-stop-unconfirmed", (event) => {
-      if (!alive) return;
-      setCloseError(event.payload);
-      message.error(event.payload, 0);
-    }).then((dispose) => {
-      if (alive) unlisten = dispose;
-      else dispose();
-    });
-    return () => {
-      alive = false;
-      unlisten?.();
-    };
-  }, [message]);
 
   const updateState = useCallback((next: LiftState) => {
     setState(next);
@@ -282,23 +269,12 @@ export function LiftPanel({ connected }: { connected: boolean }) {
   const sensorStatus = state?.sensor_status ?? 0;
   const encoderReady = (sensorStatus & SENSOR_ENCODER_READY) !== 0;
   const inaPresent = (sensorStatus & SENSOR_INA_PRESENT) !== 0;
-  const inaFresh =
-    (sensorStatus & SENSOR_INA_FRESH) !== 0 &&
-    state != null &&
-    state.ina_sample_age_ms <= INA_FRESH_MAX_AGE_MS;
+  // v0.4 folds INA sample age (≤100 ms) into the INA_FRESH bit.
+  const inaFresh = (sensorStatus & SENSOR_INA_FRESH) !== 0;
   const sensorSampleValid = (sensorStatus & SENSOR_SAMPLE_VALID) !== 0;
   const inaAlert = (sensorStatus & SENSOR_INA_ALERT) !== 0;
-  const inaReadError = (sensorStatus & SENSOR_INA_READ_ERROR) !== 0;
-  const encoderDirectionQualified =
-    (sensorStatus & SENSOR_ENCODER_DIRECTION_QUALIFIED) !== 0;
   const sensorHealthy =
-    encoderReady &&
-    encoderDirectionQualified &&
-    inaPresent &&
-    inaFresh &&
-    sensorSampleValid &&
-    !inaAlert &&
-    !inaReadError;
+    encoderReady && inaPresent && inaFresh && sensorSampleValid && !inaAlert;
 
   const commonBlockers: I18nKey[] = [];
   if (!connected) commonBlockers.push("liftBlockBus");
@@ -350,7 +326,6 @@ export function LiftPanel({ connected }: { connected: boolean }) {
       const next = await api.liftStart(nodeId);
       setState(next);
       setSdoError(null);
-      setCloseError(null);
       setAttached(true);
       const min = next.position_min_m;
       const max = next.position_max_m;
@@ -376,7 +351,6 @@ export function LiftPanel({ connected }: { connected: boolean }) {
       setAttached(false);
       setState(null);
       setSdoError(null);
-      setCloseError(null);
       message.info(t("liftDetached"));
     } catch (e) {
       const detail = t("liftDetachFailed") + ": " + errMsg(e);
@@ -479,6 +453,38 @@ export function LiftPanel({ connected }: { connected: boolean }) {
     state != null && state.velocity_max_mps > 0
       ? state.velocity_max_mps
       : undefined;
+  const minJog =
+    state != null && state.velocity_min_mps > 0
+      ? state.velocity_min_mps
+      : LIFT_MIN_JOG_MPS;
+
+  // Firmware detailed-fault codes (0x453F); see lift-driver motion::fault_code.
+  const faultName = (code: number): string => {
+    switch (code) {
+      case 0x0000:
+        return t("liftFaultNone");
+      case 0x2100:
+        return t("liftFaultOvercurrent");
+      case 0x3210:
+        return t("liftFaultOvervoltage");
+      case 0x3220:
+        return t("liftFaultUndervoltage");
+      case 0x5000:
+        return t("liftFaultPowerMonitor");
+      case 0x7340:
+        return t("liftFaultEncoder");
+      case 0x8130:
+        return t("liftFaultVelocityWatchdog");
+      case 0x8500:
+        return t("liftFaultPositionControl");
+      case 0xff01:
+        return t("liftFaultHomingTimeout");
+      case 0xff03:
+        return t("liftFaultConfigInvalid");
+      default:
+        return t("liftFaultUnknown");
+    }
+  };
 
   const modeName = (value: number): string => {
     switch (value) {
@@ -490,6 +496,19 @@ export function LiftPanel({ connected }: { connected: boolean }) {
         return t("liftModeVelocity");
       case 5:
         return t("liftModeHoming");
+      // Fault-latched mode-display codes (0xA1..0xAF); reuse the fault labels.
+      case 0xa1:
+        return t("liftFaultOvercurrent");
+      case 0xa2:
+        return t("liftFaultOvervoltage");
+      case 0xa3:
+        return t("liftFaultUndervoltage");
+      case 0xa4:
+        return t("liftFaultVelocityWatchdog");
+      case 0xa7:
+        return t("liftFaultHomingTimeout");
+      case 0xa8:
+        return t("liftFaultEncoder");
       case 0xaf:
         return t("liftModeConfigInvalid");
       default:
@@ -513,14 +532,12 @@ export function LiftPanel({ connected }: { connected: boolean }) {
     [SENSOR_INA_FRESH, "liftInaFresh", false],
     [SENSOR_SAMPLE_VALID, "liftSensorSampleValid", false],
     [SENSOR_INA_ALERT, "liftInaAlert", true],
-    [SENSOR_INA_READ_ERROR, "liftInaReadError", true],
-    [SENSOR_ENCODER_DIRECTION_QUALIFIED, "liftEncoderDirectionQualified", false],
   ];
 
   const electricalValue = (value: string): string =>
     inaFresh ? value : value + " · " + t("liftStale");
 
-  const visibleError = closeError ?? sdoError ?? state?.last_error ?? null;
+  const visibleError = sdoError ?? state?.last_error ?? null;
   const commandBusy = busy !== null || safetyBusy;
 
   return (
@@ -664,7 +681,11 @@ export function LiftPanel({ connected }: { connected: boolean }) {
                     {nmtName(state.nmt_state)}
                   </Tag>
                   <Tag color={faulted ? "red" : configValid ? "green" : "gold"}>
-                    {faulted ? t("liftFaulted") : t("liftNoFault")}
+                    {faulted
+                      ? state.detailed_fault !== 0
+                        ? faultName(state.detailed_fault)
+                        : t("liftFaulted")
+                      : t("liftNoFault")}
                   </Tag>
                 </Space>
               }
@@ -674,7 +695,15 @@ export function LiftPanel({ connected }: { connected: boolean }) {
                   [t("liftModeCommand"), modeName(state.mode_command)],
                   [t("liftModeDisplay"), modeName(state.mode_display)],
                   [t("liftStatusWord"), hex(state.status_word, 4)],
-                  [t("liftDetailedFault"), hex(state.detailed_fault, 4)],
+                  [
+                    t("liftDetailedFault"),
+                    state.detailed_fault === 0
+                      ? t("liftFaultNone")
+                      : faultName(state.detailed_fault) +
+                        " (" +
+                        hex(state.detailed_fault, 4) +
+                        ")",
+                  ],
                 ]}
               />
               <div className="lift-status-bits">
@@ -802,14 +831,20 @@ export function LiftPanel({ connected }: { connected: boolean }) {
                 <label className="lift-field">
                   <span>{t("liftJogSpeed")}</span>
                   <InputNumber
-                    min={0.001}
+                    min={minJog}
                     max={maxJog}
                     step={0.005}
                     precision={3}
                     value={jogSpeed}
                     disabled={commandBusy}
                     addonAfter="m/s"
-                    onChange={(value) => setJogSpeed(Math.abs(value ?? 0.02))}
+                    onChange={(value) => {
+                      const requested = Math.abs(value ?? LIFT_DEFAULT_JOG_MPS);
+                      const ceiling = maxJog ?? Number.POSITIVE_INFINITY;
+                      setJogSpeed(
+                        Math.min(ceiling, Math.max(minJog, requested)),
+                      );
+                    }}
                   />
                 </label>
                 <div className="lift-jog-buttons">
@@ -885,7 +920,6 @@ export function LiftPanel({ connected }: { connected: boolean }) {
                     [t("liftEncoder"), integer(state.encoder_count)],
                     [t("liftTimestamp"), integer(state.sample_timestamp_us) + " µs"],
                     [t("liftDuty"), finite(state.duty_command_permille, 1, " ‰")],
-                    [t("liftLoopRate"), finite(state.control_loop_hz, 1, " Hz")],
                   ]}
                 />
               </Card>
@@ -928,23 +962,7 @@ export function LiftPanel({ connected }: { connected: boolean }) {
                         t("liftBusCurrent"),
                         electricalValue(finite(state.bus_current_a, 3, " A")),
                       ],
-                      [
-                        t("liftBusPower"),
-                        electricalValue(finite(state.bus_power_w, 2, " W")),
-                      ],
-                      [
-                        t("liftInaTemp"),
-                        electricalValue(finite(state.ina_temperature_c, 1, " °C")),
-                      ],
                       [t("liftSensorStatus"), hex(state.sensor_status, 2)],
-                      [t("liftInaDiag"), hex(state.ina_diag, 4)],
-                      [
-                        t("liftInaSampleAge"),
-                        state.ina_sample_age_ms === 0xffff
-                          ? t("liftNoSuccessfulSample")
-                          : integer(state.ina_sample_age_ms) + " ms",
-                      ],
-                      [t("liftInaFaultCount"), integer(state.ina_fault_count)],
                     ]}
                   />
                   <div className="lift-status-bits">
@@ -976,46 +994,12 @@ export function LiftPanel({ connected }: { connected: boolean }) {
                         " m",
                     ],
                     [t("liftVelocityMax"), finite(state.velocity_max_mps, 4, " m/s")],
-                    [
-                      t("liftAcceleration"),
-                      finite(state.acceleration_limit_mps2, 4, " m/s²"),
-                    ],
-                    [t("liftHomingSpeed"), finite(state.homing_speed_mps, 4, " m/s")],
-                    [
-                      t("liftStallCurrent"),
-                      finite(state.homing_stall_bus_current_a, 3, " A"),
-                    ],
-                    [
-                      t("liftStallSpeed"),
-                      finite(state.homing_stall_speed_mps, 4, " m/s"),
-                    ],
-                    [t("liftHomingArm"), integer(state.homing_arm_time_ms) + " ms"],
-                    [
-                      t("liftHomingConfirm"),
-                      integer(state.homing_confirm_time_ms) + " ms",
-                    ],
-                    [
-                      t("liftHomingTimeout"),
-                      integer(state.homing_timeout_ms) + " ms",
-                    ],
-                    [
-                      t("liftVelocityWatchdog"),
-                      integer(state.velocity_watchdog_time_ms) + " ms",
-                    ],
-                    [
-                      t("liftPositionTolerance"),
-                      finite(state.position_tolerance_m, 5, " m"),
-                    ],
-                    [t("liftMaxCurrent"), finite(state.max_bus_current_a, 3, " A")],
-                    [
-                      t("liftVoltageRange"),
-                      finite(state.bus_voltage_min_v, 2) +
-                        " … " +
-                        finite(state.bus_voltage_max_v, 2) +
-                        " V",
-                    ],
+                    [t("liftVelocityMin"), finite(state.velocity_min_mps, 4, " m/s")],
                   ]}
                 />
+                <Typography.Text type="secondary" className="lift-inline-blocker">
+                  {t("liftEffectiveHint")}
+                </Typography.Text>
               </Card>
             </div>
           </div>

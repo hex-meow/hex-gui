@@ -23,17 +23,25 @@ mod zenoh_config;
 mod zenoh_ee;
 
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use state::AppState;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
-const LIFT_STOP_UNCONFIRMED_EVENT: &str = "lift-stop-unconfirmed";
+/// Time budget for the best-effort safe stop on window close. Long enough for a
+/// clean confirmed detach on a healthy bus, short enough that a dead bus doesn't
+/// make closing the GUI feel stuck.
+const LIFT_CLOSE_STOP_BUDGET: Duration = Duration::from_millis(1_500);
 
-/// A normal window close is a safety operation while an autonomous Position
-/// goal may exist. Keep the window alive until the device has acknowledged
-/// Pre-operational + Disabled. If acknowledgement fails, retain both the
-/// session and the window so the operator can retry or remove physical power.
-fn request_confirmed_close(window: tauri::Window) {
+/// A normal window close must *always* succeed. The firmware fails safe on its
+/// own — the velocity RPDO watchdog coasts the bridge when the stream stops,
+/// autonomous Position/Homing moves are soft-limit bounded and end in coast, and
+/// IWDG + the LOCKUP hardware break cover a firmware crash — so closing the GUI
+/// must never be held hostage by a CAN handshake. A pulled CAN cable would
+/// otherwise trap the window open. We make a time-boxed best-effort safe detach
+/// (which sends a directed NMT Stop first thing, dropping the node to coast) and
+/// then exit unconditionally whether or not it was acknowledged.
+fn request_safe_close(window: tauri::Window) {
     let handle = window.app_handle().clone();
     let state = handle.state::<AppState>();
     if state.lift_close_in_progress.swap(true, Ordering::SeqCst) {
@@ -42,18 +50,18 @@ fn request_confirmed_close(window: tauri::Window) {
 
     tauri::async_runtime::spawn(async move {
         let state = handle.state::<AppState>();
-        match commands::stop_lift_session(&state).await {
-            Ok(()) => handle.exit(0),
-            Err(error) => {
-                state.lift_close_in_progress.store(false, Ordering::SeqCst);
-                log::error!("normal close blocked: {error}");
-                if let Err(emit_error) = handle.emit(LIFT_STOP_UNCONFIRMED_EVENT, error.clone()) {
-                    log::error!("emit Lift close failure: {emit_error}");
-                }
-                let _ = window.show();
-                let _ = window.set_focus();
+        match tokio::time::timeout(LIFT_CLOSE_STOP_BUDGET, commands::stop_lift_session(&state)).await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                log::warn!("lift stop on close reported {error}; exiting anyway (firmware fails safe)")
             }
+            Err(_) => log::warn!(
+                "lift stop on close timed out after {} ms; exiting anyway (firmware fails safe)",
+                LIFT_CLOSE_STOP_BUDGET.as_millis()
+            ),
         }
+        handle.exit(0);
     });
 }
 
@@ -68,7 +76,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                request_confirmed_close(window.clone());
+                request_safe_close(window.clone());
             }
         })
         .invoke_handler(tauri::generate_handler![

@@ -39,26 +39,25 @@ const STATUS_CONFIG_VALID: u8 = 1 << 0;
 const STATUS_HOMED: u8 = 1 << 1;
 const STATUS_FAULT: u8 = 1 << 7;
 
+// v0.4 sensor_status is five bits (see docs/lift-object-dictionary.md §8). The
+// old INA_READ_ERROR (bit 5) and ENCODER_DIRECTION_QUALIFIED (bit 6) are gone:
+// direction is now a firmware compile-time constant folded into SAMPLE_VALID.
 const SENSOR_ENCODER_READY: u8 = 1 << 0;
 const SENSOR_INA_PRESENT: u8 = 1 << 1;
 const SENSOR_INA_FRESH: u8 = 1 << 2;
 const SENSOR_SAMPLE_VALID: u8 = 1 << 3;
 const SENSOR_INA_ALERT: u8 = 1 << 4;
-const SENSOR_INA_READ_ERROR: u8 = 1 << 5;
-const SENSOR_ENCODER_DIRECTION_QUALIFIED: u8 = 1 << 6;
-const SENSOR_MOTION_REQUIRED: u8 = SENSOR_ENCODER_READY
-    | SENSOR_INA_PRESENT
-    | SENSOR_INA_FRESH
-    | SENSOR_SAMPLE_VALID
-    | SENSOR_ENCODER_DIRECTION_QUALIFIED;
-const SENSOR_UNHEALTHY: u8 = SENSOR_INA_ALERT | SENSOR_INA_READ_ERROR;
-const INA_FRESH_MAX_AGE_MS: u16 = 100;
+const SENSOR_MOTION_REQUIRED: u8 =
+    SENSOR_ENCODER_READY | SENSOR_INA_PRESENT | SENSOR_INA_FRESH | SENSOR_SAMPLE_VALID;
+const SENSOR_UNHEALTHY: u8 = SENSOR_INA_ALERT;
 
 const NMT_OPERATIONAL: u8 = 0x05;
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_millis(1_200);
 const TPDO_TIMEOUT: Duration = Duration::from_millis(500);
 const VELOCITY_LEASE_TIMEOUT: Duration = Duration::from_millis(250);
-const HOST_MIN_VELOCITY_WATCHDOG_MS: u16 = 30;
+// The firmware velocity watchdog (0.4 lift_70) is 200 ms and is no longer read
+// from the OD, so the host streams RPDO1 at a fixed safe margin under it.
+const VELOCITY_STREAM_PERIOD_MS: u64 = 40;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LiftState {
@@ -88,32 +87,16 @@ pub struct LiftState {
 
     pub bus_voltage_v: f32,
     pub bus_current_a: f32,
-    pub bus_power_w: f32,
-    pub ina_temperature_c: f32,
     pub encoder_count: i32,
     pub duty_command_permille: i16,
-    pub control_loop_hz: u16,
     pub sensor_status: u8,
-    pub ina_diag: u16,
-    pub ina_sample_age_ms: u16,
-    pub ina_fault_count: u32,
 
+    // 0x4600 effective parameters (v0.4: firmware-derived soft limits + scale).
     pub counts_per_meter: f32,
     pub position_min_m: f32,
     pub position_max_m: f32,
     pub velocity_max_mps: f32,
-    pub acceleration_limit_mps2: f32,
-    pub homing_speed_mps: f32,
-    pub homing_stall_bus_current_a: f32,
-    pub homing_stall_speed_mps: f32,
-    pub homing_arm_time_ms: u16,
-    pub homing_confirm_time_ms: u16,
-    pub homing_timeout_ms: u32,
-    pub velocity_watchdog_time_ms: u16,
-    pub position_tolerance_m: f32,
-    pub max_bus_current_a: f32,
-    pub bus_voltage_min_v: f32,
-    pub bus_voltage_max_v: f32,
+    pub velocity_min_mps: f32,
 
     pub commissioning: CommissionView,
 
@@ -146,31 +129,14 @@ impl Default for LiftState {
             sample_timestamp_us: 0,
             bus_voltage_v: 0.0,
             bus_current_a: 0.0,
-            bus_power_w: 0.0,
-            ina_temperature_c: 0.0,
             encoder_count: 0,
             duty_command_permille: 0,
-            control_loop_hz: 0,
             sensor_status: 0,
-            ina_diag: 0,
-            ina_sample_age_ms: u16::MAX,
-            ina_fault_count: 0,
             counts_per_meter: 0.0,
             position_min_m: 0.0,
             position_max_m: 0.0,
             velocity_max_mps: 0.0,
-            acceleration_limit_mps2: 0.0,
-            homing_speed_mps: 0.0,
-            homing_stall_bus_current_a: 0.0,
-            homing_stall_speed_mps: 0.0,
-            homing_arm_time_ms: 0,
-            homing_confirm_time_ms: 0,
-            homing_timeout_ms: 0,
-            velocity_watchdog_time_ms: 0,
-            position_tolerance_m: 0.0,
-            max_bus_current_a: 0.0,
-            bus_voltage_min_v: 0.0,
-            bus_voltage_max_v: 0.0,
+            velocity_min_mps: 0.0,
             commissioning: CommissionView::default(),
             last_error: None,
         }
@@ -376,34 +342,51 @@ impl LiftSession {
         Ok(())
     }
 
-    /// Directed emergency-safe disable: NMT Stop first, then clear the mode.
+    /// Directed emergency-safe disable. Leaving Operational is the whole safety
+    /// action: the firmware only drives while Operational, so on NMT Stop it
+    /// coasts the bridge and self-clears the mode latch. We therefore *confirm*
+    /// the node left Operational (retrying to defeat a dropped frame) and treat
+    /// everything after that as best-effort tidy-up — an unconfirmed SDO path
+    /// must never turn a successful, safe stop into a user-facing failure.
     pub async fn disable(&self) -> anyhow::Result<()> {
         self.cancel_velocity();
         // Cancel the local commissioning stream before any fallible CAN await.
         // immediate_stop is best-effort: it clears demand even when both its
         // NMT Stop and RPDO3 zero transmissions fail.
         self.commissioning.immediate_stop().await;
-        send_nmt(&self.bus, 0x02, self.node_id).await?;
+        let _ = send_nmt(&self.bus, 0x02, self.node_id).await;
         let _ = send_rpdo_velocity(&self.bus, self.node_id, 0.0).await;
+
         let _guard = self.sdo_gate.lock().await;
-        // Override any older Start/mode command which completed after the
-        // first emergency Stop, then move to Pre-op where SDO is available.
-        send_nmt(&self.bus, 0x02, self.node_id).await?;
-        send_nmt(&self.bus, 0x80, self.node_id).await?;
-        self.wait_for_nmt(0x7F, HEARTBEAT_TIMEOUT).await?;
-        self.commissioning.confirm_stopped_locked().await?;
-        sdo::download_u8(
-            &*self.bus,
-            self.node_id,
-            MODE_COMMAND,
-            0,
-            MODE_DISABLED,
-            self.sdo_timeout,
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("disable mode write after NMT Stop: {e}"))?;
-        send_nmt(&self.bus, 0x02, self.node_id).await?;
-        self.wait_for_nmt(0x04, HEARTBEAT_TIMEOUT).await?;
+        // Safety checkpoint: re-issue Stop under the gate (an older in-flight
+        // Start must not win) and confirm the node is no longer Operational.
+        self.nmt_transition(0x02, 0x04, HEARTBEAT_TIMEOUT).await?;
+
+        // Best-effort tidy-up: Pre-op exposes the SDO server, latch Disabled,
+        // then settle back to Stopped. The motor is already safe, so failure
+        // here is logged, not fatal.
+        let tidy = async {
+            self.nmt_transition(0x80, 0x7F, HEARTBEAT_TIMEOUT).await?;
+            self.commissioning.confirm_stopped_locked().await?;
+            sdo::download_u8(
+                &*self.bus,
+                self.node_id,
+                MODE_COMMAND,
+                0,
+                MODE_DISABLED,
+                self.sdo_timeout,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("disable mode write after NMT Stop: {e}"))?;
+            self.nmt_transition(0x02, 0x04, HEARTBEAT_TIMEOUT).await
+        }
+        .await;
+        if let Err(error) = tidy {
+            log::warn!(
+                "lift 0x{:02X} is safely Stopped but the disable tidy-up was unconfirmed: {error}",
+                self.node_id
+            );
+        }
         self.clear_error();
         Ok(())
     }
@@ -549,7 +532,7 @@ impl LiftSession {
         }
         self.refresh_live_locked().await?;
         self.require_motion_gate(true)?;
-        let watchdog_ms = {
+        {
             let state = self.state.lock().unwrap();
             if velocity_mps.abs() > state.velocity_max_mps {
                 anyhow::bail!(
@@ -558,14 +541,7 @@ impl LiftSession {
                     state.velocity_max_mps
                 );
             }
-            if state.velocity_watchdog_time_ms < HOST_MIN_VELOCITY_WATCHDOG_MS {
-                anyhow::bail!(
-                    "velocity watchdog {} ms is too short for the desktop host (minimum {HOST_MIN_VELOCITY_WATCHDOG_MS} ms)",
-                    state.velocity_watchdog_time_ms
-                );
-            }
-            state.velocity_watchdog_time_ms
-        };
+        }
 
         sdo::download_u8(
             &*self.bus,
@@ -597,8 +573,7 @@ impl LiftSession {
         .await
         .map_err(|e| anyhow::anyhow!("write lift velocity target: {e}"))?;
 
-        let watchdog = u64::from(watchdog_ms);
-        let period_ms = (watchdog / 3).clamp(10, 50);
+        let period_ms = VELOCITY_STREAM_PERIOD_MS;
         let canceled_after_target = {
             let mut demand = self.velocity.lock().unwrap();
             if demand.generation != generation {
@@ -750,10 +725,12 @@ impl LiftSession {
         self.commissioning.csv()
     }
 
-    /// Stop motion, cancel autonomous goals, and leave the node safely Pre-op.
-    /// Success means a Pre-operational heartbeat and a Disabled command
-    /// readback were both observed; on failure the session remains available
-    /// for a retry. ModeDisplay may legitimately remain CONFIG_INVALID/Fault.
+    /// Stop motion, cancel autonomous goals, and detach the session. Success
+    /// means the node was confirmed to have left Operational — the whole safety
+    /// guarantee, since the firmware coasts and self-clears its mode latch the
+    /// instant it does. The Pre-op + Disabled-readback tidy-up is best-effort
+    /// (logged, not fatal). Only a failure to confirm the node left Operational
+    /// keeps the session available for a retry.
     pub async fn stop(&self) -> anyhow::Result<()> {
         self.accepting_commands.store(false, Ordering::SeqCst);
         self.cancel_velocity();
@@ -765,31 +742,47 @@ impl LiftSession {
 
         let result = async {
             let _guard = self.sdo_gate.lock().await;
-            // Override any command which was already in flight when closing
-            // began, then enter Pre-op so the SDO server is available.
-            send_nmt(&self.bus, 0x02, self.node_id).await?;
+            // Override any command already in flight when closing began, and
+            // confirm the node left Operational (retry defeats a dropped frame).
+            // This is the safety-critical checkpoint — the firmware coasts and
+            // self-clears the mode latch the instant it leaves Operational.
             let _ = send_rpdo_velocity(&self.bus, self.node_id, 0.0).await;
-            send_nmt(&self.bus, 0x80, self.node_id).await?;
-            self.wait_for_nmt(0x7F, HEARTBEAT_TIMEOUT).await?;
-            self.commissioning.confirm_stopped_locked().await?;
-            sdo::download_u8(
-                &*self.bus,
-                self.node_id,
-                MODE_COMMAND,
-                0,
-                MODE_DISABLED,
-                self.sdo_timeout,
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!("detach Disabled write: {e}"))?;
-            let mode_command =
-                sdo::upload_u8(&*self.bus, self.node_id, MODE_COMMAND, 0, self.sdo_timeout)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("detach Disabled readback: {e}"))?;
-            if mode_command != MODE_DISABLED {
-                anyhow::bail!("detach Disabled readback mismatch: 0x{mode_command:02X}");
+            self.nmt_transition(0x02, 0x04, HEARTBEAT_TIMEOUT).await?;
+
+            // Best-effort tidy-up for a clean re-attach: Pre-op exposes the SDO
+            // server, latch Disabled and read it back. The motor is already
+            // safe, so this is logged rather than fatal — an unconfirmed SDO
+            // path used to be what turned a good stop into a "STOP UNCONFIRMED".
+            let tidy = async {
+                self.nmt_transition(0x80, 0x7F, HEARTBEAT_TIMEOUT).await?;
+                self.commissioning.confirm_stopped_locked().await?;
+                sdo::download_u8(
+                    &*self.bus,
+                    self.node_id,
+                    MODE_COMMAND,
+                    0,
+                    MODE_DISABLED,
+                    self.sdo_timeout,
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("detach Disabled write: {e}"))?;
+                let mode_command =
+                    sdo::upload_u8(&*self.bus, self.node_id, MODE_COMMAND, 0, self.sdo_timeout)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("detach Disabled readback: {e}"))?;
+                if mode_command != MODE_DISABLED {
+                    anyhow::bail!("detach Disabled readback mismatch: 0x{mode_command:02X}");
+                }
+                self.state.lock().unwrap().mode_command = mode_command;
+                anyhow::Ok(())
             }
-            self.state.lock().unwrap().mode_command = mode_command;
+            .await;
+            if let Err(error) = tidy {
+                log::warn!(
+                    "lift 0x{:02X} is safely Stopped but detach tidy-up was unconfirmed: {error}",
+                    self.node_id
+                );
+            }
             anyhow::Ok(())
         }
         .await;
@@ -814,7 +807,7 @@ impl LiftSession {
         state.running = false;
         state.last_error = None;
         log::info!(
-            "Lift: detached node 0x{:02X} in Pre-operational",
+            "Lift: detached node 0x{:02X} (left Operational; motor safe)",
             self.node_id
         );
         Ok(())
@@ -891,45 +884,22 @@ impl LiftSession {
         let bus = &*self.bus;
         let nid = self.node_id;
         let timeout = self.sdo_timeout;
+        // v0.4 0x4600 is read-only capability subs (§8): scale, the
+        // firmware-derived soft-limit range, and the velocity cap/release
+        // deadband. Every other motion/homing/electrical constant is internal
+        // and no longer on the wire.
         let counts_per_meter = sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 1, timeout).await?;
         let position_min_m = sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 2, timeout).await?;
         let position_max_m = sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 3, timeout).await?;
         let velocity_max_mps = sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 4, timeout).await?;
-        let acceleration_limit_mps2 =
-            sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 5, timeout).await?;
-        let homing_speed_mps = sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 6, timeout).await?;
-        let homing_stall_bus_current_a =
-            sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 7, timeout).await?;
-        let homing_stall_speed_mps =
-            sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 8, timeout).await?;
-        let homing_arm_time_ms = sdo::upload_u16(bus, nid, EFFECTIVE_PARAMS, 9, timeout).await?;
-        let homing_confirm_time_ms =
-            sdo::upload_u16(bus, nid, EFFECTIVE_PARAMS, 10, timeout).await?;
-        let homing_timeout_ms = sdo::upload_u32(bus, nid, EFFECTIVE_PARAMS, 11, timeout).await?;
-        let velocity_watchdog_time_ms =
-            sdo::upload_u16(bus, nid, EFFECTIVE_PARAMS, 12, timeout).await?;
-        let position_tolerance_m = sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 13, timeout).await?;
-        let max_bus_current_a = sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 14, timeout).await?;
-        let bus_voltage_min_v = sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 15, timeout).await?;
-        let bus_voltage_max_v = sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 16, timeout).await?;
+        let velocity_min_mps = sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 5, timeout).await?;
 
         let mut state = self.state.lock().unwrap();
         state.counts_per_meter = counts_per_meter;
         state.position_min_m = position_min_m;
         state.position_max_m = position_max_m;
         state.velocity_max_mps = velocity_max_mps;
-        state.acceleration_limit_mps2 = acceleration_limit_mps2;
-        state.homing_speed_mps = homing_speed_mps;
-        state.homing_stall_bus_current_a = homing_stall_bus_current_a;
-        state.homing_stall_speed_mps = homing_stall_speed_mps;
-        state.homing_arm_time_ms = homing_arm_time_ms;
-        state.homing_confirm_time_ms = homing_confirm_time_ms;
-        state.homing_timeout_ms = homing_timeout_ms;
-        state.velocity_watchdog_time_ms = velocity_watchdog_time_ms;
-        state.position_tolerance_m = position_tolerance_m;
-        state.max_bus_current_a = max_bus_current_a;
-        state.bus_voltage_min_v = bus_voltage_min_v;
-        state.bus_voltage_max_v = bus_voltage_max_v;
+        state.velocity_min_mps = velocity_min_mps;
         Ok(())
     }
 
@@ -944,20 +914,15 @@ impl LiftSession {
         let actual_position_m = sdo::upload_f32(bus, nid, ACTUAL_POSITION, 0, timeout).await?;
         let actual_velocity_mps = sdo::upload_f32(bus, nid, ACTUAL_VELOCITY, 0, timeout).await?;
         let sample_timestamp_us = sdo::upload_u16(bus, nid, SAMPLE_TIMESTAMP, 0, timeout).await?;
+        // v0.4 0x4601 is five subs (§8): 1 bus_voltage f32, 2 bus_current f32,
+        // 3 encoder_count i32, 4 duty_command i16, 5 sensor_status u8. These are
+        // read separately from TPDO2 because a fresh TPDO2 can legally repeat the
+        // last successful INA values after the sensor task has failed/gone stale.
         let bus_voltage_v = sdo::upload_f32(bus, nid, DIAGNOSTICS, 1, timeout).await?;
         let bus_current_a = sdo::upload_f32(bus, nid, DIAGNOSTICS, 2, timeout).await?;
-        let bus_power_w = sdo::upload_f32(bus, nid, DIAGNOSTICS, 3, timeout).await?;
-        let ina_temperature_c = sdo::upload_f32(bus, nid, DIAGNOSTICS, 4, timeout).await?;
-        let encoder_count = read_i32(bus, nid, DIAGNOSTICS, 5, timeout).await?;
-        let duty_command_permille = read_i16(bus, nid, DIAGNOSTICS, 6, timeout).await?;
-        let control_loop_hz = sdo::upload_u16(bus, nid, DIAGNOSTICS, 7, timeout).await?;
-        // These are deliberately read separately from TPDO2. A fresh TPDO2 can
-        // legally repeat the last successful INA values after the sensor task
-        // has failed or gone stale.
-        let sensor_status = sdo::upload_u8(bus, nid, DIAGNOSTICS, 8, timeout).await?;
-        let ina_diag = sdo::upload_u16(bus, nid, DIAGNOSTICS, 9, timeout).await?;
-        let ina_sample_age_ms = sdo::upload_u16(bus, nid, DIAGNOSTICS, 10, timeout).await?;
-        let ina_fault_count = sdo::upload_u32(bus, nid, DIAGNOSTICS, 11, timeout).await?;
+        let encoder_count = read_i32(bus, nid, DIAGNOSTICS, 3, timeout).await?;
+        let duty_command_permille = read_i16(bus, nid, DIAGNOSTICS, 4, timeout).await?;
+        let sensor_status = sdo::upload_u8(bus, nid, DIAGNOSTICS, 5, timeout).await?;
 
         {
             let mut state = self.state.lock().unwrap();
@@ -970,15 +935,9 @@ impl LiftSession {
             state.sample_timestamp_us = sample_timestamp_us;
             state.bus_voltage_v = bus_voltage_v;
             state.bus_current_a = bus_current_a;
-            state.bus_power_w = bus_power_w;
-            state.ina_temperature_c = ina_temperature_c;
             state.encoder_count = encoder_count;
             state.duty_command_permille = duty_command_permille;
-            state.control_loop_hz = control_loop_hz;
             state.sensor_status = sensor_status;
-            state.ina_diag = ina_diag;
-            state.ina_sample_age_ms = ina_sample_age_ms;
-            state.ina_fault_count = ina_fault_count;
         }
         self.commissioning.refresh_locked().await?;
         Ok(())
@@ -1000,11 +959,10 @@ impl LiftSession {
                 state.tpdo2_fresh
             );
         }
-        if !sensor_snapshot_healthy(state.sensor_status, state.ina_sample_age_ms) {
+        if !sensor_snapshot_healthy(state.sensor_status) {
             anyhow::bail!(
-                "lift sensor sample is not healthy (status=0x{:02X}, INA age={} ms)",
-                state.sensor_status,
-                state.ina_sample_age_ms
+                "lift sensor sample is not healthy (status=0x{:02X})",
+                state.sensor_status
             );
         }
         if state.nmt_state != NMT_OPERATIONAL {
@@ -1029,9 +987,24 @@ impl LiftSession {
         Ok(())
     }
 
-    async fn wait_for_nmt(&self, expected: u8, timeout: Duration) -> anyhow::Result<()> {
+    /// Drive the node to `expected` (a heartbeat state byte) by (re)issuing
+    /// `command`, tolerating an occasional dropped NMT frame. NMT is the
+    /// highest-priority COB-ID on the bus, so re-sending it every ~150 ms while
+    /// we poll the heartbeat is cheap and never loses arbitration to telemetry.
+    /// Returns as soon as a fresh heartbeat confirms the new state.
+    async fn nmt_transition(
+        &self,
+        command: u8,
+        expected: u8,
+        timeout: Duration,
+    ) -> anyhow::Result<()> {
         let deadline = Instant::now() + timeout;
+        let mut next_send = Instant::now();
         loop {
+            if Instant::now() >= next_send {
+                let _ = send_nmt(&self.bus, command, self.node_id).await;
+                next_send = Instant::now() + Duration::from_millis(150);
+            }
             self.sync_freshness();
             let (online, actual) = {
                 let state = self.state.lock().unwrap();
@@ -1042,7 +1015,7 @@ impl LiftSession {
             }
             if Instant::now() >= deadline {
                 anyhow::bail!(
-                    "NMT confirmation timed out: expected 0x{expected:02X}, latest 0x{actual:02X}, online={online}"
+                    "NMT transition timed out: command 0x{command:02X}, expected 0x{expected:02X}, latest 0x{actual:02X}, online={online}"
                 );
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1268,7 +1241,7 @@ async fn velocity_loop(
                     Some("heartbeat became stale")
                 } else if !state.tpdo1_fresh || !state.tpdo2_fresh {
                     Some("TPDO telemetry became stale")
-                } else if !sensor_snapshot_healthy(state.sensor_status, state.ina_sample_age_ms) {
+                } else if !sensor_snapshot_healthy(state.sensor_status) {
                     Some("encoder/INA sensor sample became unhealthy")
                 } else if state.nmt_state != NMT_OPERATIONAL {
                     Some("NMT left Operational")
@@ -1397,10 +1370,10 @@ fn parse_tpdo2(data: &[u8]) -> Option<(f32, f32)> {
     ))
 }
 
-fn sensor_snapshot_healthy(status: u8, ina_age_ms: u16) -> bool {
-    status & SENSOR_MOTION_REQUIRED == SENSOR_MOTION_REQUIRED
-        && status & SENSOR_UNHEALTHY == 0
-        && ina_age_ms <= INA_FRESH_MAX_AGE_MS
+fn sensor_snapshot_healthy(status: u8) -> bool {
+    // v0.4 folds INA-sample-age into the INA_FRESH bit (age ≤ 100 ms), so no
+    // separate age field is read; freshness is required via SENSOR_MOTION_REQUIRED.
+    status & SENSOR_MOTION_REQUIRED == SENSOR_MOTION_REQUIRED && status & SENSOR_UNHEALTHY == 0
 }
 
 fn lift_nameplate_crc(layout_id: u32, used: u8, payload: &[u32; 64]) -> u32 {
@@ -1480,51 +1453,40 @@ mod tests {
     }
 
     #[test]
-    fn sensor_health_is_not_implied_by_fresh_tpdo2_frames() {
+    fn sensor_health_requires_every_v04_sensor_bit() {
         let required = SENSOR_MOTION_REQUIRED;
-        assert!(sensor_snapshot_healthy(required, INA_FRESH_MAX_AGE_MS));
-        assert!(!sensor_snapshot_healthy(required, INA_FRESH_MAX_AGE_MS + 1));
+        assert!(sensor_snapshot_healthy(required));
 
         for missing in [
             SENSOR_ENCODER_READY,
             SENSOR_INA_PRESENT,
             SENSOR_INA_FRESH,
             SENSOR_SAMPLE_VALID,
-            SENSOR_ENCODER_DIRECTION_QUALIFIED,
         ] {
-            assert!(!sensor_snapshot_healthy(required & !missing, 0));
+            assert!(!sensor_snapshot_healthy(required & !missing));
         }
-        assert!(!sensor_snapshot_healthy(required | SENSOR_INA_ALERT, 0));
-        assert!(!sensor_snapshot_healthy(
-            required | SENSOR_INA_READ_ERROR,
-            0
-        ));
+        assert!(!sensor_snapshot_healthy(required | SENSOR_INA_ALERT));
 
-        // TPDO2 freshness is maintained by a separate receive timestamp and
-        // therefore cannot make a stale INA snapshot healthy.
+        // TPDO2 freshness is tracked by a separate receive timestamp, so a fresh
+        // TPDO2 frame cannot make an unhealthy sensor snapshot pass.
         let mut state = LiftState {
             tpdo2_fresh: true,
             sensor_status: required & !SENSOR_INA_FRESH,
             ..Default::default()
         };
         assert!(state.tpdo2_fresh);
-        assert!(!sensor_snapshot_healthy(
-            state.sensor_status,
-            state.ina_sample_age_ms
-        ));
+        assert!(!sensor_snapshot_healthy(state.sensor_status));
         state.sensor_status = required;
-        state.ina_sample_age_ms = INA_FRESH_MAX_AGE_MS;
-        assert!(sensor_snapshot_healthy(
-            state.sensor_status,
-            state.ina_sample_age_ms
-        ));
+        assert!(sensor_snapshot_healthy(state.sensor_status));
     }
 
-    /// Explicit commissioning smoke test for the current bridge-disabled
-    /// lift firmware. It is ignored in normal CI because it owns real CAN.
+    /// Live attach smoke test for the v0.4 single driving image: reach
+    /// Operational with fresh telemetry and confirm CONFIG_VALID, then detach
+    /// safely. It deliberately does not command motion (that requires homing
+    /// first) and is ignored in normal CI because it owns real CAN.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "requires LIFT_HW_IFACE (default can0) and a lift at node 20"]
-    async fn hardware_bridge_disabled_smoke() -> anyhow::Result<()> {
+    async fn hardware_operational_smoke() -> anyhow::Result<()> {
         let iface = std::env::var("LIFT_HW_IFACE").unwrap_or_else(|_| "can0".into());
         let node_id = std::env::var("LIFT_HW_NODE")
             .ok()
@@ -1565,12 +1527,12 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
 
+            // v0.4 is a single driving image: a provisioned board reports
+            // CONFIG_VALID. Motion still requires homing first, which this
+            // unattended smoke test deliberately does not perform.
             let state = session.refresh().await?;
-            if state.status_word & STATUS_CONFIG_VALID != 0 {
-                anyhow::bail!("commissioning firmware unexpectedly reports CONFIG_VALID");
-            }
-            if session.set_position(0.1).await.is_ok() {
-                anyhow::bail!("Position unexpectedly passed the fail-closed gate");
+            if state.status_word & STATUS_CONFIG_VALID == 0 {
+                anyhow::bail!("lift firmware did not report CONFIG_VALID");
             }
             anyhow::Ok(())
         }

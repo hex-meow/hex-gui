@@ -188,31 +188,15 @@ export interface LiftState {
   sample_timestamp_us: number;
   bus_voltage_v: number;
   bus_current_a: number;
-  bus_power_w: number;
-  ina_temperature_c: number;
   encoder_count: number;
   duty_command_permille: number;
-  control_loop_hz: number;
   sensor_status: number;
-  ina_diag: number;
-  ina_sample_age_ms: number;
-  ina_fault_count: number;
+  // 0x4600 effective parameters (v0.4: firmware-derived soft limits + scale).
   counts_per_meter: number;
   position_min_m: number;
   position_max_m: number;
   velocity_max_mps: number;
-  acceleration_limit_mps2: number;
-  homing_speed_mps: number;
-  homing_stall_bus_current_a: number;
-  homing_stall_speed_mps: number;
-  homing_arm_time_ms: number;
-  homing_confirm_time_ms: number;
-  homing_timeout_ms: number;
-  velocity_watchdog_time_ms: number;
-  position_tolerance_m: number;
-  max_bus_current_a: number;
-  bus_voltage_min_v: number;
-  bus_voltage_max_v: number;
+  velocity_min_mps: number;
   commissioning: LiftCommissionView;
   last_error: string | null;
 }
