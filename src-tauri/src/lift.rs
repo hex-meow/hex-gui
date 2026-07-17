@@ -55,6 +55,10 @@ const NMT_OPERATIONAL: u8 = 0x05;
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_millis(1_200);
 const TPDO_TIMEOUT: Duration = Duration::from_millis(500);
 const VELOCITY_LEASE_TIMEOUT: Duration = Duration::from_millis(250);
+// Match the Analyzer SDO tab: a busy bus gets 500 ms per attempt and one
+// retry. `canopen-sdo` names this parameter `retries`, but it is total attempts.
+const SDO_MIN_TIMEOUT: Duration = Duration::from_millis(500);
+const SDO_ATTEMPTS: u8 = 2;
 // The firmware velocity watchdog (0.4 lift_70) is 200 ms and is no longer read
 // from the OD, so the host streams RPDO1 at a fixed safe margin under it.
 const VELOCITY_STREAM_PERIOD_MS: u64 = 40;
@@ -186,7 +190,9 @@ impl LiftSession {
         // operation before starting Lift's serialized direct-SDO session.
         // A successful identify changes the manager entry out of Unknown, so
         // discovery will not start another background identify every heartbeat.
-        let identify_deadline = Instant::now() + mgr.options().sdo_timeout * 3;
+        let sdo_timeout = mgr.options().sdo_timeout.max(SDO_MIN_TIMEOUT);
+        let identify_deadline = Instant::now() + sdo_timeout * 6;
+        let mut identify_attempts = 0u8;
         loop {
             match mgr.identify(node_id).await {
                 Ok(()) => break,
@@ -197,7 +203,16 @@ impl LiftSession {
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
                 Err(error) => {
-                    anyhow::bail!("settle manager identification for lift 0x{node_id:02X}: {error}")
+                    identify_attempts = identify_attempts.saturating_add(1);
+                    if identify_attempts >= SDO_ATTEMPTS || Instant::now() >= identify_deadline {
+                        anyhow::bail!(
+                            "settle manager identification for lift 0x{node_id:02X} after {identify_attempts} attempts: {error}"
+                        )
+                    }
+                    log::warn!(
+                        "Lift 0x{node_id:02X}: manager identification attempt {identify_attempts}/{SDO_ATTEMPTS} failed: {error}; retrying"
+                    );
+                    tokio::time::sleep(Duration::from_millis(20)).await;
                 }
             }
         }
@@ -228,7 +243,7 @@ impl LiftSession {
         let commissioning = Commissioning::start(
             bus.clone(),
             node_id,
-            Some(mgr.options().sdo_timeout),
+            Some(sdo_timeout),
             sdo_gate.clone(),
             state.clone(),
         )
@@ -237,7 +252,7 @@ impl LiftSession {
         let session = Self {
             node_id,
             bus,
-            sdo_timeout: Some(mgr.options().sdo_timeout),
+            sdo_timeout: Some(sdo_timeout),
             sdo_gate,
             state,
             freshness,
@@ -767,7 +782,7 @@ impl LiftSession {
                 .await
                 .map_err(|e| anyhow::anyhow!("detach Disabled write: {e}"))?;
                 let mode_command =
-                    sdo::upload_u8(&*self.bus, self.node_id, MODE_COMMAND, 0, self.sdo_timeout)
+                    read_u8(&*self.bus, self.node_id, MODE_COMMAND, 0, self.sdo_timeout)
                         .await
                         .map_err(|e| anyhow::anyhow!("detach Disabled readback: {e}"))?;
                 if mode_command != MODE_DISABLED {
@@ -827,13 +842,13 @@ impl LiftSession {
         let nid = self.node_id;
         let timeout = self.sdo_timeout;
 
-        let device_name = sdo::upload_string(bus, nid, 0x1008, 0, timeout).await?;
-        let firmware_version = sdo::upload_string(bus, nid, 0x100A, 0, timeout).await?;
+        let device_name = read_string(bus, nid, 0x1008, 0, timeout).await?;
+        let firmware_version = read_string(bus, nid, 0x100A, 0, timeout).await?;
         self.commissioning.probe_identity(&device_name).await?;
-        let nameplate_kind = sdo::upload_u8(bus, nid, 0x5F00, 1, timeout).await?;
+        let nameplate_kind = read_u8(bus, nid, 0x5F00, 1, timeout).await?;
         let mut model_raw = Vec::with_capacity(32);
         for sub in 1..=4 {
-            model_raw.extend(sdo::upload(bus, nid, 0x5F01, sub, timeout).await?);
+            model_raw.extend(read_bytes(bus, nid, 0x5F01, sub, timeout).await?);
         }
         model_raw.truncate(32);
         let model_end = model_raw
@@ -841,14 +856,14 @@ impl LiftSession {
             .position(|byte| *byte == 0)
             .unwrap_or(model_raw.len());
         let model = String::from_utf8_lossy(&model_raw[..model_end]).into_owned();
-        let layout_id = sdo::upload_u32(bus, nid, 0x5F02, 1, timeout).await?;
-        let nameplate_used = sdo::upload_u8(bus, nid, 0x5F02, 2, timeout).await?;
-        let nameplate_crc32 = sdo::upload_u32(bus, nid, 0x5F02, 3, timeout).await?;
+        let layout_id = read_u32(bus, nid, 0x5F02, 1, timeout).await?;
+        let nameplate_used = read_u8(bus, nid, 0x5F02, 2, timeout).await?;
+        let nameplate_crc32 = read_u32(bus, nid, 0x5F02, 3, timeout).await?;
 
         let mut payload = [0u32; 64];
         let packed_count = usize::from(nameplate_used).min(payload.len()).div_ceil(2);
         for packed_index in 0..packed_count {
-            let raw = sdo::upload(bus, nid, 0x5F03, (packed_index + 1) as u8, timeout).await?;
+            let raw = read_bytes(bus, nid, 0x5F03, (packed_index + 1) as u8, timeout).await?;
             if raw.len() < 8 {
                 anyhow::bail!(
                     "nameplate payload 0x5F03:{:02X} returned {} bytes",
@@ -888,11 +903,11 @@ impl LiftSession {
         // firmware-derived soft-limit range, and the velocity cap/release
         // deadband. Every other motion/homing/electrical constant is internal
         // and no longer on the wire.
-        let counts_per_meter = sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 1, timeout).await?;
-        let position_min_m = sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 2, timeout).await?;
-        let position_max_m = sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 3, timeout).await?;
-        let velocity_max_mps = sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 4, timeout).await?;
-        let velocity_min_mps = sdo::upload_f32(bus, nid, EFFECTIVE_PARAMS, 5, timeout).await?;
+        let counts_per_meter = read_f32(bus, nid, EFFECTIVE_PARAMS, 1, timeout).await?;
+        let position_min_m = read_f32(bus, nid, EFFECTIVE_PARAMS, 2, timeout).await?;
+        let position_max_m = read_f32(bus, nid, EFFECTIVE_PARAMS, 3, timeout).await?;
+        let velocity_max_mps = read_f32(bus, nid, EFFECTIVE_PARAMS, 4, timeout).await?;
+        let velocity_min_mps = read_f32(bus, nid, EFFECTIVE_PARAMS, 5, timeout).await?;
 
         let mut state = self.state.lock().unwrap();
         state.counts_per_meter = counts_per_meter;
@@ -907,22 +922,22 @@ impl LiftSession {
         let bus = &*self.bus;
         let nid = self.node_id;
         let timeout = self.sdo_timeout;
-        let mode_command = sdo::upload_u8(bus, nid, MODE_COMMAND, 0, timeout).await?;
-        let mode_display = sdo::upload_u8(bus, nid, MODE_DISPLAY, 0, timeout).await?;
-        let status_word = sdo::upload_u8(bus, nid, STATUS_WORD, 0, timeout).await?;
-        let detailed_fault = sdo::upload_u16(bus, nid, DETAILED_FAULT, 0, timeout).await?;
-        let actual_position_m = sdo::upload_f32(bus, nid, ACTUAL_POSITION, 0, timeout).await?;
-        let actual_velocity_mps = sdo::upload_f32(bus, nid, ACTUAL_VELOCITY, 0, timeout).await?;
-        let sample_timestamp_us = sdo::upload_u16(bus, nid, SAMPLE_TIMESTAMP, 0, timeout).await?;
+        let mode_command = read_u8(bus, nid, MODE_COMMAND, 0, timeout).await?;
+        let mode_display = read_u8(bus, nid, MODE_DISPLAY, 0, timeout).await?;
+        let status_word = read_u8(bus, nid, STATUS_WORD, 0, timeout).await?;
+        let detailed_fault = read_u16(bus, nid, DETAILED_FAULT, 0, timeout).await?;
+        let actual_position_m = read_f32(bus, nid, ACTUAL_POSITION, 0, timeout).await?;
+        let actual_velocity_mps = read_f32(bus, nid, ACTUAL_VELOCITY, 0, timeout).await?;
+        let sample_timestamp_us = read_u16(bus, nid, SAMPLE_TIMESTAMP, 0, timeout).await?;
         // v0.4 0x4601 is five subs (§8): 1 bus_voltage f32, 2 bus_current f32,
         // 3 encoder_count i32, 4 duty_command i16, 5 sensor_status u8. These are
         // read separately from TPDO2 because a fresh TPDO2 can legally repeat the
         // last successful INA values after the sensor task has failed/gone stale.
-        let bus_voltage_v = sdo::upload_f32(bus, nid, DIAGNOSTICS, 1, timeout).await?;
-        let bus_current_a = sdo::upload_f32(bus, nid, DIAGNOSTICS, 2, timeout).await?;
+        let bus_voltage_v = read_f32(bus, nid, DIAGNOSTICS, 1, timeout).await?;
+        let bus_current_a = read_f32(bus, nid, DIAGNOSTICS, 2, timeout).await?;
         let encoder_count = read_i32(bus, nid, DIAGNOSTICS, 3, timeout).await?;
         let duty_command_permille = read_i16(bus, nid, DIAGNOSTICS, 4, timeout).await?;
-        let sensor_status = sdo::upload_u8(bus, nid, DIAGNOSTICS, 5, timeout).await?;
+        let sensor_status = read_u8(bus, nid, DIAGNOSTICS, 5, timeout).await?;
 
         {
             let mut state = self.state.lock().unwrap();
@@ -1025,10 +1040,15 @@ impl LiftSession {
     async fn wait_for_mode(&self, expected: u8, timeout: Duration) -> anyhow::Result<()> {
         let deadline = Instant::now() + timeout;
         loop {
-            let actual =
-                sdo::upload_u8(&*self.bus, self.node_id, MODE_DISPLAY, 0, self.sdo_timeout)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("read ModeDisplay confirmation: {e}"))?;
+            let actual = read_u8(
+                &*self.bus,
+                self.node_id,
+                MODE_DISPLAY,
+                0,
+                self.sdo_timeout,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("read ModeDisplay confirmation: {e}"))?;
             self.state.lock().unwrap().mode_display = actual;
             if actual == expected {
                 return Ok(());
@@ -1314,6 +1334,101 @@ async fn send_rpdo_velocity(
         .map_err(|e| anyhow::anyhow!("send lift RPDO1: {e}"))
 }
 
+/// Lift diagnostics perform many consecutive SDO reads during attach/refresh.
+/// Use the same retrying engine and policy as the Analyzer SDO tab so one
+/// response delayed by a busy bus does not discard the whole session.
+async fn read_bytes(
+    bus: &(impl CanBus + ?Sized),
+    nid: u8,
+    index: u16,
+    sub: u8,
+    timeout: Option<Duration>,
+) -> anyhow::Result<Vec<u8>> {
+    canopen_sdo::asynch::upload_bytes_retry(bus, nid, index, sub, timeout, SDO_ATTEMPTS)
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "SDO read 0x{index:04X}:{sub:02X} failed after {SDO_ATTEMPTS} attempts: {error}"
+            )
+        })
+}
+
+async fn read_u8(
+    bus: &(impl CanBus + ?Sized),
+    nid: u8,
+    index: u16,
+    sub: u8,
+    timeout: Option<Duration>,
+) -> anyhow::Result<u8> {
+    let raw = read_bytes(bus, nid, index, sub, timeout).await?;
+    raw.first().copied().ok_or_else(|| {
+        anyhow::anyhow!("0x{index:04X}:{sub:02X}: expected u8, got 0 bytes")
+    })
+}
+
+async fn read_u16(
+    bus: &(impl CanBus + ?Sized),
+    nid: u8,
+    index: u16,
+    sub: u8,
+    timeout: Option<Duration>,
+) -> anyhow::Result<u16> {
+    let raw = read_bytes(bus, nid, index, sub, timeout).await?;
+    if raw.len() < 2 {
+        anyhow::bail!(
+            "0x{index:04X}:{sub:02X}: expected u16, got {} bytes",
+            raw.len()
+        );
+    }
+    Ok(u16::from_le_bytes(raw[..2].try_into().unwrap()))
+}
+
+async fn read_u32(
+    bus: &(impl CanBus + ?Sized),
+    nid: u8,
+    index: u16,
+    sub: u8,
+    timeout: Option<Duration>,
+) -> anyhow::Result<u32> {
+    let raw = read_bytes(bus, nid, index, sub, timeout).await?;
+    if raw.len() < 4 {
+        anyhow::bail!(
+            "0x{index:04X}:{sub:02X}: expected u32, got {} bytes",
+            raw.len()
+        );
+    }
+    Ok(u32::from_le_bytes(raw[..4].try_into().unwrap()))
+}
+
+async fn read_f32(
+    bus: &(impl CanBus + ?Sized),
+    nid: u8,
+    index: u16,
+    sub: u8,
+    timeout: Option<Duration>,
+) -> anyhow::Result<f32> {
+    let raw = read_bytes(bus, nid, index, sub, timeout).await?;
+    if raw.len() < 4 {
+        anyhow::bail!(
+            "0x{index:04X}:{sub:02X}: expected f32, got {} bytes",
+            raw.len()
+        );
+    }
+    Ok(f32::from_le_bytes(raw[..4].try_into().unwrap()))
+}
+
+async fn read_string(
+    bus: &(impl CanBus + ?Sized),
+    nid: u8,
+    index: u16,
+    sub: u8,
+    timeout: Option<Duration>,
+) -> anyhow::Result<String> {
+    let raw = read_bytes(bus, nid, index, sub, timeout).await?;
+    let end = raw.iter().position(|byte| *byte == 0).unwrap_or(raw.len());
+    Ok(String::from_utf8_lossy(&raw[..end]).into_owned())
+}
+
 async fn read_i32(
     bus: &(impl CanBus + ?Sized),
     nid: u8,
@@ -1321,7 +1436,7 @@ async fn read_i32(
     sub: u8,
     timeout: Option<Duration>,
 ) -> anyhow::Result<i32> {
-    let raw = sdo::upload(bus, nid, index, sub, timeout).await?;
+    let raw = read_bytes(bus, nid, index, sub, timeout).await?;
     if raw.len() < 4 {
         anyhow::bail!(
             "0x{index:04X}:{sub:02X}: expected i32, got {} bytes",
@@ -1338,7 +1453,7 @@ async fn read_i16(
     sub: u8,
     timeout: Option<Duration>,
 ) -> anyhow::Result<i16> {
-    let raw = sdo::upload(bus, nid, index, sub, timeout).await?;
+    let raw = read_bytes(bus, nid, index, sub, timeout).await?;
     if raw.len() < 2 {
         anyhow::bail!(
             "0x{index:04X}:{sub:02X}: expected i16, got {} bytes",

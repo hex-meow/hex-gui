@@ -618,17 +618,12 @@ function TraceRow({
   const idText = idHex(f.id, f.extended);
   const decodeText = dec?.detail ?? f.kind;
   return (
-    <div
-      className={`can-trace-row${f.dir === "tx" ? " can-trace-row--tx" : ""}`}
-      style={{ top, height: ROW_H, gridTemplateColumns: gridTemplate }}
-    >
+    <div className="can-trace-row" style={{ top, height: ROW_H, gridTemplateColumns: gridTemplate }}>
       <span className="can-trace-cell can-trace-cell--muted" title={String(f.seq)}>{f.seq}</span>
       <span className="can-trace-cell can-trace-cell--muted" title={(f.t_us / 1000).toFixed(1)}>
         {(f.t_us / 1000).toFixed(1)}
       </span>
-      <span className="can-trace-cell">
-        {f.dir === "tx" ? <Tag color="blue" style={{ marginInlineEnd: 0 }}>TX</Tag> : <span style={{ color: "#555" }}>rx</span>}
-      </span>
+      <span className="can-trace-cell can-trace-cell--muted">{f.dir}</span>
       <span className="can-trace-cell" title={dec ? dec.label : idText}>
         {dec ? (
           <Tag color={kindColor(dec.kind)} style={{ marginInlineEnd: 0 }}>{dec.label}</Tag>

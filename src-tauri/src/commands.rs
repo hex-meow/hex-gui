@@ -6,6 +6,7 @@
 //! serialises overlapping ops via its `inflight_ops` set).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use hex_motor::cia402::{Cia402Manager, Cia402ManagerOptions};
 use hex_motor::types::MotorMode;
@@ -85,6 +86,9 @@ pub async fn connect(
     let opts = Cia402ManagerOptions {
         heartbeat_node_id: our_nid,
         broadcast_heartbeat,
+        // Match the Analyzer SDO tab's proven busy-bus timeout. Normal SDOs
+        // still complete immediately; this only widens the failure deadline.
+        sdo_timeout: Duration::from_millis(500),
         ..Default::default()
     };
     let mgr = Cia402Manager::new(bus, opts).map_err(err)?;
