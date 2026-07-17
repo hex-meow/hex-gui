@@ -14,7 +14,13 @@ interface BasePoseViewerProps {
 }
 
 const MAX_TRAIL = 500;
+const MOTION_EPSILON = 1e-4;
+const FULL_LINEAR_SPEED_MPS = 1;
+const FULL_ANGULAR_SPEED_RPS = 1;
 const VELOCITY_ARROW_Y = 0.48;
+const VELOCITY_ARROW_MAX_LENGTH = 1.25;
+const VELOCITY_ARROW_MAX_HEAD_LENGTH = 0.18;
+const VELOCITY_ARROW_MAX_HEAD_WIDTH = 0.09;
 
 export function BasePoseViewer({ connected, poseX, poseY, theta, vx, vy, wz }: BasePoseViewerProps) {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -145,19 +151,24 @@ export function BasePoseViewer({ connected, poseX, poseY, theta, vx, vy, wz }: B
     robot.rotation.y = -theta;
 
     const speed = Math.hypot(vx, vy);
-    if (speed > 1e-4) {
+    if (speed > MOTION_EPSILON) {
+      const velocityScale = Math.min(speed / FULL_LINEAR_SPEED_MPS, 1);
       velocity.visible = true;
       velocity.position.set(0, VELOCITY_ARROW_Y, 0);
       velocity.setDirection(new THREE.Vector3(vx, 0, vy).normalize());
-      velocity.setLength(Math.min(1.25, 0.35 + speed * 1.6), 0.18, 0.09);
+      velocity.setLength(
+        VELOCITY_ARROW_MAX_LENGTH * velocityScale,
+        VELOCITY_ARROW_MAX_HEAD_LENGTH * velocityScale,
+        VELOCITY_ARROW_MAX_HEAD_WIDTH * velocityScale,
+      );
     } else {
       velocity.visible = false;
     }
 
     const yawSpeed = Math.abs(wz);
-    yawLeft.visible = wz > 1e-4;
-    yawRight.visible = wz < -1e-4;
-    const yawScale = 0.86 + Math.min(0.18, yawSpeed * 0.08);
+    yawLeft.visible = wz > MOTION_EPSILON;
+    yawRight.visible = wz < -MOTION_EPSILON;
+    const yawScale = Math.min(yawSpeed / FULL_ANGULAR_SPEED_RPS, 1);
     yawLeft.scale.setScalar(yawScale);
     yawRight.scale.setScalar(yawScale);
 
