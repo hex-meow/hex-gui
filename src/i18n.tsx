@@ -670,6 +670,8 @@ const STRINGS = {
   liftJogUp: { en: "Hold: up", zh: "按住：上升" },
   liftPositionGoal: { en: "Autonomous position goal", zh: "自主位置目标" },
   liftSendGoal: { en: "Send goal", zh: "发送目标" },
+  liftGoToMinimum: { en: "Go to minimum", zh: "一键最小" },
+  liftGoToMaximum: { en: "Go to maximum", zh: "一键最大" },
   liftGoalSent: { en: "Position goal sent", zh: "位置目标已发送" },
   liftTelemetry: { en: "Live telemetry", zh: "实时遥测" },
   liftActualPosition: { en: "Position", zh: "位置" },
