@@ -124,6 +124,83 @@ export interface Hopea3State {
   running: boolean;
 }
 
+export interface LiftCommissionView {
+  available: boolean;
+  abi: number;
+  active_session: number;
+  boot_epoch: number;
+  challenge: number;
+  challenge_kind: number;
+  expected_pulse_id: number;
+  encoder_sign: number;
+  ina_fingerprint_mismatch: number;
+  epoch_status: number;
+  state: number;
+  flags: number;
+  requested_duty_permille: number;
+  applied_duty_permille: number;
+  hard_cap_permille: number;
+  lease_ms: number;
+  max_pulse_ms: number;
+  pulse_elapsed_ms: number;
+  command_age_ms: number;
+  stop_reason: number;
+  soft_current_a: number;
+  active_pulse: number;
+  energized_ms: number;
+  foldback_cap_permille: number;
+  overcurrent_ms: number;
+  gap_remaining_ms: number;
+  hard_current_a: number;
+  tpdo3_fresh: boolean;
+  tpdo4_fresh: boolean;
+  pair_fresh: boolean;
+  tick: number;
+  raw_count: number;
+  current_a: number;
+  host_remaining_ms: number;
+  buffered_samples: number;
+  dropped_pairs: number;
+}
+
+// ── Lift raw-CAN application (mirrors lift::LiftState) ──
+export interface LiftState {
+  running: boolean;
+  node_id: number;
+  online: boolean;
+  tpdo1_fresh: boolean;
+  tpdo2_fresh: boolean;
+  nmt_state: number;
+  device_name: string;
+  firmware_version: string;
+  nameplate_kind: number;
+  model: string;
+  layout_id: number;
+  nameplate_used: number;
+  nameplate_crc32: number;
+  nameplate_crc_ok: boolean;
+  mode_command: number;
+  mode_display: number;
+  status_word: number;
+  detailed_fault: number;
+  actual_position_m: number;
+  actual_velocity_mps: number;
+  sample_timestamp_us: number;
+  bus_voltage_v: number;
+  bus_current_a: number;
+  encoder_count: number;
+  duty_command_permille: number;
+  sensor_status: number;
+  // 0x4600 effective parameters (v0.4: firmware-derived soft limits + scale).
+  counts_per_meter: number;
+  position_min_m: number;
+  position_max_m: number;
+  velocity_max_mps: number;
+  velocity_min_mps: number;
+  commissioning: LiftCommissionView;
+  last_error: string | null;
+}
+
 // ── SmartKnob Robot Application (mirrors smartknob::KnobConfig / SmartKnobState) ──
 export interface KnobConfig {
   position: number;
@@ -174,6 +251,76 @@ export interface SmartKnobState {
   d_gain: number;
 }
 
+export type SmartKnobKind = "canopen" | "rollercan";
+export type SmartKnobControlSide = "host" | "firmware";
+export type SmartKnobEffortUnit = "Nm" | "A";
+
+/** Protocol-qualified address. Node IDs may overlap across device kinds. */
+export interface SmartKnobTarget {
+  kind: SmartKnobKind;
+  nodeId: number;
+}
+
+export interface SmartKnobDevice {
+  target: SmartKnobTarget;
+  name: string;
+  online: boolean;
+  controlSide: SmartKnobControlSide;
+  effortUnit: SmartKnobEffortUnit;
+}
+
+export interface SmartKnobProfile {
+  target: SmartKnobTarget;
+  configs: KnobConfig[];
+  controlSide: SmartKnobControlSide;
+  effortUnit: SmartKnobEffortUnit;
+  supportsTemperature: boolean;
+  supportsTelemetry: boolean;
+  effortLimitMax: number;
+  maxOutputPermille: number;
+  telemetryEnabled: boolean | null;
+  telemetryRateHz: number | null;
+}
+
+export interface SmartKnobTuning {
+  pGain: number;
+  dGain: number;
+  strengthScale: number;
+  effortLimit: number;
+  maxOutputPermille: number;
+  frictionCompensation: number;
+  clickEffort: number;
+}
+
+export interface SmartKnobTelemetry {
+  enabled: boolean;
+  rateHz: number;
+}
+
+export interface SmartKnobStartRequest {
+  target: SmartKnobTarget;
+  configIndex: number;
+  customConfig?: KnobConfig;
+  tuning?: SmartKnobTuning;
+  telemetry?: SmartKnobTelemetry;
+}
+
+/**
+ * Unified live state. The legacy snake_case position/config fields remain for
+ * compatibility; effort is consumed only through the unit-aware fields below.
+ */
+export interface UnifiedSmartKnobState extends SmartKnobState {
+  target: SmartKnobTarget | null;
+  controlSide: SmartKnobControlSide;
+  effortUnit: SmartKnobEffortUnit;
+  appliedEffort: number;
+  measuredEffort: number | null;
+  effortLimit: number;
+  maxOutputPermille: number;
+  telemetryEnabled: boolean | null;
+  telemetryRateHz: number | null;
+}
+
 // ── Diagnostics (log / events viewing — mirrors diag.rs DTOs) ──
 export interface LogLine {
   proc: string;    // publishing process (arm0 / base0 / launcher / imu0…)
@@ -207,6 +354,10 @@ export interface ZenohBaseState {
   controlling: boolean;
   holder: number;
   running: boolean;
+  /** Controller RobotMode name (read-only observe): STANDBY/RUNNING/OVERTAKEN/FATAL_ERROR/"" */
+  robot_mode: string;
+  /** When OVERTAKEN, the takeover reason (human_readable or OvertakenMode name); "" otherwise. */
+  overtaken_reason: string;
   model: string;
   prefix: string;
   pose_x: number;
@@ -230,7 +381,11 @@ export interface ArmInfo {
 export interface ZenohArmState {
   controlling: boolean;
   holder: number;
-  mode: string;           // our last-set OperatingMode name
+  mode: string;           // our last-set OperatingMode name (only meaningful while controlling)
+  /** Controller RobotMode name (read-only observe): STANDBY/RUNNING/OVERTAKEN/FATAL_ERROR/"" */
+  robot_mode: string;
+  /** When OVERTAKEN, the takeover reason (human_readable or OvertakenMode name); "" otherwise. */
+  overtaken_reason: string;
   model: string;
   prefix: string;
   dof: number;
@@ -245,6 +400,75 @@ export interface ZenohArmState {
   has_ee: boolean;
   ee_model: string;
   fatal: boolean; // RobotStatus.mode == FATAL_ERROR (latched motor fault/offline)
+}
+
+// mirrors zenoh_arm::ArmUrdf —— 供 3D 渲染的 URDF(整机 arm+EE 或臂-only)
+export interface ArmUrdf {
+  xml: string;
+  assembled: boolean; // 含 EE(整机)→ true;臂-only 或回退 → false
+  tip_link: string;   // 工具安装 link 名(EE 拼接处)
+}
+
+// ── Controller Config(Zenoh) (mirrors zenoh_config.rs DTOs) ──
+export interface ApiVersion {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+export interface RobotRef {
+  robot_index: string;
+  kind: number;
+  kind_name: string; // "arm" | "base" | "lift" | "hand" | "unknown"
+  model: string;
+}
+
+/** A discovered controller (`<cid>/info`). `cid` = key prefix `hexmeow/<controller_id>`. */
+export interface ControllerInfo {
+  cid: string;
+  controller_id: string;
+  fw_version: string;
+  api_version: ApiVersion | null;
+  features: string[];
+  robots: RobotRef[];
+}
+
+/** `<cid>/config` read: file text + fingerprint + path + recovery flag. */
+export interface ConfigGetDto {
+  yaml: string;
+  sha256: string;
+  path: string;
+  mtime_unix: number;
+  schema_version: ApiVersion | null;
+  recovery_mode: boolean;
+}
+
+/** A semantic red-line change (mock flip / CAN swap / kind swap / calibration env). */
+export interface CriticalChange {
+  robot_id: string;
+  field: string;
+  old: string;
+  new: string;
+}
+
+export interface ConfigValidateResult {
+  ok: boolean;
+  errors: string[];
+  critical_changes: CriticalChange[];
+}
+
+export interface ConfigSetResult {
+  ok: boolean;
+  errors: string[];
+  critical_changes: CriticalChange[];
+  sha256: string;
+  applied: boolean;
+  robots: string[];
+}
+
+export interface RestartResult {
+  ok: boolean;
+  robots: string[];
 }
 
 // ── CAN Analyzer (mirrors analyzer.rs DTOs) ──
@@ -333,45 +557,6 @@ export interface CanSendSpec {
   data: number[];
 }
 
-// Unit RollerCAN trial panel (raw CAN 2.0 extended-frame protocol).
-export interface RollerCanFeedback {
-  node_id: number;
-  host_id: number;
-  speed_rpm: number;
-  position_deg: number;
-  current_ma: number;
-  voltage_v: number;
-  mode: number;
-  state: number;
-  fault_raw: number;
-  fault_over_range: boolean;
-  fault_stall: boolean;
-  fault_over_voltage: boolean;
-  age_ms: number;
-}
-
-export interface RollerCanParamValue {
-  index: number;
-  value: number;
-  raw_u32: number;
-  age_ms: number;
-}
-
-export interface RollerCanEvent {
-  t_ms: number;
-  dir: "rx" | "tx";
-  id: number;
-  data: string;
-  note: string;
-}
-
-export interface RollerCanState {
-  connected: boolean;
-  feedback: RollerCanFeedback | null;
-  last_param: RollerCanParamValue | null;
-  events: RollerCanEvent[];
-}
-
 // Tagged target union the backend deserializes (dto::MotorTargetDto).
 export type MotorTarget =
   | { kind: "Disable" }
@@ -379,3 +564,70 @@ export type MotorTarget =
   | { kind: "Velocity"; rev_per_s: number }
   | { kind: "Torque"; nm: number }
   | { kind: "Mit"; pos: number; vel: number; tor: number; kp: number; kd: number };
+
+// ── EE(Zenoh)── 镜像 src-tauri/src/zenoh_ee.rs 的 DTO(11-ee-api)。
+export interface EeInfo {
+  prefix: string;
+  model: string;
+  dof: number;
+  joint_names: string[];
+  pos_min: number[];
+  pos_max: number[];
+  tau_max: number[];
+  opening_poly: number[]; // width(q)=Σ poly[i]·q^i;空 = 无宽度映射
+  width_max: number;
+}
+
+/** 设备树节点(机器人控制台全量发现,所有 kind)。 */
+export interface RobotNode {
+  prefix: string;
+  cid: string;
+  robot_index: string;
+  kind: number;      // 1=arm 2=base 3=lift 4=ee
+  kind_name: string;
+  model: string;
+}
+
+export interface ZenohEeState {
+  controlling: boolean;
+  holder: number;
+  mode: string;
+  robot_mode: string;
+  model: string;
+  prefix: string;
+  q: number[];
+  dq: number[];
+  tau: number[];
+  grasp_state: string;   // MOVING/AT_POSITION/HOLDING/LOST(设备侧 1kHz 判定)
+  estop_behavior: number; // 1=保位 2=松开 3=抗拒张开
+  pos_min: number[];
+  pos_max: number[];
+  opening_poly: number[];
+  width_max: number;
+  fatal: boolean;
+}
+
+/** 场景机器人(M2 常驻 3D;ee_scene 轮询)。 */
+export interface SceneRobot {
+  prefix: string;
+  cid: string;
+  robot_index: string;
+  kind_name: string;
+  model: string;
+  joint_names: string[];
+  q: number[];
+}
+
+export interface ConsoleUrdf {
+  xml: string;
+  assembled: boolean; // 臂已拼 EE(含 ee_mount)
+}
+
+/** 整机挂载边(M3;<cid>/machine 的 DTO,13 §4)。 */
+export interface MountEdge {
+  parent: string;
+  parent_link: string;
+  child: string;
+  xyz: [number, number, number];
+  rpy: [number, number, number];
+}

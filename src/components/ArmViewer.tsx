@@ -1,7 +1,7 @@
-// 3D 数字孪生:three.js + urdf-loader 加载 firefly URDF,按 joint_state 实时更新关节角。
+// 3D 数字孪生:three.js + urdf-loader 加载 URDF,按 joint_state 实时更新关节角。
 // previewQ 非空时叠加一个半透明“幽灵臂”到目标位姿(预设悬浮预览,先看后动)。
-// TODO:目前 URDF+STL 捆在前端 public/urdf/(写死 firefly)。多型号后改成从机器人 arm/urdf
-//       动态取(后端解析 package:// 供网格),见 zenoh_arm / 02-arm-api 的 UrdfResource。
+// urdfXml 给了就用它(从机器人级 <prefix>/urdf 取的整机 arm+EE,或臂-only 回退);否则退到
+// 捆在前端 public/urdf/ 的 firefly。整机时在装配面(link_6 / ee_base_link)画坐标轴,肉眼核对夹爪原点贴合法兰。
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -15,9 +15,10 @@ interface Props {
   jointNames: string[];
   previewQ?: number[] | null; // 悬浮预设时的目标位姿(幽灵臂)
   armQuat?: [number, number, number, number] | null; // 整臂朝向(x,y,z,w);给了就直接用它转臂(四元数模式),否则从重力方向反推
+  urdfXml?: string | null; // 机器人级 URDF(整机 arm+EE 或臂-only);给了就渲它,否则退到捆的 firefly
 }
 
-export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat }: Props) {
+export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const robotRef = useRef<URDFRobot | null>(null);
   const ghostRef = useRef<URDFRobot | null>(null);
@@ -64,41 +65,6 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat }: Props) 
     scene.add(armRoot);
     armRootRef.current = armRoot;
 
-    const loader = new URDFLoader();
-    loader.packages = { xpkg_urdf_firefly_y6: "/urdf" };
-    // ⚠️ 真实签名是 (path, manager, material, onComplete) —— 4 个参数(.d.ts 漏了 material)。
-    (loader as any).loadMeshCb = (
-      url: string,
-      manager: THREE.LoadingManager,
-      _material: THREE.Material,
-      onComplete: (obj: THREE.Object3D | null, err?: Error) => void,
-    ) => {
-      new STLLoader(manager).load(
-        url,
-        (geom) => onComplete(new THREE.Mesh(geom, new THREE.MeshPhongMaterial({ color: 0xbfc4cc }))),
-        undefined,
-        (err) => onComplete(null, err as Error),
-      );
-    };
-
-    loader.loadAsync("/urdf/firefly.urdf").then((robot) => {
-      robotRef.current = robot;
-      autoJointsRef.current = Object.keys(robot.joints).filter((n) => (robot.joints[n] as any).jointType !== "fixed");
-      armRoot.add(robot);
-    }).catch((e) => console.error("URDF load failed", e));
-
-    // 幽灵臂(预设预览):半透明绿色,默认隐藏。
-    loader.loadAsync("/urdf/firefly.urdf").then((ghost) => {
-      ghost.traverse((o) => {
-        if ((o as THREE.Mesh).isMesh) {
-          (o as THREE.Mesh).material = new THREE.MeshPhongMaterial({ color: 0x44dd88, transparent: true, opacity: 0.35, depthWrite: false });
-        }
-      });
-      ghost.visible = false;
-      ghostRef.current = ghost;
-      armRoot.add(ghost);
-    }).catch(() => {});
-
     let raf = 0;
     const animate = () => { controls.update(); renderer.render(scene, camera); raf = requestAnimationFrame(animate); };
     animate();
@@ -114,6 +80,84 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat }: Props) 
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
     };
   }, []);
+
+  // 加载 robot + ghost(urdfXml 变了就重载)。整机时在装配面画坐标轴核对夹爪原点。
+  useEffect(() => {
+    const armRoot = armRootRef.current;
+    if (!armRoot) return;
+    let cancelled = false;
+
+    // 先拆旧 robot/ghost 释放几何/材质,避免泄漏(切臂/切装配态时)。
+    const dispose = (obj: URDFRobot | null) => {
+      if (!obj) return;
+      armRoot.remove(obj);
+      obj.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh) {
+          m.geometry?.dispose();
+          const mat = m.material;
+          if (Array.isArray(mat)) mat.forEach((x) => x.dispose()); else mat?.dispose();
+        }
+      });
+    };
+    dispose(robotRef.current); robotRef.current = null;
+    dispose(ghostRef.current); ghostRef.current = null;
+
+    const loader = new URDFLoader();
+    // package:// 解析:firefly(捆的)+ gp80 夹爪(整机 URDF 里 EE 网格用 hex_gp80_description)。
+    loader.packages = { xpkg_urdf_firefly_y6: "/urdf", hex_gp80_description: "/urdf/gp80", hex_gr80_description: "/urdf/gr80" };
+    // ⚠️ 真实签名是 (path, manager, material, onComplete) —— 4 个参数(.d.ts 漏了 material)。
+    (loader as any).loadMeshCb = (
+      url: string,
+      manager: THREE.LoadingManager,
+      _material: THREE.Material,
+      onComplete: (obj: THREE.Object3D | null, err?: Error) => void,
+    ) => {
+      new STLLoader(manager).load(
+        url,
+        (geom) => onComplete(new THREE.Mesh(geom, new THREE.MeshPhongMaterial({ color: 0xbfc4cc }))),
+        undefined,
+        (err) => onComplete(null, err as Error),
+      );
+    };
+
+    // urdfXml 给了就用 loader.parse(公开方法,0.13 支持;package:// 仍走 loader.packages);否则退到捆的文件。
+    const load = (): Promise<URDFRobot> =>
+      urdfXml ? Promise.resolve(loader.parse(urdfXml)) : loader.loadAsync("/urdf/firefly.urdf");
+
+    load().then((robot) => {
+      if (cancelled) { dispose(robot); return; }
+      robotRef.current = robot;
+      autoJointsRef.current = Object.keys(robot.joints).filter((n) => (robot.joints[n] as any).jointType !== "fixed");
+      armRoot.add(robot);
+      // 装配面坐标轴:核对夹爪 base_link 原点是否贴在臂法兰。attach 到臂 tip(link_6)+ EE 根(ee_base_link,整机才有)。
+      // depthTest=false + 高 renderOrder → 不被网格遮挡,始终可见(仿重力箭头)。仅主臂加,不加幽灵臂。
+      for (const link of ["link_6", "ee_base_link"]) {
+        const obj = robot.links[link];
+        if (!obj) continue;
+        const axes = new THREE.AxesHelper(0.06);
+        axes.renderOrder = 998;
+        (axes.material as THREE.Material).depthTest = false;
+        (axes.material as THREE.Material).transparent = true;
+        obj.add(axes);
+      }
+    }).catch((e) => console.error("URDF load failed", e));
+
+    // 幽灵臂(预设预览):半透明绿色,默认隐藏。与主臂同源。
+    load().then((ghost) => {
+      if (cancelled) { dispose(ghost); return; }
+      ghost.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) {
+          (o as THREE.Mesh).material = new THREE.MeshPhongMaterial({ color: 0x44dd88, transparent: true, opacity: 0.35, depthWrite: false });
+        }
+      });
+      ghost.visible = false;
+      ghostRef.current = ghost;
+      armRoot.add(ghost);
+    }).catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [urdfXml]);
 
   // 实时关节角
   useEffect(() => {

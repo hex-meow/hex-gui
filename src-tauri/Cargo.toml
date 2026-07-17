@@ -24,6 +24,7 @@ tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time"
 log = "0.4"
 env_logger = "0.11"
 anyhow = "1"
+getrandom = "0.3"
 chrono = "0.4"
 # Local path while we add Robot Application support (bus() accessor + RPDO
 # config builder). Switch back to a crates.io version once published.

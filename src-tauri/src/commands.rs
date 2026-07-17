@@ -15,8 +15,20 @@ use crate::backend;
 use crate::diag::{EventsSnapshot, LogLine};
 use crate::dto::{LiveStateDto, MotorInfoDto, MotorModeDto, MotorTargetDto};
 use crate::state::AppState;
-use crate::zenoh_arm::{ArmInfo, ZenohArmConn, ZenohArmState};
+use crate::unified_smartknob::{
+    ActiveSmartKnob, SmartKnobControlSide, SmartKnobDevice, SmartKnobEffortUnit, SmartKnobKind,
+    SmartKnobProfile, SmartKnobStartRequest, SmartKnobTarget, SmartKnobTelemetry, SmartKnobTuning,
+    UnifiedSmartKnobState,
+};
+use crate::zenoh_arm::{ArmInfo, ArmUrdf, ZenohArmConn, ZenohArmState};
 use crate::zenoh_base::{BaseInfo, ZenohBaseState, ZenohConn};
+use crate::zenoh_config::{
+    ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfoDto, RestartResult,
+    ZenohConfigConn,
+};
+use crate::zenoh_ee::{
+    ConsoleUrdf, EeInfo, MountEdgeDto, RobotNode, SceneRobot, ZenohEeConn, ZenohEeState,
+};
 
 /// Anything we hand back to the frontend.
 type CmdResult<T> = Result<T, String>;
@@ -32,6 +44,36 @@ async fn manager(state: &AppState) -> CmdResult<Arc<Cia402Manager>> {
         .ok_or_else(|| "not connected: call connect() first".to_string())
 }
 
+/// Clone the active lift session without keeping the application-state mutex
+/// across CAN I/O. In particular, directed NMT Stop/zero commands must not
+/// wait behind a slow SDO diagnostics refresh.
+async fn lift_session(state: &AppState) -> CmdResult<Arc<crate::lift::LiftSession>> {
+    state
+        .lift
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "lift is not attached".to_string())
+}
+
+/// Keep the handle registered until the device has acknowledged the safe
+/// detach sequence. A failed CAN stop must remain visible and retryable.
+pub(crate) async fn stop_lift_session(state: &AppState) -> CmdResult<()> {
+    let app = match state.lift.lock().await.clone() {
+        Some(app) => app,
+        None => return Ok(()),
+    };
+    app.stop().await.map_err(err)?;
+    let mut guard = state.lift.lock().await;
+    if guard
+        .as_ref()
+        .is_some_and(|current| Arc::ptr_eq(current, &app))
+    {
+        guard.take();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn connect(
     state: State<'_, AppState>,
@@ -39,6 +81,7 @@ pub async fn connect(
     our_nid: u8,
     broadcast_heartbeat: bool,
 ) -> CmdResult<()> {
+    let _connection_op = state.connection_op.lock().await;
     let mut guard = state.manager.lock().await;
     if guard.is_some() {
         return Err("already connected; call disconnect() first".into());
@@ -50,19 +93,51 @@ pub async fn connect(
         broadcast_heartbeat,
         ..Default::default()
     };
-    let mgr = Cia402Manager::new(bus, opts).map_err(err)?;
+    let mgr = Arc::new(Cia402Manager::new(bus, opts).map_err(err)?);
+    let rollercan = crate::rollercan::RollerCanSession::attach(mgr.bus())
+        .await
+        .map_err(err)?;
     log::info!("connected to {iface} as nid 0x{our_nid:02X}");
-    *guard = Some(Arc::new(mgr));
+    *state.rollercan.lock().await = Some(rollercan);
+    *guard = Some(mgr);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn disconnect(state: State<'_, AppState>) -> CmdResult<()> {
-    // Stop any running Robot Application first (disables its motors cleanly).
-    if let (Some(app), Some(mgr)) = (state.hopea3.lock().await.take(), state.manager().await) {
-        app.stop(&mgr).await;
+    // Preserve the retryable lift handle until its confirmed safe detach has
+    // completed. A manual disconnect reports failure instead of silently
+    // dropping the only handle that can retry the stop.
+    stop_lift_session(&state).await?;
+    disconnect_state(&state).await;
+    Ok(())
+}
+
+/// Shared disconnect path used by both the Tauri command and the native exit
+/// handler. SmartKnob is stopped first so a window close cannot leave either
+/// the host loop or firmware-owned RollerCAN output enabled while slower
+/// application cleanup is still in progress.
+pub(crate) async fn disconnect_state(state: &AppState) {
+    log::info!("disconnect cleanup: waiting for lifecycle lock");
+    let _connection_op = state.connection_op.lock().await;
+    log::info!("disconnect cleanup: lifecycle lock acquired; quiescing RollerCAN discovery");
+    if let Some(session) = state.rollercan.lock().await.as_ref() {
+        session.begin_shutdown();
     }
-    if let (Some(app), Some(mgr)) = (state.smartknob.lock().await.take(), state.manager().await) {
+    log::info!("disconnect cleanup: stopping active SmartKnob");
+    if let Err(error) = stop_active_smartknob(state).await {
+        log::warn!(
+            "SmartKnob stop during disconnect failed; retrying with session teardown: {error}"
+        );
+    }
+    log::info!("disconnect cleanup: tearing down RollerCAN monitor");
+    if let Some(app) = state.rollercan.lock().await.take() {
+        app.stop().await;
+    }
+    // Session teardown above performs another best-effort RollerCAN disable.
+    // Do not retain an unusable marker after the physical bus is released.
+    state.smartknob.lock().await.take();
+    if let (Some(app), Some(mgr)) = (state.hopea3.lock().await.take(), state.manager().await) {
         app.stop(&mgr).await;
     }
     if let Some(app) = state.imu.lock().await.take() {
@@ -71,9 +146,6 @@ pub async fn disconnect(state: State<'_, AppState>) -> CmdResult<()> {
     // The analyzer owns its own bus, so stop it unconditionally (it may be the
     // only thing running — the user never called the manager-based connect()).
     if let Some(app) = state.analyzer.lock().await.take() {
-        app.stop().await;
-    }
-    if let Some(app) = state.rollercan.lock().await.take() {
         app.stop().await;
     }
     // Stop any running CSV recorders first so their files flush cleanly.
@@ -85,7 +157,39 @@ pub async fn disconnect(state: State<'_, AppState>) -> CmdResult<()> {
     if was {
         log::info!("disconnected");
     }
-    Ok(())
+    log::info!("disconnect cleanup: complete");
+}
+
+async fn stop_active_smartknob(state: &AppState) -> CmdResult<()> {
+    // Keep this guard for the whole stop transaction. That prevents a
+    // concurrent start from slipping into the gap while a RollerCAN disable
+    // is in flight, and lets us retain the marker if the disable fails so the
+    // user can retry Stop.
+    let mut active = state.smartknob.lock().await;
+    match active.as_ref() {
+        Some(ActiveSmartKnob::Canopen(_)) => {
+            let mgr = state
+                .manager()
+                .await
+                .ok_or_else(|| "SmartKnob manager disappeared before CANopen stop".to_string())?;
+            let Some(ActiveSmartKnob::Canopen(app)) = active.take() else {
+                unreachable!()
+            };
+            app.stop(&mgr).await;
+            Ok(())
+        }
+        Some(ActiveSmartKnob::Rollercan { node_id }) => {
+            let node_id = *node_id;
+            let guard = state.rollercan.lock().await;
+            let session = guard
+                .as_ref()
+                .ok_or_else(|| "RollerCAN monitor disappeared before SmartKnob stop".to_string())?;
+            session.stop_motor(0, node_id).await.map_err(err)?;
+            *active = None;
+            Ok(())
+        }
+        None => Ok(()),
+    }
 }
 
 #[tauri::command]
@@ -370,41 +474,303 @@ pub fn smartknob_configs() -> Vec<crate::smartknob::KnobConfig> {
     crate::smartknob::preset_configs()
 }
 
-/// RollerCAN haptic presets. Static; does not require a bus connection.
+/// List protocol-qualified SmartKnob targets found on the shared CAN bus.
 #[tauri::command]
-pub fn rollercan_configs() -> Vec<crate::rollercan::KnobConfig> {
-    crate::rollercan::preset_configs()
+pub async fn smartknob_list_devices(state: State<'_, AppState>) -> CmdResult<Vec<SmartKnobDevice>> {
+    let mut devices = Vec::new();
+    if let Some(mgr) = state.manager().await {
+        devices.extend(
+            mgr.list()
+                .into_iter()
+                .filter(|motor| motor.identity.is_some())
+                .filter(|motor| {
+                    motor.identity.as_ref().is_some_and(|identity| {
+                        crate::device_registry::classify(identity.vendor_id, identity.product_code)
+                            == crate::device_registry::DeviceKind::Motor
+                    })
+                })
+                .map(|motor| SmartKnobDevice {
+                    target: SmartKnobTarget {
+                        kind: SmartKnobKind::Canopen,
+                        node_id: motor.node_id,
+                    },
+                    name: motor.friendly_name(),
+                    online: motor.online,
+                    control_side: SmartKnobControlSide::Host,
+                    effort_unit: SmartKnobEffortUnit::Nm,
+                }),
+        );
+    }
+    if let Some(session) = state.rollercan.lock().await.as_ref() {
+        devices.extend(session.devices().into_iter().map(|device| SmartKnobDevice {
+            target: SmartKnobTarget {
+                kind: SmartKnobKind::Rollercan,
+                node_id: device.node_id,
+            },
+            name: format!("Unit RollerCAN 0x{:02X}", device.node_id),
+            online: device.online,
+            control_side: SmartKnobControlSide::Firmware,
+            effort_unit: SmartKnobEffortUnit::Ampere,
+        }));
+    }
+    devices.sort_by_key(|device| (device.target.kind as u8, device.target.node_id));
+
+    // Discovery can finish after a session was started. Enforce the physical
+    // bus compatibility rule continuously, not just at start time: the next
+    // UI discovery poll stops an active session if the other protocol family
+    // appears (and retries the stop on later polls if a disable send fails).
+    let canopen_online = devices
+        .iter()
+        .any(|device| device.online && device.target.kind == SmartKnobKind::Canopen);
+    let rollercan_online = devices
+        .iter()
+        .any(|device| device.online && device.target.kind == SmartKnobKind::Rollercan);
+    if canopen_online && rollercan_online {
+        if let Err(error) = stop_active_smartknob(&state).await {
+            log::error!(
+                "failed to stop SmartKnob after mixed CANopen/RollerCAN discovery: {error}"
+            );
+        }
+    }
+    Ok(devices)
+}
+
+#[tauri::command]
+pub async fn smartknob_get_profile(
+    state: State<'_, AppState>,
+    target: SmartKnobTarget,
+) -> CmdResult<SmartKnobProfile> {
+    match target.kind {
+        SmartKnobKind::Canopen => Ok(SmartKnobProfile {
+            target,
+            configs: crate::smartknob::preset_configs(),
+            control_side: SmartKnobControlSide::Host,
+            effort_unit: SmartKnobEffortUnit::Nm,
+            supports_temperature: true,
+            supports_telemetry: false,
+            effort_limit_max: 10.0,
+            max_output_permille: crate::smartknob::DEFAULT_MAX_TORQUE_PERMILLE,
+            telemetry_enabled: None,
+            telemetry_rate_hz: None,
+        }),
+        SmartKnobKind::Rollercan => {
+            let guard = state.rollercan.lock().await;
+            let session = guard
+                .as_ref()
+                .ok_or_else(|| "not connected: RollerCAN monitor is unavailable".to_string())?;
+            let (enabled, rate_hz) = session.telemetry_settings(target.node_id);
+            Ok(SmartKnobProfile {
+                target,
+                configs: crate::rollercan::preset_configs(),
+                control_side: SmartKnobControlSide::Firmware,
+                effort_unit: SmartKnobEffortUnit::Ampere,
+                supports_temperature: false,
+                supports_telemetry: true,
+                effort_limit_max: crate::rollercan::ROLLER_HARD_CURRENT_LIMIT_A,
+                max_output_permille: crate::smartknob::DEFAULT_MAX_TORQUE_PERMILLE,
+                telemetry_enabled: Some(enabled),
+                telemetry_rate_hz: Some(rate_hz),
+            })
+        }
+    }
+}
+
+/// Manual RollerCAN node probe used by the advanced-ID fallback.
+#[tauri::command]
+pub async fn smartknob_probe(
+    state: State<'_, AppState>,
+    node_id: u8,
+) -> CmdResult<SmartKnobDevice> {
+    {
+        let guard = state.rollercan.lock().await;
+        let session = guard
+            .as_ref()
+            .ok_or_else(|| "not connected: RollerCAN monitor is unavailable".to_string())?;
+        session.probe(node_id).await.map_err(err)?;
+    }
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(1_200);
+    loop {
+        let found = state.rollercan.lock().await.as_ref().and_then(|session| {
+            session
+                .devices()
+                .into_iter()
+                .find(|device| device.node_id == node_id && device.online)
+        });
+        if let Some(device) = found {
+            return Ok(SmartKnobDevice {
+                target: SmartKnobTarget {
+                    kind: SmartKnobKind::Rollercan,
+                    node_id,
+                },
+                name: format!("Unit RollerCAN 0x{node_id:02X}"),
+                online: device.online,
+                control_side: SmartKnobControlSide::Firmware,
+                effort_unit: SmartKnobEffortUnit::Ampere,
+            });
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "node 0x{node_id:02X} did not come online with confirmed RollerCAN SmartKnob identity (0x8005=12, 0x8006=1)"
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
 }
 
 /// Initialize the chosen motor as a haptic knob and start the haptic loop.
 #[tauri::command]
 pub async fn smartknob_start(
     state: State<'_, AppState>,
-    nid: u8,
-    config_index: usize,
+    request: SmartKnobStartRequest,
 ) -> CmdResult<()> {
+    // Publish the active-session marker before a concurrent disconnect may
+    // tear down the manager/monitor. Without this lifecycle lock, dropping a
+    // just-started CANopen session can detach its 1 kHz task instead of asking
+    // it to stop and disable the motor.
+    let _connection_op = state.connection_op.lock().await;
     let mgr = manager(&state).await?;
     let mut guard = state.smartknob.lock().await;
     if guard.is_some() {
         return Err("SmartKnob already running; stop it first".into());
     }
-    let app = crate::smartknob::SmartKnob::start(mgr, nid, config_index)
+
+    let canopen_online = mgr.list().iter().any(|motor| {
+        motor.online
+            && motor.identity.as_ref().is_some_and(|identity| {
+                crate::device_registry::classify(identity.vendor_id, identity.product_code)
+                    == crate::device_registry::DeviceKind::Motor
+            })
+    });
+    let rollercan_online = state
+        .rollercan
+        .lock()
         .await
-        .map_err(err)?;
-    *guard = Some(app);
-    log::info!("SmartKnob started on 0x{nid:02X}");
+        .as_ref()
+        .map(crate::rollercan::RollerCanSession::has_online_device)
+        .unwrap_or(false);
+    if canopen_online && rollercan_online {
+        return Err(
+            "cannot start SmartKnob: CANopen and RollerCAN devices are both online on this physical bus; RollerCAN is Classic-only and cannot safely share CAN-FD+BRS traffic. Disconnect one protocol family or use a separate adapter"
+                .into(),
+        );
+    }
+
+    match request.target.kind {
+        SmartKnobKind::Canopen => {
+            let target_online = mgr.list().iter().any(|motor| {
+                motor.node_id == request.target.node_id
+                    && motor.online
+                    && motor.identity.as_ref().is_some_and(|identity| {
+                        crate::device_registry::classify(identity.vendor_id, identity.product_code)
+                            == crate::device_registry::DeviceKind::Motor
+                    })
+            });
+            if !target_online {
+                return Err(format!(
+                    "CANopen SmartKnob target 0x{:02X} is not an online, identified motor",
+                    request.target.node_id
+                ));
+            }
+            let app = crate::smartknob::SmartKnob::start(
+                mgr.clone(),
+                request.target.node_id,
+                request.config_index,
+                &state.shutdown_requested,
+            )
+            .await
+            .map_err(err)?;
+            if state
+                .shutdown_requested
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                app.stop(&mgr).await;
+                return Err("SmartKnob startup cancelled by application shutdown".into());
+            }
+            if let Some(config) = request.custom_config {
+                app.set_custom_config(config);
+            }
+            if let Some(tuning) = request.tuning {
+                app.set_tuning(
+                    tuning.p_gain,
+                    tuning.d_gain,
+                    tuning.strength_scale,
+                    tuning.effort_limit,
+                    tuning.max_output_permille,
+                    tuning.friction_compensation,
+                    tuning.click_effort,
+                );
+            }
+            *guard = Some(ActiveSmartKnob::Canopen(app));
+        }
+        SmartKnobKind::Rollercan => {
+            let session_guard = state.rollercan.lock().await;
+            let session = session_guard
+                .as_ref()
+                .ok_or_else(|| "not connected: RollerCAN monitor is unavailable".to_string())?;
+            let target_online = session
+                .devices()
+                .iter()
+                .any(|device| device.node_id == request.target.node_id && device.online);
+            if !target_online {
+                return Err(format!(
+                    "RollerCAN SmartKnob target 0x{:02X} is not online or has not passed identity verification",
+                    request.target.node_id
+                ));
+            }
+            let start_result = session
+                .start_knob(
+                    request.config_index,
+                    request.target.node_id,
+                    request.custom_config,
+                    request.tuning,
+                    request.telemetry.unwrap_or_default(),
+                    Some(&state.shutdown_requested),
+                )
+                .await;
+            if let Err(error) = start_result {
+                // A failed post-enable verification can coincide with a bus
+                // loss that also defeats rollback. Preserve the target as an
+                // active session so Stop/disconnect can retry instead of
+                // hiding a motor that may still be producing output.
+                if session.may_be_active() {
+                    *guard = Some(ActiveSmartKnob::Rollercan {
+                        node_id: request.target.node_id,
+                    });
+                }
+                return Err(err(error));
+            }
+            if state
+                .shutdown_requested
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                if let Err(error) = session.stop_motor(0, request.target.node_id).await {
+                    *guard = Some(ActiveSmartKnob::Rollercan {
+                        node_id: request.target.node_id,
+                    });
+                    return Err(format!(
+                        "SmartKnob startup was cancelled by application shutdown, but RollerCAN disable failed and may need a retry: {error}"
+                    ));
+                }
+                return Err("SmartKnob startup cancelled by application shutdown".into());
+            }
+            *guard = Some(ActiveSmartKnob::Rollercan {
+                node_id: request.target.node_id,
+            });
+        }
+    }
+    log::info!(
+        "SmartKnob started on {:?} 0x{:02X}",
+        request.target.kind,
+        request.target.node_id
+    );
     Ok(())
 }
 
 /// Stop the haptic loop and disable the knob motor. No-op if not running.
 #[tauri::command]
 pub async fn smartknob_stop(state: State<'_, AppState>) -> CmdResult<()> {
-    let app = state.smartknob.lock().await.take();
-    if let Some(app) = app {
-        let mgr = manager(&state).await?;
-        app.stop(&mgr).await;
-        log::info!("SmartKnob stopped");
-    }
+    stop_active_smartknob(&state).await?;
+    log::info!("SmartKnob stopped");
     Ok(())
 }
 
@@ -412,8 +778,17 @@ pub async fn smartknob_stop(state: State<'_, AppState>) -> CmdResult<()> {
 /// sensor). Index into [`smartknob_configs`].
 #[tauri::command]
 pub async fn smartknob_set_config(state: State<'_, AppState>, index: usize) -> CmdResult<()> {
-    if let Some(app) = state.smartknob.lock().await.as_ref() {
-        app.set_config(index);
+    let guard = state.smartknob.lock().await;
+    match guard.as_ref() {
+        Some(ActiveSmartKnob::Canopen(app)) => app.set_config(index),
+        Some(ActiveSmartKnob::Rollercan { node_id }) => {
+            let session_guard = state.rollercan.lock().await;
+            let session = session_guard
+                .as_ref()
+                .ok_or_else(|| "RollerCAN monitor is unavailable".to_string())?;
+            session.set_config(*node_id, index).await.map_err(err)?;
+        }
+        None => {}
     }
     Ok(())
 }
@@ -426,24 +801,30 @@ pub async fn smartknob_set_config(state: State<'_, AppState>, index: usize) -> C
 #[tauri::command]
 pub async fn smartknob_set_tuning(
     state: State<'_, AppState>,
-    p_gain: f64,
-    d_gain: f64,
-    strength_scale: f64,
-    torque_limit_nm: f64,
-    max_torque_permille: u16,
-    friction_compensation: f64,
-    click_torque_nm: f64,
+    tuning: SmartKnobTuning,
 ) -> CmdResult<()> {
-    if let Some(app) = state.smartknob.lock().await.as_ref() {
-        app.set_tuning(
-            p_gain,
-            d_gain,
-            strength_scale,
-            torque_limit_nm,
-            max_torque_permille,
-            friction_compensation,
-            click_torque_nm,
-        );
+    let guard = state.smartknob.lock().await;
+    match guard.as_ref() {
+        Some(ActiveSmartKnob::Canopen(app)) => app.set_tuning(
+            tuning.p_gain,
+            tuning.d_gain,
+            tuning.strength_scale,
+            tuning.effort_limit,
+            tuning.max_output_permille,
+            tuning.friction_compensation,
+            tuning.click_effort,
+        ),
+        Some(ActiveSmartKnob::Rollercan { node_id }) => {
+            let session_guard = state.rollercan.lock().await;
+            let session = session_guard
+                .as_ref()
+                .ok_or_else(|| "RollerCAN monitor is unavailable".to_string())?;
+            session
+                .set_tuning_config(*node_id, tuning)
+                .await
+                .map_err(err)?;
+        }
+        None => {}
     }
     Ok(())
 }
@@ -451,10 +832,20 @@ pub async fn smartknob_set_tuning(
 /// Clear a CiA402 fault on the knob motor (best-effort recovery).
 #[tauri::command]
 pub async fn smartknob_clear_error(state: State<'_, AppState>) -> CmdResult<()> {
-    let mgr = manager(&state).await?;
-    let nid = state.smartknob.lock().await.as_ref().map(|a| a.node_id());
-    if let Some(nid) = nid {
-        crate::smartknob::clear_error(&mgr, nid).await;
+    let guard = state.smartknob.lock().await;
+    match guard.as_ref() {
+        Some(ActiveSmartKnob::Canopen(app)) => {
+            let mgr = manager(&state).await?;
+            crate::smartknob::clear_error(&mgr, app.node_id()).await;
+        }
+        Some(ActiveSmartKnob::Rollercan { node_id }) => {
+            let session_guard = state.rollercan.lock().await;
+            let session = session_guard
+                .as_ref()
+                .ok_or_else(|| "RollerCAN monitor is unavailable".to_string())?;
+            session.release_stall(0, *node_id).await.map_err(err)?;
+        }
+        None => {}
     }
     Ok(())
 }
@@ -462,59 +853,86 @@ pub async fn smartknob_clear_error(state: State<'_, AppState>) -> CmdResult<()> 
 /// Update the custom mode's KnobConfig (index 0).  The haptic loop
 /// re-applies it on the next tick without recentering the detent.
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn smartknob_set_custom_config(
     state: State<'_, AppState>,
-    position: i32,
-    min_position: i32,
-    max_position: i32,
-    position_width_radians: f64,
-    detent_strength_unit: f64,
-    endstop_strength_unit: f64,
-    snap_point: f64,
-    snap_point_bias: f64,
-    detent_positions: Vec<i32>,
-    click_torque_nm: f64,
-    friction_compensation: f64,
-    strength_scale: f64,
-    p_gain: f64,
-    d_gain: f64,
-    text: String,
-    led_hue: i32,
+    config: crate::smartknob::KnobConfig,
 ) -> CmdResult<()> {
-    let config = crate::smartknob::KnobConfig {
-        position,
-        min_position,
-        max_position,
-        position_width_radians,
-        detent_strength_unit,
-        endstop_strength_unit,
-        snap_point,
-        snap_point_bias,
-        detent_positions,
-        click_torque_nm,
-        friction_compensation,
-        strength_scale,
-        p_gain,
-        d_gain,
-        text,
-        led_hue,
-        is_custom: true,
-    };
-    if let Some(app) = state.smartknob.lock().await.as_ref() {
-        app.set_custom_config(config);
+    let guard = state.smartknob.lock().await;
+    match guard.as_ref() {
+        Some(ActiveSmartKnob::Canopen(app)) => app.set_custom_config(config),
+        Some(ActiveSmartKnob::Rollercan { node_id }) => {
+            let session_guard = state.rollercan.lock().await;
+            let session = session_guard
+                .as_ref()
+                .ok_or_else(|| "RollerCAN monitor is unavailable".to_string())?;
+            session
+                .set_custom_config(*node_id, config)
+                .await
+                .map_err(err)?;
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn smartknob_set_telemetry(
+    state: State<'_, AppState>,
+    telemetry: SmartKnobTelemetry,
+) -> CmdResult<()> {
+    let guard = state.smartknob.lock().await;
+    match guard.as_ref() {
+        Some(ActiveSmartKnob::Rollercan { node_id }) => {
+            let session_guard = state.rollercan.lock().await;
+            let session = session_guard
+                .as_ref()
+                .ok_or_else(|| "RollerCAN monitor is unavailable".to_string())?;
+            session
+                .set_telemetry(*node_id, telemetry)
+                .await
+                .map_err(err)?;
+        }
+        Some(ActiveSmartKnob::Canopen(_)) => {
+            return Err("CANopen SmartKnob does not expose firmware telemetry settings".into())
+        }
+        None => {}
     }
     Ok(())
 }
 
 /// Poll the current knob state (position, sub-position, torque, health).
 #[tauri::command]
-pub async fn smartknob_get_state(
-    state: State<'_, AppState>,
-) -> CmdResult<crate::smartknob::SmartKnobState> {
-    Ok(match state.smartknob.lock().await.as_ref() {
-        Some(app) => app.state(),
-        None => crate::smartknob::SmartKnobState::default(),
+pub async fn smartknob_get_state(state: State<'_, AppState>) -> CmdResult<UnifiedSmartKnobState> {
+    let guard = state.smartknob.lock().await;
+    Ok(match guard.as_ref() {
+        Some(ActiveSmartKnob::Canopen(app)) => UnifiedSmartKnobState::from_knob(
+            app.state(),
+            Some(SmartKnobTarget {
+                kind: SmartKnobKind::Canopen,
+                node_id: app.node_id(),
+            }),
+            SmartKnobControlSide::Host,
+            SmartKnobEffortUnit::Nm,
+            None,
+        ),
+        Some(ActiveSmartKnob::Rollercan { node_id }) => {
+            let session_guard = state.rollercan.lock().await;
+            let Some(session) = session_guard.as_ref() else {
+                return Ok(UnifiedSmartKnobState::default());
+            };
+            let (enabled, rate_hz) = session.telemetry_settings(*node_id);
+            UnifiedSmartKnobState::from_knob(
+                session.knob_state(*node_id),
+                Some(SmartKnobTarget {
+                    kind: SmartKnobKind::Rollercan,
+                    node_id: *node_id,
+                }),
+                SmartKnobControlSide::Firmware,
+                SmartKnobEffortUnit::Ampere,
+                Some(SmartKnobTelemetry { enabled, rate_hz }),
+            )
+        }
+        None => UnifiedSmartKnobState::default(),
     })
 }
 
@@ -759,183 +1177,6 @@ pub async fn analyzer_sdo_write(
     .await
 }
 
-// ───────────────────────── RollerCAN trial ─────────────────────────
-
-#[tauri::command]
-pub async fn rollercan_connect(state: State<'_, AppState>, spec: String) -> CmdResult<()> {
-    let mut guard = state.rollercan.lock().await;
-    if guard.is_some() {
-        return Err("RollerCAN already connected; disconnect it first".into());
-    }
-    let app = crate::rollercan::RollerCanSession::start(&spec)
-        .await
-        .map_err(err)?;
-    *guard = Some(app);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn rollercan_disconnect(state: State<'_, AppState>) -> CmdResult<()> {
-    if let Some(app) = state.rollercan.lock().await.take() {
-        app.stop().await;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn rollercan_get_state(
-    state: State<'_, AppState>,
-) -> CmdResult<crate::rollercan::RollerCanStateDto> {
-    Ok(match state.rollercan.lock().await.as_ref() {
-        Some(app) => app.snapshot(),
-        None => crate::rollercan::RollerCanStateDto::default(),
-    })
-}
-
-#[tauri::command]
-pub async fn rollercan_ping(
-    state: State<'_, AppState>,
-    host_id: u8,
-    target_id: u8,
-) -> CmdResult<()> {
-    let guard = state.rollercan.lock().await;
-    let app = guard
-        .as_ref()
-        .ok_or_else(|| "RollerCAN not connected".to_string())?;
-    app.ping(host_id, target_id).await.map_err(err)
-}
-
-#[tauri::command]
-pub async fn rollercan_enable(
-    state: State<'_, AppState>,
-    config_index: u8,
-    target_id: u8,
-) -> CmdResult<()> {
-    let guard = state.rollercan.lock().await;
-    let app = guard
-        .as_ref()
-        .ok_or_else(|| "RollerCAN not connected".to_string())?;
-    app.enable(config_index, target_id).await.map_err(err)
-}
-
-#[tauri::command]
-pub async fn rollercan_stop_motor(
-    state: State<'_, AppState>,
-    host_id: u8,
-    target_id: u8,
-) -> CmdResult<()> {
-    let guard = state.rollercan.lock().await;
-    let app = guard
-        .as_ref()
-        .ok_or_else(|| "RollerCAN not connected".to_string())?;
-    app.stop_motor(host_id, target_id).await.map_err(err)
-}
-
-#[tauri::command]
-pub async fn rollercan_release_stall(
-    state: State<'_, AppState>,
-    host_id: u8,
-    target_id: u8,
-) -> CmdResult<()> {
-    let guard = state.rollercan.lock().await;
-    let app = guard
-        .as_ref()
-        .ok_or_else(|| "RollerCAN not connected".to_string())?;
-    app.release_stall(host_id, target_id).await.map_err(err)
-}
-
-#[tauri::command]
-pub async fn rollercan_save_flash(
-    state: State<'_, AppState>,
-    host_id: u8,
-    target_id: u8,
-) -> CmdResult<()> {
-    let guard = state.rollercan.lock().await;
-    let app = guard
-        .as_ref()
-        .ok_or_else(|| "RollerCAN not connected".to_string())?;
-    app.save_flash(host_id, target_id).await.map_err(err)
-}
-
-#[tauri::command]
-pub async fn rollercan_set_can_id(
-    state: State<'_, AppState>,
-    host_id: u8,
-    target_id: u8,
-    new_id: u8,
-) -> CmdResult<()> {
-    let guard = state.rollercan.lock().await;
-    let app = guard
-        .as_ref()
-        .ok_or_else(|| "RollerCAN not connected".to_string())?;
-    app.set_can_id(host_id, target_id, new_id)
-        .await
-        .map_err(err)
-}
-
-#[tauri::command]
-pub async fn rollercan_set_bitrate(
-    state: State<'_, AppState>,
-    host_id: u8,
-    target_id: u8,
-    bitrate: u8,
-) -> CmdResult<()> {
-    let guard = state.rollercan.lock().await;
-    let app = guard
-        .as_ref()
-        .ok_or_else(|| "RollerCAN not connected".to_string())?;
-    app.set_bitrate(host_id, target_id, bitrate)
-        .await
-        .map_err(err)
-}
-
-#[tauri::command]
-pub async fn rollercan_set_stall_protection(
-    state: State<'_, AppState>,
-    host_id: u8,
-    target_id: u8,
-    enabled: bool,
-) -> CmdResult<()> {
-    let guard = state.rollercan.lock().await;
-    let app = guard
-        .as_ref()
-        .ok_or_else(|| "RollerCAN not connected".to_string())?;
-    app.set_stall_protection(host_id, target_id, enabled)
-        .await
-        .map_err(err)
-}
-
-#[tauri::command]
-pub async fn rollercan_read_param(
-    state: State<'_, AppState>,
-    host_id: u8,
-    target_id: u8,
-    index: u16,
-) -> CmdResult<()> {
-    let guard = state.rollercan.lock().await;
-    let app = guard
-        .as_ref()
-        .ok_or_else(|| "RollerCAN not connected".to_string())?;
-    app.read_param(host_id, target_id, index).await.map_err(err)
-}
-
-#[tauri::command]
-pub async fn rollercan_write_param(
-    state: State<'_, AppState>,
-    host_id: u8,
-    target_id: u8,
-    index: u16,
-    value: i32,
-) -> CmdResult<()> {
-    let guard = state.rollercan.lock().await;
-    let app = guard
-        .as_ref()
-        .ok_or_else(|| "RollerCAN not connected".to_string())?;
-    app.write_param(host_id, target_id, index, value)
-        .await
-        .map_err(err)
-}
-
 // ───────────────────────── Base(Zenoh) ─────────────────────────
 
 /// 连接到控制器网络。`connect` 如 `tcp/127.0.0.1:7447`(空=仅多播发现)。
@@ -1137,6 +1378,17 @@ pub async fn arm_get_state(state: State<'_, AppState>) -> CmdResult<ZenohArmStat
         .unwrap_or_default())
 }
 
+/// 取某臂 URDF 供前端 3D 渲染(选中即拉,与取控解耦)。优先机器人级整机(arm+EE),退到臂-only;无则回 None。
+#[tauri::command]
+pub async fn arm_get_urdf(
+    state: State<'_, AppState>,
+    prefix: String,
+) -> CmdResult<Option<ArmUrdf>> {
+    let g = state.zenoh_arm.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Arm Zenoh".to_string())?;
+    Ok(c.get_urdf(&prefix).await)
+}
+
 #[tauri::command]
 pub async fn arm_release(state: State<'_, AppState>) -> CmdResult<()> {
     if let Some(c) = state.zenoh_arm.lock().await.as_ref() {
@@ -1191,4 +1443,386 @@ pub async fn arm_clear_fault(state: State<'_, AppState>) -> CmdResult<()> {
     let g = state.zenoh_arm.lock().await;
     let c = g.as_ref().ok_or_else(|| "未连接 Arm Zenoh".to_string())?;
     c.clear_fault().await.map_err(err)
+}
+
+// ───────────────────────── Controller Config(Zenoh)─────────────────────────
+
+/// 连接到控制器网络(config 面板专用 Session)。`connect` 空=仅多播发现。
+#[tauri::command]
+pub async fn config_connect(state: State<'_, AppState>, connect: String) -> CmdResult<()> {
+    let mut g = state.config.lock().await;
+    if g.is_some() {
+        return Err("Config Zenoh 已连接;先 disconnect".into());
+    }
+    *g = Some(ZenohConfigConn::open(&connect).await.map_err(err)?);
+    log::info!("Config Zenoh 已连接: {connect}");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn config_disconnect(state: State<'_, AppState>) -> CmdResult<()> {
+    state.config.lock().await.take();
+    Ok(())
+}
+
+/// 发现网络里的控制器(走 `<cid>/info`;恢复模式下零 robot 也可发现)。
+#[tauri::command]
+pub async fn config_discover(state: State<'_, AppState>) -> CmdResult<Vec<ControllerInfoDto>> {
+    let g = state.config.lock().await;
+    let c = g
+        .as_ref()
+        .ok_or_else(|| "未连接 Config Zenoh".to_string())?;
+    Ok(c.discover().await)
+}
+
+/// 读取某控制器的 launch.yaml(含 sha256 / path / mtime / schema_version / recovery_mode)。
+#[tauri::command]
+pub async fn config_get(state: State<'_, AppState>, cid: String) -> CmdResult<ConfigGetDto> {
+    let g = state.config.lock().await;
+    let c = g
+        .as_ref()
+        .ok_or_else(|| "未连接 Config Zenoh".to_string())?;
+    c.get(&cid).await.map_err(err)
+}
+
+/// 干跑校验(errors + 语义红线 critical_changes)。不落盘。
+#[tauri::command]
+pub async fn config_validate(
+    state: State<'_, AppState>,
+    cid: String,
+    yaml: String,
+) -> CmdResult<ConfigValidateResult> {
+    let g = state.config.lock().await;
+    let c = g
+        .as_ref()
+        .ok_or_else(|| "未连接 Config Zenoh".to_string())?;
+    c.validate(&cid, &yaml).await.map_err(err)
+}
+
+/// 写入配置(乐观锁 expectSha256;apply=true 立即生效;有红线时 confirm 必须 true)。
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn config_set(
+    state: State<'_, AppState>,
+    cid: String,
+    yaml: String,
+    expect_sha256: String,
+    apply: bool,
+    confirm: bool,
+    force: bool,
+) -> CmdResult<ConfigSetResult> {
+    let g = state.config.lock().await;
+    let c = g
+        .as_ref()
+        .ok_or_else(|| "未连接 Config Zenoh".to_string())?;
+    c.set(&cid, &yaml, &expect_sha256, apply, confirm, force)
+        .await
+        .map_err(err)
+}
+
+/// 单独"应用":重启该控制器全部子进程(confirm 复述后为 true;force 越过会话检查)。
+#[tauri::command]
+pub async fn config_restart(
+    state: State<'_, AppState>,
+    cid: String,
+    confirm: bool,
+    force: bool,
+) -> CmdResult<RestartResult> {
+    let g = state.config.lock().await;
+    let c = g
+        .as_ref()
+        .ok_or_else(|| "未连接 Config Zenoh".to_string())?;
+    c.restart(&cid, confirm, force).await.map_err(err)
+}
+
+// ───────────────────────── EE(Zenoh)─────────────────────────
+// 镜像 arm_* 的形状(commands 仅解锁转发,逻辑在 zenoh_ee.rs)。机器人控制台
+// 共用本连接的 ee_discover_all 做设备树全量发现。
+
+#[tauri::command]
+pub async fn ee_connect(state: State<'_, AppState>, connect: String) -> CmdResult<()> {
+    let mut g = state.zenoh_ee.lock().await;
+    if g.is_some() {
+        return Err("EE Zenoh 已连接;先 disconnect".into());
+    }
+    *g = Some(ZenohEeConn::open(&connect).await.map_err(err)?);
+    log::info!("EE Zenoh 已连接: {connect}");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn ee_disconnect(state: State<'_, AppState>) -> CmdResult<()> {
+    if let Some(c) = state.zenoh_ee.lock().await.take() {
+        c.release().await;
+    }
+    Ok(())
+}
+
+/// 发现网络里的 EE(kind==EE),含 ee/description 细节(限位/OpeningMap)。
+#[tauri::command]
+pub async fn ee_discover(state: State<'_, AppState>) -> CmdResult<Vec<EeInfo>> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    Ok(c.discover().await)
+}
+
+/// 全量发现(机器人控制台设备树):所有 kind 的 robot,按 cid 分组由前端完成。
+#[tauri::command]
+pub async fn ee_discover_all(state: State<'_, AppState>) -> CmdResult<Vec<RobotNode>> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    Ok(c.discover_all().await)
+}
+
+#[tauri::command]
+pub async fn ee_acquire(
+    state: State<'_, AppState>,
+    prefix: String,
+    model: String,
+) -> CmdResult<()> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    c.acquire(&prefix, &model).await.map_err(err)
+}
+
+/// 观察聚焦(只读,与取控解耦):设备树选中即观察。
+#[tauri::command]
+pub async fn ee_set_focus(state: State<'_, AppState>, prefix: String) -> CmdResult<()> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    c.set_focus(&prefix).await;
+    Ok(())
+}
+
+/// 开合到 q(进 ACTIVE + 50Hz 流)。kp 省略 → 控制器默认增益;小 kp = 柔顺/限力抓取。
+#[tauri::command]
+pub async fn ee_goto(state: State<'_, AppState>, q: f32, kp: Option<f32>) -> CmdResult<()> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    c.goto(q, kp).await.map_err(err)
+}
+
+/// 设 OperatingMode(2=ACTIVE,1=DISABLED;EE v1 只支持这两个)。
+#[tauri::command]
+pub async fn ee_set_mode(state: State<'_, AppState>, mode: i32) -> CmdResult<()> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    c.set_mode(mode).await.map_err(err)
+}
+
+/// estop 期间姿态(1=保位 2=松开 3=抗拒张开;11 §10)。
+#[tauri::command]
+pub async fn ee_set_estop_behavior(state: State<'_, AppState>, behavior: i32) -> CmdResult<()> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    c.set_estop_behavior(behavior).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn ee_clear_fault(state: State<'_, AppState>) -> CmdResult<()> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    c.clear_fault().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn ee_get_state(state: State<'_, AppState>) -> CmdResult<ZenohEeState> {
+    Ok(state
+        .zenoh_ee
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.state())
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn ee_release(state: State<'_, AppState>) -> CmdResult<()> {
+    let g = state.zenoh_ee.lock().await;
+    if let Some(c) = g.as_ref() {
+        c.release().await;
+    }
+    Ok(())
+}
+
+/// 场景快照(M2 常驻 3D,30Hz 轮询):纯读缓存不触网。
+#[tauri::command]
+pub async fn ee_scene(state: State<'_, AppState>) -> CmdResult<Vec<SceneRobot>> {
+    Ok(state
+        .zenoh_ee
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.scene())
+        .unwrap_or_default())
+}
+
+/// 通用 URDF 取用(M2):先 <prefix>/urdf(臂=整机拼装),退 <prefix>/<kind>/urdf。
+#[tauri::command]
+pub async fn console_get_urdf(
+    state: State<'_, AppState>,
+    prefix: String,
+    kind_name: String,
+) -> CmdResult<Option<ConsoleUrdf>> {
+    let g = state.zenoh_ee.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
+    Ok(c.get_urdf(&prefix, &kind_name).await)
+}
+
+/// 整机挂载边(M3):cid → MountEdge 列表(随 3s 发现节拍刷新;无 machine 段 = 不含该 cid)。
+#[tauri::command]
+pub async fn ee_machines(
+    state: State<'_, AppState>,
+) -> CmdResult<std::collections::HashMap<String, Vec<MountEdgeDto>>> {
+    Ok(state
+        .zenoh_ee
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.machines())
+        .unwrap_or_default())
+}
+
+// ───────────────────────── Lift direct-CAN application ──────────────────────
+
+/// Attach to one lift node and read its identity/nameplate/configuration.
+/// This deliberately does not change NMT state or arm motion.
+#[tauri::command]
+pub async fn lift_start(state: State<'_, AppState>, nid: u8) -> CmdResult<crate::lift::LiftState> {
+    let mgr = manager(&state).await?;
+    let mut guard = state.lift.lock().await;
+    if guard.is_some() {
+        return Err("a lift session is already attached; detach it first".into());
+    }
+    let app = crate::lift::LiftSession::start(mgr, nid)
+        .await
+        .map_err(err)?;
+    let snapshot = app.state();
+    *guard = Some(Arc::new(app));
+    Ok(snapshot)
+}
+
+/// Safe detach: directed NMT Stop, then confirmed Pre-operational + Disabled.
+#[tauri::command]
+pub async fn lift_stop(state: State<'_, AppState>) -> CmdResult<()> {
+    stop_lift_session(&state).await
+}
+
+#[tauri::command]
+pub async fn lift_get_state(state: State<'_, AppState>) -> CmdResult<crate::lift::LiftState> {
+    let app = state.lift.lock().await.clone();
+    Ok(app.map(|session| session.state()).unwrap_or_default())
+}
+
+/// Refresh non-PDO diagnostics over serialized SDO transactions.
+#[tauri::command]
+pub async fn lift_refresh(state: State<'_, AppState>) -> CmdResult<crate::lift::LiftState> {
+    let app = lift_session(&state).await?;
+    app.refresh().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_set_nmt(state: State<'_, AppState>, command: String) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.set_nmt(&command).await.map_err(err)
+}
+
+/// Immediate safe action. This always sends directed NMT Stop before the SDO
+/// Disabled request, so it remains useful if the SDO path is unhealthy.
+#[tauri::command]
+pub async fn lift_disable(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.disable().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_home(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.home().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_clear_fault(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.clear_fault().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_set_velocity(state: State<'_, AppState>, velocity_mps: f32) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.set_velocity(velocity_mps).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_renew_velocity(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.renew_velocity_lease().map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_set_position(state: State<'_, AppState>, position_m: f32) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.set_position(position_m).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_commission_arm(state: State<'_, AppState>) -> CmdResult<u32> {
+    let app = lift_session(&state).await?;
+    app.commission_arm().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_commission_hold(
+    state: State<'_, AppState>,
+    duty_permille: i16,
+) -> CmdResult<u16> {
+    let app = lift_session(&state).await?;
+    app.commission_hold(duty_permille).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_commission_renew(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.renew_commission_lease().map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_commission_release(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.commission_release().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_commission_disarm(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.commission_disarm().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_commission_clear_fault(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.commission_clear_fault().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_commission_epoch_service(
+    state: State<'_, AppState>,
+    motor_disconnected: bool,
+) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.commission_epoch_service(motor_disconnected)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_commission_estop(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.commission_estop().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_commission_csv(state: State<'_, AppState>) -> CmdResult<String> {
+    let app = lift_session(&state).await?;
+    app.commission_csv().map_err(err)
 }

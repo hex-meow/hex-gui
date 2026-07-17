@@ -79,6 +79,29 @@ export function FaultAlert({
   );
 }
 
+// ───────────────────────── 控制器 RobotMode(只读观察)─────────────────────────
+
+// 控制器上报的 RobotMode(设计 §3),base/arm 统一展示。与"我方是否在控/holder"是**不同维度**:
+// 例如只读观察(未取控)时仍能看到机器 RUNNING(别人在控)/ STANDBY / OVERTAKEN / FATAL_ERROR。
+// mode 取后端 diag::robot_mode_name(...) 的稳定短名;空/UNSPECIFIED → 不渲染。
+export function RobotModeTag({ mode, overtaken }: { mode?: string; overtaken?: string }) {
+  const { t } = useI18n();
+  const meta: Record<string, { color: string; key: I18nKey }> = {
+    STANDBY: { color: "default", key: "rmStandby" },
+    RUNNING: { color: "green", key: "rmRunning" },
+    OVERTAKEN: { color: "orange", key: "rmOvertaken" },
+    FATAL_ERROR: { color: "red", key: "rmFatal" },
+  };
+  const m = mode ? meta[mode] : undefined;
+  if (!m) return null;
+  const label = t(m.key) + (mode === "OVERTAKEN" && overtaken ? `: ${overtaken}` : "");
+  return (
+    <Tooltip title={t("rmTip")}>
+      <Tag color={m.color}>{label}</Tag>
+    </Tooltip>
+  );
+}
+
 // ───────────────────────── Events 查看 ─────────────────────────
 
 function EventsTab({ enabled, getEvents }: { enabled: boolean; getEvents: () => Promise<EventsSnapshot> }) {

@@ -5,7 +5,7 @@ import { App as AntdApp, Button, Card, Input, InputNumber, Select, Space, Table,
 import { api, errMsg } from "../api";
 import type { ArmInfo, ZenohArmState } from "../types";
 import { ArmViewer } from "./ArmViewer";
-import { DiagnosticsCard, FaultAlert } from "./DiagnosticsPanel";
+import { DiagnosticsCard, FaultAlert, RobotModeTag } from "./DiagnosticsPanel";
 import { useI18n } from "../i18n";
 
 const POLL_MS = 33; // ~30fps for the twin
@@ -18,7 +18,8 @@ const PRESETS: { name: string; q: number[] }[] = [
   { name: "Tuck", q: [0, 1.4, 2.4, 0, 0.6, 0] },
 ];
 
-export function ArmPanel() {
+/** embedded:由机器人控制台托管 —— 自动连接(复用已有连接)、锁定选中机器人、隐藏连接/发现 UI。 */
+export function ArmPanel({ embedded }: { embedded?: { endpoint: string; prefix: string; model: string } } = {}) {
   const { message } = AntdApp.useApp();
   const { t } = useI18n();
   const [endpoint, setEndpoint] = useState("");
@@ -30,6 +31,8 @@ export function ArmPanel() {
   const [gy, setGy] = useState(0);
   const [gz, setGz] = useState(-9.81);
   const [busy, setBusy] = useState(false);
+  const [urdfXml, setUrdfXml] = useState<string | null>(null); // 选中臂的 URDF(整机 arm+EE 或臂-only);null=退到捆的 firefly
+  const [assembled, setAssembled] = useState(false); // URDF 含 EE(整机)→ 显示“整机(含EE)”标签
   const [previewQ, setPreviewQ] = useState<number[] | null>(null); // 预设悬浮预览
   const [kp, setKp] = useState(10); // host 侧增益(控制器忠实执行);有重力前馈后 kp=10 已够,更柔和
   const [kd, setKd] = useState(1.5);
@@ -48,9 +51,43 @@ export function ArmPanel() {
     const h = window.setInterval(tick, POLL_MS);
     return () => { alive = false; window.clearInterval(h); };
   }, [connected]);
-  useEffect(() => () => { api.armDisconnect().catch(() => {}); }, []);
+  // 控制台托管:自动连接(arm 模块可能已连 → "已连接"报错视为复用)+ 发现 + 锁定选中。
+  useEffect(() => {
+    if (!embedded) return;
+    let alive = true;
+    (async () => {
+      try { await api.armConnect(embedded.endpoint); } catch { /* 已连接 = 复用 */ }
+      if (!alive) return;
+      setConnected(true);
+      try {
+        let list = await api.armDiscover();
+        if (!list.length) { await new Promise((r) => setTimeout(r, 900)); list = await api.armDiscover(); }
+        if (alive) setArms(list);
+      } catch { /* transient */ }
+      if (alive) setSelected(embedded.prefix);
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedded?.endpoint, embedded?.prefix]);
+  // 卸载:托管态**什么都不做**——会话跨切换保持(切走臂不掉:重力补偿/保位流照旧,
+  // 用户裁决 2026-07-12);统一释放收口在 RobotConsole 退出/断开。独立态整体断开。
+  useEffect(() => () => {
+    if (!embedded) { api.armDisconnect().catch(() => {}); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // 选中(手动或自动)某臂即诊断聚焦:订阅其 events/logs + 播种历史(与取控解耦,只读也生效)。
   useEffect(() => { if (connected && selected) api.armSetDiagFocus(selected).catch(() => {}); }, [connected, selected]);
+  // 选中即拉一次 URDF 供 3D 渲染(整机 arm+EE 或臂-only);取回 null/空则退到捆的 firefly。
+  useEffect(() => {
+    if (!connected || !selected) { setUrdfXml(null); setAssembled(false); return; }
+    let alive = true;
+    api.armGetUrdf(selected).then((u) => {
+      if (!alive) return;
+      setUrdfXml(u?.xml || null);
+      setAssembled(!!u?.assembled);
+    }).catch(() => { if (alive) { setUrdfXml(null); setAssembled(false); } });
+    return () => { alive = false; };
+  }, [connected, selected]);
 
   const connect = useCallback(async () => {
     setBusy(true);
@@ -70,10 +107,11 @@ export function ArmPanel() {
     setConnected(false); setArms([]); setSelected(null); setSt(null);
   }, []);
   const acquire = useCallback(async () => {
-    const a = arms.find((x) => x.prefix === selected);
+    const a = arms.find((x) => x.prefix === selected)
+      ?? (embedded ? { prefix: embedded.prefix, model: embedded.model } : null);
     if (!a) return;
     try { await api.armAcquire(a.prefix, a.model); message.success("已取得控制权"); } catch (e) { message.error(errMsg(e)); }
-  }, [arms, selected, message]);
+  }, [arms, selected, message, embedded]);
   const release = useCallback(async () => { try { await api.armRelease(); } catch (e) { message.error(errMsg(e)); } }, [message]);
   const setMode = useCallback(async (m: number) => { try { await api.armSetMode(m); } catch (e) { message.error(errMsg(e)); } }, [message]);
   const setGravity = useCallback(async () => { try { await api.armSetGravity([gx, gy, gz]); } catch (e) { message.error(errMsg(e)); } }, [gx, gy, gz, message]);
@@ -124,6 +162,14 @@ export function ArmPanel() {
     <Space direction="vertical" size={16} className="arm-panel" style={{ width: "100%", maxWidth: 1100 }}>
       <Card size="small" className="app-command-card">
         <Space wrap>
+          {embedded && (<>
+            <Typography.Text strong>{embedded.model}</Typography.Text>
+            <Tag>{embedded.prefix}</Tag>
+            {controlling
+              ? <Button danger onClick={release}>释放</Button>
+              : <Button type="primary" onClick={acquire}>取控</Button>}
+          </>)}
+          {!embedded && (<>
           <Typography.Text>Endpoint</Typography.Text>
           <Input style={{ width: 240 }} value={endpoint} disabled={connected} placeholder="留空=组播扫描,或 tcp/IP:7447" onChange={(e) => setEndpoint(e.target.value)} />
           {connected ? <Button onClick={disconnect}>断开</Button> : <Button type="primary" loading={busy} onClick={connect}>连接</Button>}
@@ -136,6 +182,7 @@ export function ArmPanel() {
           {connected && (controlling
             ? <Button danger onClick={release}>释放</Button>
             : <Button type="primary" disabled={!selected} onClick={acquire}>取控</Button>)}
+          </>)}
         </Space>
       </Card>
 
@@ -143,15 +190,22 @@ export function ArmPanel() {
 
       <Card size="small">
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 480px", minWidth: 380 }}>
-            <ArmViewer q={st?.q ?? []} gravity={grav} jointNames={st?.joint_names ?? []} previewQ={previewQ} armQuat={armQuat} />
-          </div>
+          {!embedded && (
+            <div style={{ flex: "1 1 480px", minWidth: 380 }}>
+              {/* 控制台托管时不渲自带 viewer:常驻整机 3D 已覆盖(13 §5);独立模式保留全功能(幽灵预览/重力箭头/倾斜) */}
+              <ArmViewer q={st?.q ?? []} gravity={grav} jointNames={st?.joint_names ?? []} previewQ={previewQ} armQuat={armQuat} urdfXml={urdfXml} />
+            </div>
+          )}
           <div style={{ flex: "1 1 320px", minWidth: 300 }}>
             <Space direction="vertical" size={12} style={{ width: "100%" }}>
               <Space wrap>
-                {controlling ? <Tag color="green">控制中</Tag> : st && st.holder !== 0 ? <Tag color="orange">被占 #{st.holder}</Tag> : <Tag>未取控</Tag>}
-                <Tag color="blue">{st?.mode ?? "—"}</Tag>
+                {controlling ? <Tag color="green">控制中</Tag> : st && st.holder !== 0 ? <Tag color="orange">被占 #{st.holder}</Tag> : <Tag>只读观察</Tag>}
+                {/* 控制器上报的 RobotMode(只读观察,base/arm 统一):STANDBY/RUNNING/OVERTAKEN/FATAL */}
+                <RobotModeTag mode={st?.robot_mode} overtaken={st?.overtaken_reason} />
+                {/* mode 是我方所设 OperatingMode(控制器不回传),只读观察别台时无意义 → 仅取控时显示 */}
+                {controlling && <Tag color="blue">{st?.mode || "—"}</Tag>}
                 {st?.has_ee ? <Tag color="purple">EE: {st.ee_model || "?"}</Tag> : <Tag>无 EE</Tag>}
+                {assembled && <Tag color="green">整机(含EE)</Tag>}
               </Space>
 
               <Typography.Text strong>模式</Typography.Text>

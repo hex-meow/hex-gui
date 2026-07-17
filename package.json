@@ -6,6 +6,7 @@
   "author": "hexmeow <kisonhe@hexmeow.com>",
   "type": "module",
   "scripts": {
+    "test": "node --test test/*.test.ts",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",

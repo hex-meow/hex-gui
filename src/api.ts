@@ -3,7 +3,48 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RollerCanState, SmartKnobState, ZenohArmState, ZenohBaseState } from "./types";
+import type {
+  ArmInfo,
+  ArmUrdf,
+  BaseInfo,
+  CanAggReply,
+  CanAnalyzerStatus,
+  CanBusHealth,
+  CanFilterSpec,
+  CanSendSpec,
+  CanTraceReply,
+  ConfigGetDto,
+  ConfigSetResult,
+  ConfigValidateResult,
+  ConsoleUrdf,
+  ControllerInfo,
+  EeInfo,
+  EventsSnapshot,
+  Hopea3InitProgress,
+  Hopea3State,
+  ImuState,
+  KnobConfig,
+  LiftState,
+  LiveState,
+  LogLine,
+  MotorInfo,
+  MotorMode,
+  MotorTarget,
+  MountEdge,
+  RestartResult,
+  RobotNode,
+  SceneRobot,
+  SmartKnobDevice,
+  SmartKnobProfile,
+  SmartKnobStartRequest,
+  SmartKnobTarget,
+  SmartKnobTelemetry,
+  SmartKnobTuning,
+  UnifiedSmartKnobState,
+  ZenohArmState,
+  ZenohBaseState,
+  ZenohEeState,
+} from "./types";
 
 export const api = {
   connect: (iface: string, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -56,52 +97,54 @@ export const api = {
   hopea3ResetOdom: () => invoke<void>("hopea3_reset_odom"),
   hopea3GetState: () => invoke<Hopea3State>("hopea3_get_state"),
 
+  // Lift raw-CAN Robot Application
+  liftStart: (nid: number) => invoke<LiftState>("lift_start", { nid }),
+  liftStop: () => invoke<void>("lift_stop"),
+  liftGetState: () => invoke<LiftState>("lift_get_state"),
+  liftRefresh: () => invoke<LiftState>("lift_refresh"),
+  liftSetNmt: (command: string) => invoke<void>("lift_set_nmt", { command }),
+  liftDisable: () => invoke<void>("lift_disable"),
+  liftHome: () => invoke<void>("lift_home"),
+  liftClearFault: () => invoke<void>("lift_clear_fault"),
+  liftSetVelocity: (velocityMps: number) =>
+    invoke<void>("lift_set_velocity", { velocityMps }),
+  liftRenewVelocity: () => invoke<void>("lift_renew_velocity"),
+  liftSetPosition: (positionM: number) =>
+    invoke<void>("lift_set_position", { positionM }),
+  liftCommissionArm: () => invoke<number>("lift_commission_arm"),
+  liftCommissionClearFault: () =>
+    invoke<void>("lift_commission_clear_fault"),
+  liftCommissionEpochService: (motorDisconnected: boolean) =>
+    invoke<void>("lift_commission_epoch_service", { motorDisconnected }),
+  liftCommissionHold: (dutyPermille: number) =>
+    invoke<number>("lift_commission_hold", { dutyPermille }),
+  liftCommissionRenew: () => invoke<void>("lift_commission_renew"),
+  liftCommissionRelease: () => invoke<void>("lift_commission_release"),
+  liftCommissionDisarm: () => invoke<void>("lift_commission_disarm"),
+  liftCommissionEstop: () => invoke<void>("lift_commission_estop"),
+  liftCommissionCsv: () => invoke<string>("lift_commission_csv"),
+
   // SmartKnob Robot Application
-  smartknobConfigs: () => invoke<KnobConfig[]>("smartknob_configs"),
-  smartknobStart: (nid: number, configIndex: number) =>
-    invoke<void>("smartknob_start", { nid, configIndex }),
+  smartknobListDevices: () =>
+    invoke<SmartKnobDevice[]>("smartknob_list_devices"),
+  smartknobGetProfile: (target: SmartKnobTarget) =>
+    invoke<SmartKnobProfile>("smartknob_get_profile", { target }),
+  smartknobProbe: (nodeId: number) =>
+    invoke<SmartKnobDevice>("smartknob_probe", { nodeId }),
+  smartknobStart: (request: SmartKnobStartRequest) =>
+    invoke<void>("smartknob_start", { request }),
   smartknobStop: () => invoke<void>("smartknob_stop"),
   smartknobSetConfig: (index: number) =>
     invoke<void>("smartknob_set_config", { index }),
-  smartknobSetTuning: (
-      pGain: number,
-      dGain: number,
-      strengthScale: number,
-      torqueLimitNm: number,
-      maxTorquePermille: number,
-      frictionCompensation: number,
-      clickTorqueNm: number,
-    ) =>
-    invoke<void>("smartknob_set_tuning", {
-      pGain,
-      dGain,
-      strengthScale,
-      torqueLimitNm,
-      maxTorquePermille,
-      frictionCompensation,
-      clickTorqueNm,
-    }),
+  smartknobSetTuning: (tuning: SmartKnobTuning) =>
+    invoke<void>("smartknob_set_tuning", { tuning }),
   smartknobClearError: () => invoke<void>("smartknob_clear_error"),
-  smartknobGetState: () => invoke<SmartKnobState>("smartknob_get_state"),
-  smartknobSetCustomConfig: (cfg: KnobConfig) =>
-    invoke<void>("smartknob_set_custom_config", {
-      position: cfg.position,
-      minPosition: cfg.min_position,
-      maxPosition: cfg.max_position,
-      positionWidthRadians: cfg.position_width_radians,
-      detentStrengthUnit: cfg.detent_strength_unit,
-      endstopStrengthUnit: cfg.endstop_strength_unit,
-      snapPoint: cfg.snap_point,
-      snapPointBias: cfg.snap_point_bias,
-      detentPositions: cfg.detent_positions,
-      clickTorqueNm: cfg.click_torque_nm,
-      frictionCompensation: cfg.friction_compensation,
-      strengthScale: cfg.strength_scale,
-      pGain: cfg.p_gain,
-      dGain: cfg.d_gain,
-      text: cfg.text,
-      ledHue: cfg.led_hue,
-    }),
+  smartknobGetState: () =>
+    invoke<UnifiedSmartKnobState>("smartknob_get_state"),
+  smartknobSetCustomConfig: (config: KnobConfig) =>
+    invoke<void>("smartknob_set_custom_config", { config }),
+  smartknobSetTelemetry: (telemetry: SmartKnobTelemetry) =>
+    invoke<void>("smartknob_set_telemetry", { telemetry }),
 
   // IMU
   imuStart: (nid: number) => invoke<void>("imu_start", { nid }),
@@ -129,32 +172,6 @@ export const api = {
   analyzerSdoWrite: (node: number, index: number, sub: number, dtype: string, value: string, timeoutMs: number, retries: number) =>
     invoke<string>("analyzer_sdo_write", { node, index, sub, dtype, value, timeoutMs, retries }),
 
-  // Unit RollerCAN trial panel
-  rollercanConfigs: () => invoke<KnobConfig[]>("rollercan_configs"),
-  rollercanConnect: (spec: string) => invoke<void>("rollercan_connect", { spec }),
-  rollercanDisconnect: () => invoke<void>("rollercan_disconnect"),
-  rollercanGetState: () => invoke<RollerCanState>("rollercan_get_state"),
-  rollercanPing: (hostId: number, targetId: number) =>
-    invoke<void>("rollercan_ping", { hostId, targetId }),
-  rollercanEnable: (configIndex: number, targetId: number) =>
-    invoke<void>("rollercan_enable", { configIndex, targetId }),
-  rollercanStopMotor: (hostId: number, targetId: number) =>
-    invoke<void>("rollercan_stop_motor", { hostId, targetId }),
-  rollercanReleaseStall: (hostId: number, targetId: number) =>
-    invoke<void>("rollercan_release_stall", { hostId, targetId }),
-  rollercanSaveFlash: (hostId: number, targetId: number) =>
-    invoke<void>("rollercan_save_flash", { hostId, targetId }),
-  rollercanSetCanId: (hostId: number, targetId: number, newId: number) =>
-    invoke<void>("rollercan_set_can_id", { hostId, targetId, newId }),
-  rollercanSetBitrate: (hostId: number, targetId: number, bitrate: number) =>
-    invoke<void>("rollercan_set_bitrate", { hostId, targetId, bitrate }),
-  rollercanSetStallProtection: (hostId: number, targetId: number, enabled: boolean) =>
-    invoke<void>("rollercan_set_stall_protection", { hostId, targetId, enabled }),
-  rollercanReadParam: (hostId: number, targetId: number, index: number) =>
-    invoke<void>("rollercan_read_param", { hostId, targetId, index }),
-  rollercanWriteParam: (hostId: number, targetId: number, index: number, value: number) =>
-    invoke<void>("rollercan_write_param", { hostId, targetId, index, value }),
-
   // Base(Zenoh)
   zenohConnect: (connect: string) => invoke<void>("zenoh_connect", { connect }),
   zenohDisconnect: () => invoke<void>("zenoh_disconnect"),
@@ -181,12 +198,48 @@ export const api = {
   armSetGravity: (gravity: [number, number, number]) => invoke<void>("arm_set_gravity", { gravity }),
   armGoto: (q: number[], kp: number, kd: number) => invoke<void>("arm_goto", { q, kp, kd }),
   armGetState: () => invoke<ZenohArmState>("arm_get_state"),
+  armGetUrdf: (prefix: string) => invoke<ArmUrdf | null>("arm_get_urdf", { prefix }),
   armRelease: () => invoke<void>("arm_release"),
   armSetDiagFocus: (prefix: string) => invoke<void>("arm_set_diag_focus", { prefix }),
   armRefreshDiag: () => invoke<void>("arm_refresh_diag"),
   armGetEvents: () => invoke<EventsSnapshot>("arm_get_events"),
   armGetLogs: () => invoke<LogLine[]>("arm_get_logs"),
   armClearFault: () => invoke<void>("arm_clear_fault"),
+
+  // EE(Zenoh)
+  eeConnect: (connect: string) => invoke<void>("ee_connect", { connect }),
+  eeDisconnect: () => invoke<void>("ee_disconnect"),
+  eeDiscover: () => invoke<EeInfo[]>("ee_discover"),
+  eeDiscoverAll: () => invoke<RobotNode[]>("ee_discover_all"),
+  eeAcquire: (prefix: string, model: string) => invoke<void>("ee_acquire", { prefix, model }),
+  eeSetFocus: (prefix: string) => invoke<void>("ee_set_focus", { prefix }),
+  eeGoto: (q: number, kp?: number) => invoke<void>("ee_goto", { q, kp: kp ?? null }),
+  eeSetMode: (mode: number) => invoke<void>("ee_set_mode", { mode }),
+  eeSetEstopBehavior: (behavior: number) => invoke<void>("ee_set_estop_behavior", { behavior }),
+  eeClearFault: () => invoke<void>("ee_clear_fault"),
+  eeGetState: () => invoke<ZenohEeState>("ee_get_state"),
+  eeRelease: () => invoke<void>("ee_release"),
+  eeScene: () => invoke<SceneRobot[]>("ee_scene"),
+  consoleGetUrdf: (prefix: string, kindName: string) => invoke<ConsoleUrdf | null>("console_get_urdf", { prefix, kindName }),
+  eeMachines: () => invoke<Record<string, MountEdge[]>>("ee_machines"),
+
+  // Controller Config(Zenoh)
+  configConnect: (connect: string) => invoke<void>("config_connect", { connect }),
+  configDisconnect: () => invoke<void>("config_disconnect"),
+  configDiscover: () => invoke<ControllerInfo[]>("config_discover"),
+  configGet: (cid: string) => invoke<ConfigGetDto>("config_get", { cid }),
+  configValidate: (cid: string, yaml: string) =>
+    invoke<ConfigValidateResult>("config_validate", { cid, yaml }),
+  configSet: (
+    cid: string,
+    yaml: string,
+    expectSha256: string,
+    apply: boolean,
+    confirm: boolean,
+    force: boolean,
+  ) => invoke<ConfigSetResult>("config_set", { cid, yaml, expectSha256, apply, confirm, force }),
+  configRestart: (cid: string, confirm: boolean, force: boolean) =>
+    invoke<RestartResult>("config_restart", { cid, confirm, force }),
 };
 
 /** Normalise a thrown Tauri error (usually a plain string) to a message. */

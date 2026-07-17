@@ -36,7 +36,7 @@ use hex_motor::canopen::sdo;
 use hex_motor::canopen::tpdo_config::TpdoEntry;
 use hex_motor::cia402::{Cia402Manager, Logic};
 use hex_motor::types::MotorMode;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 
 // ─────────────────────────── tunables / constants ───────────────────────────
@@ -123,7 +123,7 @@ const DEG: f64 = std::f64::consts::PI / 180.0;
 /// One haptic preset — the equivalent of the firmware's `PB_SmartKnobConfig`.
 /// Serialized to the UI so the mode buttons + dial stay in sync with the
 /// backend.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KnobConfig {
     /// Initial logical position when this mode is selected.
     pub position: i32,
@@ -615,6 +615,7 @@ impl SmartKnob {
         mgr: Arc<Cia402Manager>,
         nid: u8,
         config_index: usize,
+        shutdown_requested: &AtomicBool,
     ) -> anyhow::Result<Self> {
         let configs = preset_configs();
         let config_index = config_index.min(configs.len() - 1);
@@ -627,7 +628,17 @@ impl SmartKnob {
         // Per-motor init, retried — same recovery dance as HopeA3.
         let mut last_err = None;
         for attempt in 1..=INIT_ATTEMPTS {
-            match init_motor(&mgr, &bus, sdo_timeout, nid, tuning.max_torque_permille).await {
+            ensure_startup_allowed(&mgr, nid, shutdown_requested).await?;
+            match init_motor(
+                &mgr,
+                &bus,
+                sdo_timeout,
+                nid,
+                tuning.max_torque_permille,
+                shutdown_requested,
+            )
+            .await
+            {
                 Ok(()) => {
                     log::info!("SmartKnob: motor 0x{nid:02X} ready (attempt {attempt})");
                     last_err = None;
@@ -637,9 +648,17 @@ impl SmartKnob {
                     log::warn!(
                         "SmartKnob: init 0x{nid:02X} attempt {attempt}/{INIT_ATTEMPTS}: {e}"
                     );
+                    if shutdown_requested.load(Ordering::SeqCst) {
+                        let _ = mgr.disable(nid).await;
+                        return Err(anyhow::anyhow!(
+                            "SmartKnob startup cancelled by application shutdown while initializing 0x{nid:02X}: {e:#}"
+                        ));
+                    }
                     last_err = Some(e);
                     let _ = mgr.clear_error(nid).await;
+                    ensure_startup_allowed(&mgr, nid, shutdown_requested).await?;
                     tokio::time::sleep(Duration::from_millis(300)).await;
+                    ensure_startup_allowed(&mgr, nid, shutdown_requested).await?;
                 }
             }
         }
@@ -648,6 +667,7 @@ impl SmartKnob {
                 "motor 0x{nid:02X} failed after {INIT_ATTEMPTS} attempts"
             )));
         }
+        ensure_startup_allowed(&mgr, nid, shutdown_requested).await?;
 
         // Per-mode tuning, seeded from each preset's defaults.
         let per_mode_tuning: Vec<Tuning> = configs.iter().map(Tuning::from_config).collect();
@@ -800,10 +820,12 @@ async fn init_motor(
     sdo_timeout: Option<Duration>,
     nid: u8,
     max_torque: u16,
+    shutdown_requested: &AtomicBool,
 ) -> anyhow::Result<()> {
     mgr.initialize(nid)
         .await
         .map_err(|e| anyhow::anyhow!("initialize: {e}"))?;
+    ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
 
     let recipe = RpdoRecipe {
         rpdo_index: 0,
@@ -833,27 +855,53 @@ async fn init_motor(
         sdo::download(&**bus, nid, w.index, w.subindex, &w.data, sdo_timeout)
             .await
             .map_err(|e| anyhow::anyhow!("rpdo write {:04X}:{}: {e}", w.index, w.subindex))?;
+        ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
         tokio::time::sleep(Duration::from_millis(10)).await;
+        ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
     }
 
     // Zero everything but TFF: PDES, VDES, KP. (KD is streamed, default 0.)
     sdo::download_f32(&**bus, nid, OD_MIT, MIT_SUB_PDES, 0.0, sdo_timeout)
         .await
         .map_err(|e| anyhow::anyhow!("zero PDES: {e}"))?;
+    ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
     sdo::download_f32(&**bus, nid, OD_MIT, MIT_SUB_VDES, 0.0, sdo_timeout)
         .await
         .map_err(|e| anyhow::anyhow!("zero VDES: {e}"))?;
+    ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
     sdo::download_u16(&**bus, nid, OD_MIT, MIT_SUB_KP, 0, sdo_timeout)
         .await
         .map_err(|e| anyhow::anyhow!("zero KP: {e}"))?;
+    ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
 
     mgr.set_max_torque(nid, max_torque)
         .await
         .map_err(|e| anyhow::anyhow!("set_max_torque: {e}"))?;
+    ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
     mgr.set_mode(nid, MotorMode::Mit)
         .await
         .map_err(|e| anyhow::anyhow!("set_mode MIT: {e}"))?;
+    ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
     Ok(())
+}
+
+/// Abort a slow CANopen startup as soon as the native close handler asks for
+/// shutdown. A disable is attempted here because any completed initialization
+/// step may already have transitioned the drive toward operation enabled.
+async fn ensure_startup_allowed(
+    mgr: &Cia402Manager,
+    nid: u8,
+    shutdown_requested: &AtomicBool,
+) -> anyhow::Result<()> {
+    if !shutdown_requested.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    if let Err(error) = mgr.disable(nid).await {
+        log::warn!("SmartKnob: disable 0x{nid:02X} while cancelling startup: {error}");
+    }
+    Err(anyhow::anyhow!(
+        "SmartKnob startup cancelled by application shutdown"
+    ))
 }
 
 // ───────────────────────────── the haptic loop ──────────────────────────────

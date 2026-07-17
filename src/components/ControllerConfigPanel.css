@@ -1,0 +1,314 @@
+.cfg-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  min-height: 100%;
+}
+
+.cfg-connect-panel,
+.cfg-meta,
+.cfg-editor-card,
+.cfg-results {
+  background:
+    linear-gradient(135deg, rgba(231, 91, 43, 0.055), transparent 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02)),
+    #101318;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.cfg-connect-panel {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto minmax(420px, 1.2fr);
+  gap: 12px;
+  align-items: end;
+  padding: 16px;
+  border-top-color: rgba(231, 91, 43, 0.72);
+  box-shadow:
+    inset 0 1px rgba(255, 190, 160, 0.16),
+    0 10px 28px rgba(0, 0, 0, 0.18);
+}
+
+.cfg-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #d8dee8;
+  font-weight: 650;
+}
+
+.cfg-field > span {
+  color: #9aa4b2;
+  font-size: 12px;
+}
+
+.cfg-connect-panel__actions,
+.cfg-discovery {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cfg-discovery > .ant-typography {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.cfg-discovery__select {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.cfg-dock-status {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* ── meta bar ── */
+.cfg-meta {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  gap: 12px;
+  padding: 12px 16px;
+}
+
+.cfg-meta-item {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cfg-meta-item__label {
+  color: #8a93a3;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cfg-meta-item__value {
+  overflow: hidden;
+  color: #eef2f7;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cfg-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+/* ── editor card ── */
+.cfg-editor-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+}
+
+.cfg-editor-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cfg-editor-card__head h2 {
+  margin: 0 0 2px;
+  color: #eef2f7;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.cfg-editor-card__flags {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+.cfg-force {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── YAML editor (textarea + line-number gutter) ── */
+.cfg-editor {
+  display: flex;
+  height: 460px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  background: #0b0e12;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.cfg-editor--disabled {
+  opacity: 0.55;
+}
+
+.cfg-editor__gutter {
+  flex: 0 0 auto;
+  overflow: hidden;
+  padding: 10px 8px 10px 12px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+  color: #5b6472;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.cfg-editor__gutter > div {
+  height: 20px;
+}
+
+.cfg-editor__ta {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 10px 12px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #e6ebf2;
+  font: inherit;
+  resize: none;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+}
+
+.cfg-editor__ta::placeholder {
+  color: #4a525f;
+}
+
+/* ── action row ── */
+.cfg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* ── validation results ── */
+.cfg-results {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+}
+
+.cfg-result-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cfg-error-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #ff9b8f;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.cfg-critical-hint.ant-typography {
+  margin: 0;
+  font-size: 12px;
+}
+
+.cfg-critical-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.cfg-critical-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 77, 79, 0.35);
+  border-radius: 6px;
+  background: rgba(255, 77, 79, 0.08);
+}
+
+.cfg-critical-row__id {
+  color: #ffd0cd;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cfg-critical-row__field {
+  color: #ffb3b0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.cfg-critical-row__diff {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.cfg-diff-old {
+  color: #ff7875;
+  text-decoration: line-through;
+}
+
+.cfg-diff-arrow {
+  color: #8a93a3;
+}
+
+.cfg-diff-new {
+  color: #95de64;
+  font-weight: 700;
+}
+
+.cfg-robot-list {
+  margin: 6px 0 12px;
+  padding-left: 18px;
+  line-height: 1.7;
+}
+
+@media (max-width: 1220px) {
+  .cfg-connect-panel {
+    grid-template-columns: minmax(260px, 1fr) auto;
+  }
+
+  .cfg-discovery {
+    grid-column: 1 / -1;
+  }
+
+  .cfg-meta {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 860px) {
+  .cfg-connect-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .cfg-connect-panel__actions,
+  .cfg-discovery {
+    justify-content: flex-start;
+  }
+
+  .cfg-meta {
+    grid-template-columns: 1fr;
+  }
+}

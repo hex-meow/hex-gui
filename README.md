@@ -97,7 +97,7 @@ together:
 
 ```bash
 cargo install tauri-cli --version "^2" --locked   # once
-cd tauri-test/src-tauri
+cd hex-motor-gui/src-tauri
 cargo tauri dev
 ```
 
@@ -106,7 +106,7 @@ cargo tauri dev
 Build the frontend, then run the Rust binary directly (it embeds `dist/`):
 
 ```bash
-cd tauri-test
+cd hex-motor-gui
 npm run build
 cd src-tauri && cargo run
 ```
@@ -252,6 +252,81 @@ bus with the right settings:
 
 - **Motor Control** — everything above. Broadcasts our heartbeat (the motor's
   `0x1016` consumer needs it).
+- **Lift (Raw CAN)** — direct CANopen commissioning for one `lift-driver`
+  node (default `0x14`) on the already-open bus. Attach is observation-only:
+  it reads identity, nameplate/CRC, effective limits, heartbeat, TPDOs and SDO
+  diagnostics, including `0x4601:08..0B` sensor status, INA `DIAG_ALRT`, sample
+  age and failure count, without changing NMT or sending motion. TPDO2 frame
+  freshness and INA sample freshness are displayed and gated independently:
+  stale V/I remain visible only as explicitly marked last-successful values.
+  QEI readiness and the separately bench-qualified encoder direction are also
+  distinct status bits; an initialized QEI never implies that “up counts
+  positive” has been verified on the mechanism.
+  A separate low-duty commissioning card is shown **only** for the exact pair
+  0x1008:00 = "hexmeow-lift-commission" and 0x4700:01 U16 = 2. ABI1 and
+  production images never expose these controls. ABI2 uses the frozen 0x4700
+  record and exact 8-byte 0x4701:00 RPDO3
+  (active_session:u32 + pulse_id:u16 + signed duty:i16).
+
+  The device owns the anti-replay boot epoch and one-shot challenge. ARM echoes
+  the currently displayed non-zero challenge with kind=Arm; that echoed value
+  becomes the active session only after ArmedIdle + flags.ARMED confirmation.
+  The active session is always an echoed device challenge. Clear-fault is a
+  separate kind=ClearFault challenge path, enabled only while NMT is Operational
+  and FaultLatched; after CAN E-stop the operator must explicitly return the
+  node to Operational before clearing. The GUI displays boot epoch,
+  challenge/kind, expected and active pulse IDs, qualified encoder sign, and
+  the INA238 configuration-fingerprint mismatch bitmap.
+
+  Stage A epoch establishment is offered only for MissingOrUnreadable or
+  Corrupt continuity. The write is enabled only in NMT Pre-operational while
+  the commissioning state is Disarmed, active_session=0, ARMED/OUTPUT flags
+  are clear, boot_epoch=0, and the operator separately confirms that the motor
+  is physically disconnected from the driver PCB. The backend rechecks that
+  boolean, obtains a fresh non-zero u32 provisioning salt from the operating
+  system random source, and writes that value to EPOCH_SERVICE; there is no
+  fixed service magic. The salt is anti-stale framing rather than a secret or
+  CAN authentication credential. Exhausted and WriteFailed are warning-only
+  terminal states: the GUI deliberately exposes no service or retry button
+  for them.
+
+  Stage A may be performed only with the motor physically disconnected.
+  Connecting the motor for Stage B remains blocked until the shared `hstd`
+  persistence paths (`0x1010`, `0x1011`, and write-through Flash mutations)
+  reject or defer work while the lift is Operational, armed, or output-capable;
+  otherwise blocking Flash work can pause the cooperative supervisor.
+
+  Rust owns the 20 ms RPDO3 stream. ArmedIdle sends zero keepalives; A/B
+  hold-to-run repeats only the device-issued expected pulse ID and duty—the
+  WebView never predicts a sequence number. Pointer release, window blur, or
+  loss of the operator lease sends zero. The host mirrors the firmware-reported
+  100 ms lease from 0x4700:08 instead of maintaining a longer timeout.
+  Repeated frames cannot extend the firmware absolute pulse deadline.
+  Firmware hard-cap, lease, and maximum-pulse values remain read-only in the
+  UI; no host sensor gate assumes SAMPLE_VALID.
+
+  TPDO3 (0x380 + node) and TPDO4 (0x480 + node) are paired by their u16
+  firmware tick before display/recording. The latest 2,000 paired samples are
+  kept in a bounded backend buffer (cleared by the next ARM) and can be copied
+  as CSV; this is intentionally not durable file logging yet. Commissioning
+  E-stop sends directed NMT Stop before waiting for SDO, then enters Pre-op
+  and confirms active_session=0, state=Disarmed or FaultLatched, and clear
+  ARMED/OUTPUT flags. It is a CAN
+  software stop, not a safety-rated substitute for physical power removal.
+  Generic Homing/Velocity/Position and the production Clear Fault command are
+  disabled for every commissioning image; a latched commissioning fault can
+  only use the dedicated kind=ClearFault challenge path above.
+  Homing, velocity and position remain locked until heartbeat and both TPDOs
+  are fresh, the encoder/INA sample is healthy, `CONFIG_VALID` is set, NMT is
+  Operational, no fault is latched, and Homing has completed where required.
+  Velocity is hold-to-jog: Rust owns the RPDO timing while the WebView renews a
+  250 ms operator lease. Lease loss sends a
+  directed NMT Stop. Detach/Disconnect and normal window close report success
+  only after a Pre-operational heartbeat and Disabled-command readback; a
+  failed close keeps the window open with `STOP UNCONFIRMED`. Position is an
+  autonomous goal: confirmed shutdown cancels it, but a process crash cannot,
+  so commissioning still requires a physical power-removal path. This tool
+  does not broadcast a host heartbeat.
 - **Change ID** — batch-friendly Node-ID changer. Connect, pick a motor (or
   type its current ID), enter a new ID, **Write & Save** (writes `0x2001:01`
   then `0x1010:01 = "save"`). The change takes effect **only after a

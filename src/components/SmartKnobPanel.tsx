@@ -1,377 +1,475 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  Alert,
   App as AntdApp,
   Button,
   Card,
   Col,
+  Collapse,
   Empty,
   Input,
   InputNumber,
   Row,
   Select,
   Space,
+  Spin,
   Statistic,
+  Switch,
   Tag,
   Typography,
 } from "antd";
 import { api, errMsg } from "../api";
 import { useI18n } from "../i18n";
 import { nid2hex } from "../format";
-import type { KnobConfig, MotorInfo, SmartKnobState } from "../types";
+import type {
+  KnobConfig,
+  SmartKnobDevice,
+  SmartKnobEffortUnit,
+  SmartKnobProfile,
+  SmartKnobTarget,
+  SmartKnobTelemetry,
+  SmartKnobTuning,
+  UnifiedSmartKnobState,
+} from "../types";
 
-const POLL_MS = 40; // 25 Hz UI poll (haptic loop runs at 1 kHz in Rust)
+const STATE_POLL_MS = 40;
+const DEVICE_POLL_MS = 500;
+const EDIT_GRACE_MS = 1200;
 
-interface PerModeTuning {
-  pGain: number;
-  dGain: number;
-  strength: number;
-  torqueLimit: number;
-  maxTorque: number;
-  frictionComp: number;
-  clickTorque: number;
+interface TargetEditor {
+  targetKey: string;
+  modeIndex: number;
+  customConfig: KnobConfig | null;
+  tuning: SmartKnobTuning;
+  telemetry: SmartKnobTelemetry;
+  perModeTuning: Map<number, SmartKnobTuning>;
 }
 
-export function SmartKnobPanel({ connected, devices }: { connected: boolean; devices: MotorInfo[] }) {
+export function SmartKnobPanel({ connected }: { connected: boolean }) {
   const { message } = AntdApp.useApp();
   const { t } = useI18n();
-
-  const [configs, setConfigs] = useState<KnobConfig[]>([]);
-  const [selectedNid, setSelectedNid] = useState<number | null>(null);
-  const [modeIndex, setModeIndex] = useState(0);
-
+  const [devices, setDevices] = useState<SmartKnobDevice[]>([]);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [selectionConfirmed, setSelectionConfirmed] = useState(false);
+  const [profile, setProfile] = useState<SmartKnobProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [editor, setEditor] = useState<TargetEditor | null>(null);
   const [running, setRunning] = useState(false);
   const [starting, setStarting] = useState(false);
-  const [state, setState] = useState<SmartKnobState | null>(null);
+  const [modeSwitching, setModeSwitching] = useState(false);
+  const [state, setState] = useState<UnifiedSmartKnobState | null>(null);
+  const [probeNodeId, setProbeNodeId] = useState(0xa8);
+  const [probing, setProbing] = useState(false);
 
-  // Tuning (local; applied live to the backend).
-  const [strength, setStrength] = useState(0.15);
-  const [torqueLimit, setTorqueLimit] = useState(2.0);
-  const [maxTorque, setMaxTorque] = useState(700);
-  const [frictionComp, setFrictionComp] = useState(0.0);
-  const [clickTorque, setClickTorque] = useState(0.0);
-  const [pGain, setPGain] = useState(0.0);
-  const [dGain, setDGain] = useState(0.0);
-
-  // Custom mode config editing (only meaningful for mode index 0).
-  const [customConfig, setCustomConfig] = useState<KnobConfig | null>(null);
-
-  // Per-mode tuning RAM — survives mode switches so the user doesn't lose
-  // their tweaks.  Lazy: only populated when the user touches a slider.
-  const perModeTuning = useRef<Map<number, PerModeTuning>>(new Map());
-
-  // Timestamp of the user's last local tuning edit. The poll's echo-sync is
-  // suppressed for a grace period after it, so a stale backend echo can't
-  // snap an input back while the user is still typing/stepping. A mode
-  // switch clears it — the backend's per-mode restore must reach the
-  // sliders immediately, or a slider nudge during the leftover grace would
-  // persist the previous mode's values into the new mode's slot.
+  const editorCache = useRef<Map<string, TargetEditor>>(new Map());
   const lastEditRef = useRef(0);
-  const EDIT_GRACE_MS = 1200;
+  const liveCommandSeqRef = useRef<Promise<void>>(Promise.resolve());
+  const modeSwitchingRef = useRef(false);
+  const onlineSetRef = useRef<string[]>([]);
 
-  // Serializes pickMode's backend pushes across rapid mode clicks: without
-  // this, two clicks' async closures interleave and one click's set_tuning
-  // can land after the other click's set_config, persisting into the wrong
-  // per-mode slot.
-  const pickSeqRef = useRef<Promise<void>>(Promise.resolve());
+  const onlineDevices = useMemo(() => devices.filter((device) => device.online), [devices]);
+  const mixedOnline = useMemo(
+    () => new Set(onlineDevices.map((device) => device.target.kind)).size > 1,
+    [onlineDevices],
+  );
+  const selectedDevice = useMemo(
+    () => devices.find((device) => targetKey(device.target) === selectedKey) ?? null,
+    [devices, selectedKey],
+  );
+  const readyProfile =
+    profile && selectedKey === targetKey(profile.target) ? profile : null;
+  const readyEditor = editor?.targetKey === selectedKey ? editor : null;
 
-  // Fetch the preset list once (it's static, connection-independent).
-  // Also seed the custom config placeholder from index 0.
-  useEffect(() => {
-    api.smartknobConfigs().then((cfgs) => {
-      setConfigs(cfgs);
-      if (cfgs.length > 0) {
-        setCustomConfig(cfgs[0]);
-        setStrength(cfgs[0].strength_scale);
-        setFrictionComp(cfgs[0].friction_compensation);
-        setClickTorque(cfgs[0].click_torque_nm);
-        setPGain(cfgs[0].p_gain);
-        setDGain(cfgs[0].d_gain);
-      }
-    }).catch(() => {});
+  const commitEditor = useCallback((next: TargetEditor) => {
+    const copy = cloneEditor(next);
+    editorCache.current.set(next.targetKey, copy);
+    setEditor(next);
   }, []);
 
-  // Auto-select the first discovered motor.
-  useEffect(() => {
-    if (selectedNid == null && devices.length > 0) setSelectedNid(devices[0].node_id);
-  }, [devices, selectedNid]);
+  // All writes to an active haptic session share one queue. In particular,
+  // tuning/custom writes must never overtake a mode selection and land in the
+  // previous mode's firmware-side slot.
+  const enqueueLiveCommand = useCallback(<T,>(command: () => Promise<T>): Promise<T> => {
+    const result = liveCommandSeqRef.current.then(command, command);
+    liveCommandSeqRef.current = result.then(() => undefined, () => undefined);
+    return result;
+  }, []);
 
-  // Poll backend state while running.
+  // Discover both CANopen and RollerCAN knobs through the shared bus manager.
+  useEffect(() => {
+    if (!connected) {
+      setDevices([]);
+      setSelectedKey(null);
+      setSelectionConfirmed(false);
+      onlineSetRef.current = [];
+      setProfile(null);
+      setEditor(null);
+      setRunning(false);
+      setState(null);
+      return;
+    }
+
+    let alive = true;
+    let inFlight = false;
+    const tick = async () => {
+      if (!alive || inFlight) return;
+      inFlight = true;
+      try {
+        const list = await api.smartknobListDevices();
+        if (!alive) return;
+        setDevices(list);
+        const onlineKeys = list
+          .filter((device) => device.online)
+          .map((device) => targetKey(device.target))
+          .sort();
+        const previousOnlineKeys = onlineSetRef.current;
+        const onlineSetChanged =
+          previousOnlineKeys.length !== onlineKeys.length
+          || previousOnlineKeys.some((key, index) => key !== onlineKeys[index]);
+        onlineSetRef.current = onlineKeys;
+        if (onlineKeys.length === 0) {
+          setSelectionConfirmed(false);
+        } else if (onlineKeys.length === 1) {
+          // A unique target is safe to auto-select and implicitly confirm.
+          setSelectionConfirmed(true);
+        } else if (onlineSetChanged) {
+          // Preserve a still-valid selection, but require an explicit user
+          // confirmation whenever the set becomes ambiguous or changes.
+          setSelectionConfirmed(false);
+        }
+        setSelectedKey((current) => {
+          if (running && current) return current;
+          if (current && onlineKeys.includes(current)) return current;
+          return onlineKeys.length === 1 ? onlineKeys[0] : null;
+        });
+      } catch {
+        // Discovery is best-effort; a later poll normally recovers.
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void tick();
+    const handle = window.setInterval(tick, DEVICE_POLL_MS);
+    return () => {
+      alive = false;
+      window.clearInterval(handle);
+    };
+  }, [connected, running]);
+
+  // Profiles are protocol-specific. Keep an independent editor/tuning cache
+  // per protocol-qualified target so switching devices never leaks settings.
+  useEffect(() => {
+    if (!connected || !selectedDevice?.online) {
+      setProfile(null);
+      setEditor(null);
+      return;
+    }
+
+    let alive = true;
+    const key = targetKey(selectedDevice.target);
+    setProfileLoading(true);
+    setProfile(null);
+    setEditor(null);
+    api.smartknobGetProfile(selectedDevice.target)
+      .then((nextProfile) => {
+        if (!alive) return;
+        const cached = editorCache.current.get(key);
+        const nextEditor = cached
+          ? cloneEditor(cached)
+          : createEditor(key, nextProfile);
+        editorCache.current.set(key, cloneEditor(nextEditor));
+        setProfile(nextProfile);
+        setEditor(nextEditor);
+      })
+      .catch((error) => {
+        if (alive) message.error(`${t("skProfileFailed")}: ${errMsg(error)}`);
+      })
+      .finally(() => {
+        if (alive) setProfileLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [connected, selectedDevice?.online, selectedKey, message, t]);
+
+  // The host loop and firmware loop both expose one unit-aware state shape.
   useEffect(() => {
     if (!running) return;
     let alive = true;
+    let inFlight = false;
     const tick = async () => {
+      if (!alive || inFlight) return;
+      inFlight = true;
       try {
-        const s = await api.smartknobGetState();
-        if (alive) {
-          setState(s);
-          // Sync tuning values so config-driven changes (e.g. detent_strength →
-          // p_gain) and per-mode restores propagate to the sliders.
-          // strength_scale is excluded — the user controls it independently via
-          // the Tuning — Feel slider. Skipped right after a local edit so the
-          // backend echo doesn't fight the input the user is typing into.
-          if (performance.now() - lastEditRef.current > EDIT_GRACE_MS) {
-            setPGain(s.p_gain);
-            setDGain(s.d_gain);
-            setTorqueLimit(s.torque_limit_nm);
-            setMaxTorque(s.max_torque_permille);
-            setFrictionComp(s.friction_compensation);
-            setClickTorque(s.click_torque_nm);
-          }
+        const nextState = await api.smartknobGetState();
+        if (!alive) return;
+        setState(nextState);
+        if (!nextState.running) setRunning(false);
+
+        if (performance.now() - lastEditRef.current > EDIT_GRACE_MS) {
+          setEditor((current) => {
+            if (!current) return current;
+            const nextTuning: SmartKnobTuning = {
+              ...current.tuning,
+              pGain: nextState.p_gain,
+              dGain: nextState.d_gain,
+              strengthScale: nextState.strength_scale,
+              effortLimit: nextState.effortLimit,
+              maxOutputPermille: nextState.maxOutputPermille,
+              frictionCompensation: nextState.friction_compensation,
+              clickEffort: nextState.click_torque_nm,
+            };
+            const nextTelemetry: SmartKnobTelemetry = {
+              enabled: nextState.telemetryEnabled ?? current.telemetry.enabled,
+              rateHz: nextState.telemetryRateHz ?? current.telemetry.rateHz,
+            };
+            const next = { ...current, tuning: nextTuning, telemetry: nextTelemetry };
+            editorCache.current.set(current.targetKey, cloneEditor(next));
+            return next;
+          });
         }
       } catch {
-        /* transient */
+        // A transient state read must not stop a running haptic session.
+      } finally {
+        inFlight = false;
       }
     };
-    tick();
-    const h = window.setInterval(tick, POLL_MS);
+
+    void tick();
+    const handle = window.setInterval(tick, STATE_POLL_MS);
     return () => {
       alive = false;
-      window.clearInterval(h);
+      window.clearInterval(handle);
     };
   }, [running]);
 
-  // If the bus drops under us, return to the stopped view.
-  useEffect(() => {
-    if (!connected && running) {
-      setRunning(false);
-      setState(null);
-    }
-  }, [connected, running]);
-
   const start = useCallback(async () => {
-    if (selectedNid == null) return;
+    if (
+      !selectedDevice?.online
+      || !readyProfile
+      || !readyEditor
+      || mixedOnline
+      || (onlineDevices.length > 1 && !selectionConfirmed)
+    ) return;
+    const config = readyProfile.configs[readyEditor.modeIndex];
+    if (!config) return;
+
     setStarting(true);
-    let backendStarted = false;
     try {
-      const saved = perModeTuning.current.get(modeIndex);
-      const cfg = configs[modeIndex];
-      const startPGain = saved?.pGain ?? cfg?.p_gain ?? pGain;
-      const startDGain = saved?.dGain ?? cfg?.d_gain ?? dGain;
-      const startStrength = saved?.strength ?? cfg?.strength_scale ?? strength;
-      const startFriction = saved?.frictionComp ?? cfg?.friction_compensation ?? frictionComp;
-      const startClick = saved?.clickTorque ?? cfg?.click_torque_nm ?? clickTorque;
-      const startTorqueLimit = saved?.torqueLimit ?? torqueLimit;
-      const startMaxTorque = saved?.maxTorque ?? maxTorque;
-      await api.smartknobStart(selectedNid, modeIndex);
-      backendStarted = true;
-      // If starting in custom mode, push the current custom config.
-      if (modeIndex === 0 && customConfig) {
-        await api.smartknobSetCustomConfig({
-          ...customConfig,
-          strength_scale: startStrength,
-          friction_compensation: startFriction,
-          click_torque_nm: startClick,
-          p_gain: startPGain,
-          d_gain: startDGain,
-        });
-      }
-      await api.smartknobSetTuning(
-        startPGain,
-        startDGain,
-        startStrength,
-        startTorqueLimit,
-        startMaxTorque,
-        startFriction,
-        startClick,
-      );
+      const request = {
+        target: selectedDevice.target,
+        configIndex: readyEditor.modeIndex,
+        tuning: readyEditor.tuning,
+        ...(readyEditor.modeIndex === 0 && readyEditor.customConfig
+          ? { customConfig: configWithTuning(readyEditor.customConfig, readyEditor.tuning) }
+          : {}),
+        ...(readyProfile.supportsTelemetry ? { telemetry: readyEditor.telemetry } : {}),
+      };
+      await api.smartknobStart(request);
+      setState(null);
       setRunning(true);
       message.success(t("skRunning"));
-    } catch (e) {
-      if (backendStarted) {
-        await api.smartknobStop().catch(() => {});
-      }
-      setRunning(false);
-      setState(null);
-      message.error(`${t("skStartFailed")}: ${errMsg(e)}`);
+    } catch (error) {
+      // A RollerCAN start can fail after firmware accepted enable while the
+      // bus then disappears and rollback also fails. The backend deliberately
+      // retains that session so Stop can be retried; reflect it instead of
+      // hiding the safety control behind a generic start error.
+      const failure = errMsg(error);
+      const uncertainState = await api.smartknobGetState().catch(() => null);
+      setState(uncertainState);
+      setRunning(Boolean(uncertainState?.running) || failure.includes("may still be active"));
+      message.error(`${t("skStartFailed")}: ${failure}`);
     } finally {
       setStarting(false);
     }
-  }, [selectedNid, modeIndex, configs, customConfig, pGain, dGain, strength, torqueLimit, maxTorque, frictionComp, clickTorque, message, t]);
+  }, [selectedDevice, readyProfile, readyEditor, mixedOnline, onlineDevices.length, selectionConfirmed, message, t]);
 
   const stop = useCallback(async () => {
     try {
       await api.smartknobStop();
-    } catch (e) {
-      message.error(errMsg(e));
+      setRunning(false);
+      setModeSwitching(false);
+      setState(null);
+    } catch (error) {
+      // The backend retains a RollerCAN active marker when zero/disable
+      // fails, so keep Stop visible and let the user retry safely.
+      message.error(`${t("skStopFailed")}: ${errMsg(error)}`);
     }
-    setRunning(false);
-    setState(null);
-  }, [message]);
-
-  const pickMode = useCallback(
-    (idx: number) => {
-      setModeIndex(idx);
-      // End any edit-grace window: the poll must sync the new mode's
-      // restored tuning right away (see lastEditRef).
-      lastEditRef.current = 0;
-      // The backend's per_mode_tuning is the single authority for a mode's
-      // tuning: it restores the user's tweaks (or the mode's stock defaults,
-      // incl. its safety torque limits) on switch, and the poll syncs the
-      // sliders from that. The frontend only pushes tuning for modes the
-      // user has actually touched in this panel — pushing anything for an
-      // untouched mode would overwrite its backend defaults with whatever
-      // the *previous* mode's sliders happened to hold.
-      const saved = perModeTuning.current.get(idx);
-      let merged: KnobConfig | null = null;
-      if (saved) {
-        setStrength(saved.strength);
-        setTorqueLimit(saved.torqueLimit);
-        setMaxTorque(saved.maxTorque);
-        setFrictionComp(saved.frictionComp);
-        setClickTorque(saved.clickTorque);
-        setPGain(saved.pGain);
-        setDGain(saved.dGain);
-        if (idx === 0 && customConfig) {
-          merged = {
-            ...customConfig,
-            strength_scale: saved.strength,
-            friction_compensation: saved.frictionComp,
-            click_torque_nm: saved.clickTorque,
-            p_gain: saved.pGain,
-            d_gain: saved.dGain,
-          };
-          setCustomConfig(merged);
-        }
-      } else {
-        // Optimistic display of what the backend will restore; the poll
-        // corrects tl/mt (backend per-mode defaults) within one tick.
-        setStrength(configs[idx]?.strength_scale ?? 0.15);
-        setFrictionComp(configs[idx]?.friction_compensation ?? 0);
-        setClickTorque(configs[idx]?.click_torque_nm ?? 0);
-        setPGain(configs[idx]?.p_gain ?? 0);
-        setDGain(configs[idx]?.d_gain ?? 0);
-        if (idx === 0 && customConfig) merged = customConfig;
-      }
-      if (running) {
-        const savedTuning = saved; // capture for the async closure
-        const cfgToPush = merged;
-        // Chain onto the previous click's pushes so rapid mode clicks stay
-        // strictly ordered end-to-end.
-        pickSeqRef.current = pickSeqRef.current.then(async () => {
-          try {
-            // Sequenced: set_tuning persists into the *requested* mode's
-            // slot, so the config switch must land first (fire-and-forget
-            // invokes race and can write the new mode's tuning into the old
-            // mode's slot).
-            await api.smartknobSetConfig(idx);
-            if (idx === 0 && cfgToPush) await api.smartknobSetCustomConfig(cfgToPush);
-            if (savedTuning) {
-              await api.smartknobSetTuning(
-                savedTuning.pGain,
-                savedTuning.dGain,
-                savedTuning.strength,
-                savedTuning.torqueLimit,
-                savedTuning.maxTorque,
-                savedTuning.frictionComp,
-                savedTuning.clickTorque,
-              );
-            }
-          } catch {
-            /* transient — poll re-syncs the UI either way */
-          }
-        });
-      }
-    },
-    [running, configs, customConfig]
-  );
-
-  const applyTuning = useCallback(
-    (s: number, tl: number, mt: number, fc: number, ct: number, pg: number, dg: number) => {
-      lastEditRef.current = performance.now();
-      setStrength(s);
-      setTorqueLimit(tl);
-      setMaxTorque(mt);
-      setFrictionComp(fc);
-      setClickTorque(ct);
-      setPGain(pg);
-      setDGain(dg);
-      if (modeIndex === 0) {
-        setCustomConfig((prev) => prev ? {
-          ...prev,
-          strength_scale: s,
-          friction_compensation: fc,
-          click_torque_nm: ct,
-          p_gain: pg,
-          d_gain: dg,
-        } : prev);
-      }
-      // Persist into the per-mode RAM slot for the currently-active mode.
-      perModeTuning.current.set(modeIndex, {
-        strength: s, torqueLimit: tl, maxTorque: mt, frictionComp: fc,
-        clickTorque: ct, pGain: pg, dGain: dg,
-      });
-      if (running) api.smartknobSetTuning(pg, dg, s, tl, mt, fc, ct).catch(() => {});
-    },
-    [running, modeIndex]
-  );
-
-  // Custom mode config editor: merge updates into local state (immediate
-  // dial feedback) and push to the backend if running.
-  const applyCustomConfig = useCallback(
-    (updates: Partial<KnobConfig>) => {
-      lastEditRef.current = performance.now();
-      setCustomConfig((prev) => {
-        if (!prev) return prev;
-        const next: KnobConfig = {
-          ...prev,
-          strength_scale: strength,
-          friction_compensation: frictionComp,
-          click_torque_nm: clickTorque,
-          p_gain: pGain,
-          d_gain: dGain,
-          ...updates,
-        };
-        if (modeIndex === 0 && updates.detent_strength_unit !== undefined) {
-          next.p_gain = recommendedPGain(next);
-          next.d_gain = recommendedDGain(next);
-          setPGain(next.p_gain);
-          setDGain(next.d_gain);
-          perModeTuning.current.set(modeIndex, {
-            strength,
-            torqueLimit,
-            maxTorque,
-            frictionComp,
-            clickTorque,
-            pGain: next.p_gain,
-            dGain: next.d_gain,
-          });
-          if (running) {
-            api.smartknobSetTuning(
-              next.p_gain,
-              next.d_gain,
-              strength,
-              torqueLimit,
-              maxTorque,
-              frictionComp,
-              clickTorque,
-            ).catch(() => {});
-          }
-        }
-        if (running) {
-          api.smartknobSetCustomConfig(next).catch(() => {});
-        }
-        return next;
-      });
-    },
-    [running, modeIndex, strength, torqueLimit, maxTorque, frictionComp, clickTorque, pGain, dGain],
-  );
-
-  const applyRecommendedGains = useCallback(() => {
-    const cfg = modeIndex === 0 ? customConfig : configs[modeIndex];
-    if (!cfg) return;
-    const nextPGain = recommendedPGain(cfg);
-    const nextDGain = recommendedDGain(cfg);
-    applyTuning(strength, torqueLimit, maxTorque, frictionComp, clickTorque, nextPGain, nextDGain);
-  }, [modeIndex, customConfig, configs, applyTuning, strength, torqueLimit, maxTorque, frictionComp, clickTorque]);
+  }, [message, t]);
 
   const clearError = useCallback(async () => {
     try {
       await api.smartknobClearError();
       message.success(t("skCleared"));
-    } catch (e) {
-      message.error(errMsg(e));
+    } catch (error) {
+      message.error(errMsg(error));
     }
   }, [message, t]);
+
+  const probeRollerCan = useCallback(async () => {
+    setProbing(true);
+    try {
+      const found = await api.smartknobProbe(probeNodeId);
+      setDevices((current) => upsertDevice(current, found));
+      if (found.online) {
+        setSelectedKey(targetKey(found.target));
+        setSelectionConfirmed(true);
+      }
+      message.success(`${t("skProbeFound")}: ${formatDevice(found)}`);
+    } catch (error) {
+      message.error(`${t("skProbeFailed")}: ${errMsg(error)}`);
+    } finally {
+      setProbing(false);
+    }
+  }, [probeNodeId, message, t]);
+
+  const syncEditorFromState = useCallback((nextState: UnifiedSmartKnobState, fallback: TargetEditor) => {
+    if (!readyProfile) return;
+    const index = nextState.config_index;
+    const preset = readyProfile.configs[index];
+    if (!preset) {
+      commitEditor(fallback);
+      return;
+    }
+    const tuning: SmartKnobTuning = {
+      pGain: nextState.p_gain,
+      dGain: nextState.d_gain,
+      strengthScale: nextState.strength_scale,
+      effortLimit: nextState.effortLimit,
+      maxOutputPermille: nextState.maxOutputPermille,
+      frictionCompensation: nextState.friction_compensation,
+      clickEffort: nextState.click_torque_nm,
+    };
+    const perModeTuning = new Map(fallback.perModeTuning);
+    perModeTuning.set(index, tuning);
+    const customConfig = index === 0 && nextState.config
+      ? { ...nextState.config, detent_positions: [...nextState.config.detent_positions] }
+      : fallback.customConfig;
+    commitEditor({
+      ...fallback,
+      modeIndex: index,
+      tuning,
+      customConfig,
+      perModeTuning,
+    });
+    setState(nextState);
+  }, [readyProfile, commitEditor]);
+
+  const pickMode = useCallback(async (index: number) => {
+    if (modeSwitchingRef.current || !readyProfile || !readyEditor || !readyProfile.configs[index]) return;
+    const previous = cloneEditor(readyEditor);
+    lastEditRef.current = 0;
+    const saved = readyEditor.perModeTuning.get(index);
+    const nextTuning = saved ?? tuningForConfig(readyProfile.configs[index], readyProfile);
+    const next = {
+      ...readyEditor,
+      modeIndex: index,
+      tuning: nextTuning,
+    };
+    commitEditor(next);
+
+    if (running) {
+      const custom = index === 0 && next.customConfig
+        ? configWithTuning(next.customConfig, nextTuning)
+        : null;
+      modeSwitchingRef.current = true;
+      setModeSwitching(true);
+      try {
+        await enqueueLiveCommand(async () => {
+          await api.smartknobSetConfig(index);
+          if (custom) await api.smartknobSetCustomConfig(custom);
+          if (saved) await api.smartknobSetTuning(saved);
+        });
+      } catch (error) {
+        message.error(`${t("skModeChangeFailed")}: ${errMsg(error)}`);
+        try {
+          const nextState = await api.smartknobGetState();
+          syncEditorFromState(nextState, previous);
+        } catch {
+          commitEditor(previous);
+        }
+      } finally {
+        modeSwitchingRef.current = false;
+        setModeSwitching(false);
+      }
+    }
+  }, [modeSwitching, readyProfile, readyEditor, running, commitEditor, enqueueLiveCommand, message, t, syncEditorFromState]);
+
+  const applyTuning = useCallback((patch: Partial<SmartKnobTuning>) => {
+    if (!readyEditor || modeSwitchingRef.current) return;
+    lastEditRef.current = performance.now();
+    const tuning = { ...readyEditor.tuning, ...patch };
+    const perModeTuning = new Map(readyEditor.perModeTuning);
+    perModeTuning.set(readyEditor.modeIndex, tuning);
+    const customConfig = readyEditor.modeIndex === 0 && readyEditor.customConfig
+      ? configWithTuning(readyEditor.customConfig, tuning)
+      : readyEditor.customConfig;
+    commitEditor({ ...readyEditor, tuning, customConfig, perModeTuning });
+    if (running) {
+      void enqueueLiveCommand(() => api.smartknobSetTuning(tuning)).catch((error) => {
+        message.error(errMsg(error));
+      });
+    }
+  }, [readyEditor, modeSwitching, running, commitEditor, enqueueLiveCommand, message]);
+
+  const applyCustomConfig = useCallback((updates: Partial<KnobConfig>) => {
+    if (!readyEditor?.customConfig || modeSwitchingRef.current) return;
+    lastEditRef.current = performance.now();
+    let tuning = readyEditor.tuning;
+    let customConfig = configWithTuning(
+      { ...readyEditor.customConfig, ...updates },
+      tuning,
+    );
+    let perModeTuning = readyEditor.perModeTuning;
+
+    if (updates.detent_strength_unit !== undefined) {
+      tuning = {
+        ...tuning,
+        pGain: recommendedPGain(customConfig),
+        dGain: recommendedDGain(customConfig),
+      };
+      customConfig = configWithTuning(customConfig, tuning);
+      perModeTuning = new Map(perModeTuning);
+      perModeTuning.set(0, tuning);
+    }
+
+    commitEditor({ ...readyEditor, tuning, customConfig, perModeTuning });
+    if (running && readyEditor.modeIndex === 0) {
+      void enqueueLiveCommand(async () => {
+        if (updates.detent_strength_unit !== undefined) {
+          await api.smartknobSetTuning(tuning);
+        }
+        await api.smartknobSetCustomConfig(customConfig);
+      }).catch((error) => {
+        message.error(errMsg(error));
+      });
+    }
+  }, [readyEditor, modeSwitching, running, commitEditor, enqueueLiveCommand, message]);
+
+  const applyRecommendedGains = useCallback(() => {
+    if (!readyProfile || !readyEditor) return;
+    const config = readyEditor.modeIndex === 0
+      ? readyEditor.customConfig
+      : readyProfile.configs[readyEditor.modeIndex];
+    if (!config) return;
+    applyTuning({ pGain: recommendedPGain(config), dGain: recommendedDGain(config) });
+  }, [readyProfile, readyEditor, applyTuning]);
+
+  const applyTelemetry = useCallback((patch: Partial<SmartKnobTelemetry>) => {
+    if (!readyEditor || modeSwitchingRef.current) return;
+    const telemetry = {
+      ...readyEditor.telemetry,
+      ...patch,
+      rateHz: clamp(Math.round(patch.rateHz ?? readyEditor.telemetry.rateHz), 1, 100),
+    };
+    commitEditor({ ...readyEditor, telemetry });
+    if (running) {
+      enqueueLiveCommand(() => api.smartknobSetTelemetry(telemetry)).catch((error) => {
+        message.error(`${t("skTelemetryFailed")}: ${errMsg(error)}`);
+      });
+    }
+  }, [readyEditor, modeSwitching, running, commitEditor, enqueueLiveCommand, message, t]);
 
   if (!connected) {
     return (
@@ -381,386 +479,477 @@ export function SmartKnobPanel({ connected, devices }: { connected: boolean; dev
     );
   }
 
-  const activeIndex = running ? state?.config_index ?? modeIndex : modeIndex;
-  // Use local customConfig for immediate dial feedback when in custom mode;
-  // otherwise prefer the backend's live config, falling back to presets.
-  const activeConfig =
-    (activeIndex === 0 && customConfig)
-      ? customConfig
-      : (state?.config ?? configs[activeIndex] ?? null);
+  const activeIndex = running ? state?.config_index ?? readyEditor?.modeIndex ?? 0 : readyEditor?.modeIndex ?? 0;
+  const activeConfig = activeIndex === 0 && readyEditor?.customConfig
+    ? readyEditor.customConfig
+    : state?.config ?? readyProfile?.configs[activeIndex] ?? null;
+  const unit = effortUnitLabel(readyProfile?.effortUnit ?? state?.effortUnit ?? "Nm");
+  const canStart = Boolean(
+    selectedDevice?.online
+      && readyProfile
+      && readyEditor
+      && readyProfile.configs.length > 0
+      && !mixedOnline
+      && (onlineDevices.length <= 1 || selectionConfirmed),
+  );
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <Card>
-        <Space wrap>
-          {!running ? (
-            <>
-              <Typography.Text type="secondary">{t("skMotor")}:</Typography.Text>
-              <Select
-                style={{ width: 220 }}
-                placeholder={t("skNoMotors")}
-                value={selectedNid ?? undefined}
-                onChange={setSelectedNid}
-                options={devices.map((d) => ({
-                  value: d.node_id,
-                  label: `${nid2hex(d.node_id)} — ${d.friendly_name}`,
-                }))}
+        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+          <Space wrap>
+            {!running ? (
+              <>
+                <Typography.Text type="secondary">{t("skMotor")}:</Typography.Text>
+                <Select
+                  style={{ minWidth: 300 }}
+                  placeholder={onlineDevices.length > 1 ? t("skChooseDevice") : t("skNoMotors")}
+                  value={selectedKey ?? undefined}
+                  disabled={starting}
+                  onChange={(key) => {
+                    setSelectedKey(key);
+                    setSelectionConfirmed(true);
+                  }}
+                  options={devices.map((device) => ({
+                    value: targetKey(device.target),
+                    label: formatDevice(device),
+                    disabled: !device.online,
+                  }))}
+                />
+                {onlineDevices.length > 1 && selectedKey && !selectionConfirmed && (
+                  <Button onClick={() => setSelectionConfirmed(true)}>
+                    {t("skConfirmDevice")}
+                  </Button>
+                )}
+                <Button type="primary" loading={starting} disabled={!canStart} onClick={start}>
+                  {starting ? t("skStarting") : t("skStart")}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button danger onClick={stop}>{t("skStop")}</Button>
+                <Button onClick={clearError}>{t("skClearError")}</Button>
+              </>
+            )}
+            <Tag color={running ? "green" : "default"}>
+              {running ? t("skRunning") : t("skStopped")}
+            </Tag>
+            {readyProfile && (
+              <Tag color={readyProfile.controlSide === "host" ? "blue" : "purple"}>
+                {readyProfile.controlSide === "host" ? t("skHostControlled") : t("skFirmwareControlled")}
+              </Tag>
+            )}
+            {state?.error && <Tag color="red">{state.error}</Tag>}
+          </Space>
+
+          {readyProfile?.supportsTelemetry && readyEditor && (
+            <Space wrap>
+              <Typography.Text type="secondary">{t("skFirmwareTelemetry")}</Typography.Text>
+              <Switch
+                checked={readyEditor.telemetry.enabled}
+                disabled={modeSwitching}
+                onChange={(enabled) => applyTelemetry({ enabled })}
               />
-              <Button
-                type="primary"
-                loading={starting}
-                disabled={selectedNid == null}
-                onClick={start}
-              >
-                {starting ? t("skStarting") : t("skStart")}
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button danger onClick={stop}>
-                {t("skStop")}
-              </Button>
-              <Button onClick={clearError}>{t("skClearError")}</Button>
-            </>
+              <InputNumber
+                addonAfter="Hz"
+                min={1}
+                max={100}
+                value={readyEditor.telemetry.rateHz}
+                disabled={modeSwitching || !readyEditor.telemetry.enabled}
+                onChange={(rateHz) => applyTelemetry({ rateHz: rateHz ?? 50 })}
+                style={{ width: 120 }}
+              />
+            </Space>
           )}
-          <Tag color={running ? "green" : "default"}>{running ? t("skRunning") : t("skStopped")}</Tag>
-          {state?.error && <Tag color="red">{state.error}</Tag>}
+
+          {mixedOnline && (
+            <Alert
+              type="error"
+              showIcon
+              message={t("skMixedBusTitle")}
+              description={t("skMixedBusBody")}
+            />
+          )}
+          {!mixedOnline && onlineDevices.length > 1 && (
+            <Alert
+              type="info"
+              showIcon
+              message={selectedKey == null
+                ? t("skChooseDevice")
+                : selectionConfirmed
+                  ? t("skMultipleDevices")
+                  : t("skConfirmDevice")}
+            />
+          )}
+
+          <Collapse
+            ghost
+            size="small"
+            items={[{
+              key: "probe",
+              label: t("skAdvancedProbe"),
+              children: (
+                <Space wrap>
+                  <InputNumber
+                    addonBefore={t("skRollerNode")}
+                    min={0}
+                    max={255}
+                    value={probeNodeId}
+                    disabled={running}
+                    onChange={(value) => setProbeNodeId(value ?? 0xa8)}
+                  />
+                  <Tag>{nid2hex(probeNodeId)}</Tag>
+                  <Button loading={probing} disabled={running} onClick={probeRollerCan}>
+                    {t("skProbe")}
+                  </Button>
+                </Space>
+              ),
+            }]}
+          />
         </Space>
       </Card>
 
-      <Row gutter={16}>
-        <Col xs={24} lg={11}>
-          <Card>
-            <Dial config={activeConfig} state={state} />
-          </Card>
+      {profileLoading ? (
+        <div style={{ display: "grid", placeItems: "center", minHeight: 320 }}><Spin /></div>
+      ) : !readyProfile || !readyEditor ? (
+        <div style={{ paddingTop: 48 }}>
+          <Empty description={onlineDevices.length === 0 ? t("skNoCompatible") : t("skChooseDevice")} />
+        </div>
+      ) : (
+        <Row gutter={16}>
+          <Col xs={24} lg={11}>
+            <Card>
+              <Dial config={activeConfig} state={state} />
+            </Card>
 
-          {/* Mode config params — editable for custom mode, locked for presets. */}
-          <Card title={t("skModeConfig")} size="small" style={{ marginTop: 16 }}>
-            {activeIndex !== 0 && (
-              <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
-                {t("skCustomLocked")}
-              </Typography.Text>
-            )}
-            <Space direction="vertical" style={{ width: "100%" }} size={8}>
-              <Row gutter={8}>
-                <Col span={24}>
-                  <Labeled label={t("skCustomName")}>
-                    <Input
-                      disabled={activeIndex !== 0}
-                      value={activeConfig?.text ?? ""}
-                      onChange={(e) => applyCustomConfig({ text: e.target.value })}
-                      placeholder={t("skCustomName")}
-                    />
-                  </Labeled>
-                </Col>
-              </Row>
-              <Row gutter={8}>
-                <Col span={12}>
-                  <Labeled label={t("skLedHue")}>
-                    <InputNumber
-                      disabled={activeIndex !== 0}
-                      min={0} max={255} step={1}
-                      value={activeConfig?.led_hue ?? 120}
-                      onChange={(v) => applyCustomConfig({ led_hue: v ?? 120 })}
-                      style={{ width: "100%" }}
-                    />
-                  </Labeled>
-                </Col>
-                <Col span={12}>
-                  <Labeled label={t("skSnapPoint")}>
-                    <InputNumber
-                      disabled={activeIndex !== 0}
-                      min={0.5} max={1.1} step={0.01}
-                      value={activeConfig?.snap_point ?? 0.55}
-                      onChange={(v) => applyCustomConfig({ snap_point: v ?? 0.55 })}
-                      style={{ width: "100%" }}
-                    />
-                  </Labeled>
-                </Col>
-              </Row>
-              <Row gutter={8}>
-                <Col span={8}>
-                  <Labeled label={t("skMinPos")}>
-                    <InputNumber
-                      disabled={activeIndex !== 0}
-                      value={activeConfig?.min_position ?? 0}
-                      onChange={(v) => applyCustomConfig({ min_position: v ?? 0 })}
-                      style={{ width: "100%" }}
-                    />
-                  </Labeled>
-                </Col>
-                <Col span={8}>
-                  <Labeled label={t("skMaxPos")}>
-                    <InputNumber
-                      disabled={activeIndex !== 0}
-                      value={activeConfig?.max_position ?? -1}
-                      onChange={(v) => applyCustomConfig({ max_position: v ?? -1 })}
-                      style={{ width: "100%" }}
-                    />
-                  </Labeled>
-                </Col>
-                <Col span={8}>
-                  <Labeled label={t("skPosWidth")}>
-                    <InputNumber
-                      disabled={activeIndex !== 0}
-                      min={0.5} step={1}
-                      value={Math.round(radToDeg(activeConfig?.position_width_radians ?? 0.1745) * 10) / 10}
-                      onChange={(v) => applyCustomConfig({ position_width_radians: degToRad(v ?? 10) })}
-                      style={{ width: "100%" }}
-                    />
-                  </Labeled>
-                </Col>
-              </Row>
-              <Row gutter={8}>
-                <Col span={8}>
-                  <Labeled label={t("skDetentStrength")}>
-                    <InputNumber
-                      disabled={activeIndex !== 0}
-                      min={0} step={0.1}
-                      value={activeConfig?.detent_strength_unit ?? 0}
-                      onChange={(v) => applyCustomConfig({ detent_strength_unit: v ?? 0 })}
-                      style={{ width: "100%" }}
-                    />
-                  </Labeled>
-                </Col>
-                <Col span={8}>
-                  <Labeled label={t("skEndstopStrength")}>
-                    <InputNumber
-                      disabled={activeIndex !== 0}
-                      min={0} step={0.1}
-                      value={activeConfig?.endstop_strength_unit ?? 1}
-                      onChange={(v) => applyCustomConfig({ endstop_strength_unit: v ?? 1 })}
-                      style={{ width: "100%" }}
-                    />
-                  </Labeled>
-                </Col>
-              </Row>
-            </Space>
-          </Card>
-        </Col>
-        <Col xs={24} lg={13}>
-          <Card title={t("skModes")} size="small">
-            <Row gutter={[8, 8]}>
-              {configs.map((cfg, idx) => (
-                <Col xs={12} sm={8} key={idx}>
-                  <ModeButton
-                    cfg={cfg}
-                    active={idx === activeIndex}
-                    onClick={() => pickMode(idx)}
-                  />
-                </Col>
-              ))}
-            </Row>
-          </Card>
+            <Card title={t("skModeConfig")} size="small" style={{ marginTop: 16 }}>
+              {activeIndex !== 0 && (
+                <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
+                  {t("skCustomLocked")}
+                </Typography.Text>
+              )}
+              <Space direction="vertical" style={{ width: "100%" }} size={8}>
+                <Row gutter={8}>
+                  <Col span={24}>
+                    <Labeled label={t("skCustomName")}>
+                      <Input
+                        disabled={modeSwitching || activeIndex !== 0}
+                        value={activeConfig?.text ?? ""}
+                        onChange={(event) => applyCustomConfig({ text: event.target.value })}
+                        placeholder={t("skCustomName")}
+                      />
+                    </Labeled>
+                  </Col>
+                </Row>
+                <Row gutter={8}>
+                  <Col span={12}>
+                    <Labeled label={t("skLedHue")}>
+                      <InputNumber
+                        disabled={modeSwitching || activeIndex !== 0}
+                        min={0}
+                        max={255}
+                        step={1}
+                        value={activeConfig?.led_hue ?? 120}
+                        onChange={(value) => applyCustomConfig({ led_hue: value ?? 120 })}
+                        style={{ width: "100%" }}
+                      />
+                    </Labeled>
+                  </Col>
+                  <Col span={12}>
+                    <Labeled label={t("skSnapPoint")}>
+                      <InputNumber
+                        disabled={modeSwitching || activeIndex !== 0}
+                        min={0.5}
+                        max={1.1}
+                        step={0.01}
+                        value={activeConfig?.snap_point ?? 0.55}
+                        onChange={(value) => applyCustomConfig({ snap_point: value ?? 0.55 })}
+                        style={{ width: "100%" }}
+                      />
+                    </Labeled>
+                  </Col>
+                </Row>
+                <Row gutter={8}>
+                  <Col span={8}>
+                    <Labeled label={t("skMinPos")}>
+                      <InputNumber
+                        disabled={modeSwitching || activeIndex !== 0}
+                        value={activeConfig?.min_position ?? 0}
+                        onChange={(value) => applyCustomConfig({ min_position: value ?? 0 })}
+                        style={{ width: "100%" }}
+                      />
+                    </Labeled>
+                  </Col>
+                  <Col span={8}>
+                    <Labeled label={t("skMaxPos")}>
+                      <InputNumber
+                        disabled={modeSwitching || activeIndex !== 0}
+                        value={activeConfig?.max_position ?? -1}
+                        onChange={(value) => applyCustomConfig({ max_position: value ?? -1 })}
+                        style={{ width: "100%" }}
+                      />
+                    </Labeled>
+                  </Col>
+                  <Col span={8}>
+                    <Labeled label={t("skPosWidth")}>
+                      <InputNumber
+                        disabled={modeSwitching || activeIndex !== 0}
+                        min={0.5}
+                        step={1}
+                        value={Math.round(radToDeg(activeConfig?.position_width_radians ?? 0.1745) * 10) / 10}
+                        onChange={(value) => applyCustomConfig({ position_width_radians: degToRad(value ?? 10) })}
+                        style={{ width: "100%" }}
+                      />
+                    </Labeled>
+                  </Col>
+                </Row>
+                <Row gutter={8}>
+                  <Col span={8}>
+                    <Labeled label={t("skDetentStrength")}>
+                      <InputNumber
+                        disabled={modeSwitching || activeIndex !== 0}
+                        min={0}
+                        step={0.1}
+                        value={activeConfig?.detent_strength_unit ?? 0}
+                        onChange={(value) => applyCustomConfig({ detent_strength_unit: value ?? 0 })}
+                        style={{ width: "100%" }}
+                      />
+                    </Labeled>
+                  </Col>
+                  <Col span={8}>
+                    <Labeled label={t("skEndstopStrength")}>
+                      <InputNumber
+                        disabled={modeSwitching || activeIndex !== 0}
+                        min={0}
+                        step={0.1}
+                        value={activeConfig?.endstop_strength_unit ?? 1}
+                        onChange={(value) => applyCustomConfig({ endstop_strength_unit: value ?? 1 })}
+                        style={{ width: "100%" }}
+                      />
+                    </Labeled>
+                  </Col>
+                </Row>
+              </Space>
+            </Card>
+          </Col>
 
-          <Card title={t("skTuningFeel")} size="small" style={{ marginTop: 16 }}>
-            <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
-              (p_gain &times; input &minus; d_gain &times; velocity) &times; strength_scale
-            </Typography.Text>
-            <Space wrap align="end">
-              <Labeled label={t("skPGain")}>
-                <InputNumber
-                  min={0}
-                  step={0.1}
-                  value={pGain}
-                  onChange={(v) => applyTuning(strength, torqueLimit, maxTorque, frictionComp, clickTorque, v ?? 0, dGain)}
-                />
-              </Labeled>
-              <Labeled label={t("skDGain")}>
-                <InputNumber
-                  min={0}
-                  step={0.001}
-                  value={dGain}
-                  onChange={(v) => applyTuning(strength, torqueLimit, maxTorque, frictionComp, clickTorque, pGain, v ?? 0)}
-                />
-              </Labeled>
-              <Button onClick={applyRecommendedGains}>
-                {t("skRecommendedGains")}
-              </Button>
-              <Labeled label={t("skStrength")}>
-                <InputNumber
-                  min={0}
-                  step={0.01}
-                  value={strength}
-                  onChange={(v) => applyTuning(v ?? 0, torqueLimit, maxTorque, frictionComp, clickTorque, pGain, dGain)}
-                />
-              </Labeled>
-              <Labeled label={t("skFrictionComp")}>
-                <InputNumber
-                  min={0}
-                  max={0.5}
-                  step={0.005}
-                  value={frictionComp}
-                  onChange={(v) => applyTuning(strength, torqueLimit, maxTorque, v ?? 0, clickTorque, pGain, dGain)}
-                />
-              </Labeled>
-              <Labeled label={t("skClickTorque")}>
-                <InputNumber
-                  min={0}
-                  max={2.0}
-                  step={0.01}
-                  value={clickTorque}
-                  onChange={(v) => applyTuning(strength, torqueLimit, maxTorque, frictionComp, v ?? 0, pGain, dGain)}
-                />
-              </Labeled>
-            </Space>
-          </Card>
-
-          <Card title={t("skTuningSafety")} size="small" style={{ marginTop: 16 }}>
-            <Space wrap align="end">
-              <Labeled label={t("skTorqueLimit")}>
-                <InputNumber
-                  min={0}
-                  step={0.1}
-                  value={torqueLimit}
-                  onChange={(v) => applyTuning(strength, v ?? 0, maxTorque, frictionComp, clickTorque, pGain, dGain)}
-                />
-              </Labeled>
-              <Labeled label={t("skMaxTorque")}>
-                <InputNumber
-                  min={0}
-                  max={1000}
-                  step={50}
-                  value={maxTorque}
-                  onChange={(v) => applyTuning(strength, torqueLimit, v ?? 0, frictionComp, clickTorque, pGain, dGain)}
-                />
-              </Labeled>
-            </Space>
-          </Card>
-
-          {running && (
-            <Card title={t("skTorque")} size="small" style={{ marginTop: 16 }}>
-              <Row gutter={8}>
-                <Col span={8}>
-                  <Statistic title={t("skAngle") + " (°)"} value={fmt(degOf(state?.shaft_angle_rad), 1)} />
-                </Col>
-                <Col span={8}>
-                  <Statistic title="τ cmd (Nm)" value={fmt(state?.applied_torque_nm)} />
-                </Col>
-                <Col span={8}>
-                  <Statistic title="τ meas (Nm)" value={fmt(state?.measured_torque_nm)} />
-                </Col>
-              </Row>
-              <Row gutter={8} style={{ marginTop: 8 }}>
-                <Col span={8}>
-                  <Statistic
-                    title={t("skMotor")}
-                    value={state?.online ? (state?.enabled ? "on" : "idle") : "off"}
-                  />
-                </Col>
-                <Col span={8}>
-                  <Statistic title="Drv (℃)" value={fmt(state?.driver_temp_c, 1)} />
-                </Col>
-                <Col span={8}>
-                  <Statistic title="Mot (℃)" value={fmt(state?.motor_temp_c, 1)} />
-                </Col>
+          <Col xs={24} lg={13}>
+            <Card title={t("skModes")} size="small">
+              <Row gutter={[8, 8]}>
+                {readyProfile.configs.map((config, index) => (
+                  <Col xs={12} sm={8} key={index}>
+                    <ModeButton
+                      config={config}
+                      active={index === activeIndex}
+                      disabled={modeSwitching}
+                      onClick={() => pickMode(index)}
+                    />
+                  </Col>
+                ))}
               </Row>
             </Card>
-          )}
-        </Col>
-      </Row>
+
+            <Card title={t("skTuningFeel")} size="small" style={{ marginTop: 16 }}>
+              <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
+                (p_gain &times; input &minus; d_gain &times; velocity) &times; strength_scale
+              </Typography.Text>
+              <Space wrap align="end">
+                <Labeled label={t("skPGain")}>
+                  <InputNumber
+                    disabled={modeSwitching}
+                    min={0}
+                    step={0.1}
+                    value={readyEditor.tuning.pGain}
+                    onChange={(value) => applyTuning({ pGain: value ?? 0 })}
+                  />
+                </Labeled>
+                <Labeled label={t("skDGain")}>
+                  <InputNumber
+                    disabled={modeSwitching}
+                    min={0}
+                    step={0.001}
+                    value={readyEditor.tuning.dGain}
+                    onChange={(value) => applyTuning({ dGain: value ?? 0 })}
+                  />
+                </Labeled>
+                <Button disabled={modeSwitching} onClick={applyRecommendedGains}>{t("skRecommendedGains")}</Button>
+                <Labeled label={`${t("skStrength")} (${unit}/unit)`}>
+                  <InputNumber
+                    disabled={modeSwitching}
+                    min={0}
+                    step={readyProfile.effortUnit === "A" ? 0.005 : 0.01}
+                    value={readyEditor.tuning.strengthScale}
+                    onChange={(value) => applyTuning({ strengthScale: value ?? 0 })}
+                  />
+                </Labeled>
+                <Labeled label={`${t("skFrictionComp")} (${unit})`}>
+                  <InputNumber
+                    disabled={modeSwitching}
+                    min={0}
+                    max={0.5}
+                    step={0.005}
+                    value={readyEditor.tuning.frictionCompensation}
+                    onChange={(value) => applyTuning({ frictionCompensation: value ?? 0 })}
+                  />
+                </Labeled>
+                <Labeled label={`${t("skClickTorque")} (${unit})`}>
+                  <InputNumber
+                    disabled={modeSwitching}
+                    min={0}
+                    max={readyProfile.effortUnit === "A" ? 0.8 : 2}
+                    step={readyProfile.effortUnit === "A" ? 0.005 : 0.01}
+                    value={readyEditor.tuning.clickEffort}
+                    onChange={(value) => applyTuning({ clickEffort: value ?? 0 })}
+                  />
+                </Labeled>
+              </Space>
+            </Card>
+
+            <Card title={t("skTuningSafety")} size="small" style={{ marginTop: 16 }}>
+              <Space wrap align="end">
+                <Labeled label={`${t("skTorqueLimit")} (${unit})`}>
+                  <InputNumber
+                    disabled={modeSwitching}
+                    min={0}
+                    max={readyProfile.effortLimitMax}
+                    step={readyProfile.effortUnit === "A" ? 0.05 : 0.1}
+                    value={readyEditor.tuning.effortLimit}
+                    onChange={(value) => applyTuning({ effortLimit: value ?? 0 })}
+                  />
+                </Labeled>
+                <Labeled label={`${t("skMaxTorque")} (‰)`}>
+                  <InputNumber
+                    disabled={modeSwitching}
+                    min={0}
+                    max={1000}
+                    step={50}
+                    value={readyEditor.tuning.maxOutputPermille}
+                    onChange={(value) => applyTuning({ maxOutputPermille: value ?? 0 })}
+                  />
+                </Labeled>
+              </Space>
+            </Card>
+
+            {running && (
+              <Card title={`${t("skTorque")} (${unit})`} size="small" style={{ marginTop: 16 }}>
+                <Row gutter={8}>
+                  <Col span={8}>
+                    <Statistic title={`${t("skAngle")} (°)`} value={fmt(degOf(state?.shaft_angle_rad), 1)} />
+                  </Col>
+                  <Col span={8}>
+                    <Statistic title={`${t("skCommanded")} (${unit})`} value={fmt(state?.appliedEffort)} />
+                  </Col>
+                  <Col span={8}>
+                    <Statistic title={`${t("skMeasured")} (${unit})`} value={fmt(state?.measuredEffort)} />
+                  </Col>
+                </Row>
+                <Row gutter={8} style={{ marginTop: 8 }}>
+                  <Col span={8}>
+                    <Statistic
+                      title={t("skMotor")}
+                      value={state?.online ? (state.enabled ? "on" : "idle") : "off"}
+                    />
+                  </Col>
+                  {readyProfile.supportsTemperature && (
+                    <>
+                      <Col span={8}>
+                        <Statistic title={t("driverTemp")} value={fmt(state?.driver_temp_c, 1)} />
+                      </Col>
+                      <Col span={8}>
+                        <Statistic title={t("motorTemp")} value={fmt(state?.motor_temp_c, 1)} />
+                      </Col>
+                    </>
+                  )}
+                </Row>
+              </Card>
+            )}
+          </Col>
+        </Row>
+      )}
     </Space>
   );
 }
 
-// ─────────────────────────────── the dial ───────────────────────────────────
-
 const SIZE = 340;
-const C = SIZE / 2;
-const R = 150;
-const GAUGE_SPAN = 300; // degrees for the bounded gauge (gap at the bottom)
+const CENTER = SIZE / 2;
+const RADIUS = 150;
+const GAUGE_SPAN = 300;
 
-function Dial({ config, state }: { config: KnobConfig | null; state: SmartKnobState | null }) {
+function Dial({ config, state }: { config: KnobConfig | null; state: UnifiedSmartKnobState | null }) {
   const { t } = useI18n();
   const hue = config ? (config.led_hue / 255) * 360 : 210;
   const accent = `hsl(${hue}, 70%, 58%)`;
   const dim = `hsl(${hue}, 30%, 32%)`;
-
-  const num = state?.num_positions ?? (config ? positionCount(config) : 0);
-  const pos = state?.current_position ?? config?.position ?? 0;
-  const sub = state?.sub_position_unit ?? 0; // pointer offset toward next detent, in (−1..1)
-  const minP = state?.min_position ?? config?.min_position ?? 0;
-  const maxP = state?.max_position ?? config?.max_position ?? 0;
-  const endstop = state?.at_endstop ?? false;
-  const running = state?.running ?? false;
-
-  // Continuous value (for display) = position + fractional sub-position.
-  const value = pos + clamp(sub, -0.5, 0.5);
-  // Gauge mode for a small, bounded count; otherwise a free-rotation dial.
-  const gauge = num >= 2 && num <= 49;
-
+  const count = state?.num_positions ?? (config ? positionCount(config) : 0);
+  const position = state?.current_position ?? config?.position ?? 0;
+  const subPosition = state?.sub_position_unit ?? 0;
+  const minPosition = state?.min_position ?? config?.min_position ?? 0;
+  const maxPosition = state?.max_position ?? config?.max_position ?? 0;
+  const atEndstop = state?.at_endstop ?? false;
+  const value = position + clamp(subPosition, -0.5, 0.5);
+  const gauge = count >= 2 && count <= 49;
   const ticks: JSX.Element[] = [];
   let needleDeg = 0;
 
   if (gauge) {
-    // Bounded value gauge: spread positions across a 300° arc, gap at bottom.
-    const start = 90 + (360 - GAUGE_SPAN) / 2; // 120° (SVG: 0°=+x, CW positive here)
-    const frac = num > 1 ? (maxP - value) / (num - 1) : 0;
-    needleDeg = start + clamp(frac, 0, 1) * GAUGE_SPAN;
-    for (let i = 0; i < num; i++) {
-      const deg = start + ((num - 1 - i) / (num - 1)) * GAUGE_SPAN;
-      const active = i === pos - minP;
-      ticks.push(
-        <Tick key={i} deg={deg} color={active ? accent : dim} long={active} />
-      );
+    const start = 90 + (360 - GAUGE_SPAN) / 2;
+    const fraction = count > 1 ? (maxPosition - value) / (count - 1) : 0;
+    needleDeg = start + clamp(fraction, 0, 1) * GAUGE_SPAN;
+    for (let index = 0; index < count; index += 1) {
+      const degrees = start + ((count - 1 - index) / (count - 1)) * GAUGE_SPAN;
+      const active = index === position - minPosition;
+      ticks.push(<Tick key={index} degrees={degrees} color={active ? accent : dim} long={active} />);
     }
   } else {
-    // Free-rotation dial: needle = physical shaft angle; detent pips around it.
-    needleDeg = degOf(state?.shaft_angle_rad ?? 0) - 90; // 0 rad → 12 o'clock
+    needleDeg = degOf(state?.shaft_angle_rad ?? 0) - 90;
     const width = config?.position_width_radians ?? Math.PI / 18;
     const tickCount = Math.min(72, Math.max(12, Math.round((2 * Math.PI) / width)));
-    // Nearest detent center sits at sub*width radians ahead of the needle.
-    const baseDeg = needleDeg + (sub * width * 180) / Math.PI;
+    const baseDeg = needleDeg + (subPosition * width * 180) / Math.PI;
     const stepDeg = Math.max(360 / tickCount, (width * 180) / Math.PI);
-    for (let i = -Math.ceil(180 / stepDeg); i <= Math.ceil(180 / stepDeg); i++) {
-      const deg = baseDeg + i * stepDeg;
-      ticks.push(<Tick key={i} deg={deg} color={i === 0 ? accent : dim} long={i === 0} />);
+    for (let index = -Math.ceil(180 / stepDeg); index <= Math.ceil(180 / stepDeg); index += 1) {
+      const degrees = baseDeg + index * stepDeg;
+      ticks.push(<Tick key={index} degrees={degrees} color={index === 0 ? accent : dim} long={index === 0} />);
     }
   }
 
-  // Torque indicator (a small arc whose length ∝ |applied torque| up to limit).
-  const tq = state?.applied_torque_nm ?? 0;
-  const tqLimit = state?.torque_limit_nm || 2;
-  const tqFrac = clamp(Math.abs(tq) / tqLimit, 0, 1);
+  const effort = state?.appliedEffort ?? 0;
+  const limit = state?.effortLimit || 1;
+  const effortFraction = clamp(Math.abs(effort) / limit, 0, 1);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
       <svg viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ width: "100%", maxWidth: SIZE, aspectRatio: "1 / 1" }}>
-        {/* track */}
-        <circle cx={C} cy={C} r={R} fill="none" stroke="#222831" strokeWidth={2} />
+        <circle cx={CENTER} cy={CENTER} r={RADIUS} fill="none" stroke="#222831" strokeWidth={2} />
         {ticks}
-        {/* needle */}
         <line
-          x1={C}
-          y1={C}
-          {...lineEnd(needleDeg, R - 18)}
-          stroke={endstop ? "#ff4d4f" : accent}
+          x1={CENTER}
+          y1={CENTER}
+          {...lineEnd(needleDeg, RADIUS - 18)}
+          stroke={atEndstop ? "#ff4d4f" : accent}
           strokeWidth={4}
           strokeLinecap="round"
         />
-        <circle cx={C} cy={C} r={8} fill={endstop ? "#ff4d4f" : accent} />
-        {/* torque ring */}
+        <circle cx={CENTER} cy={CENTER} r={8} fill={atEndstop ? "#ff4d4f" : accent} />
         <circle
-          cx={C}
-          cy={C}
-          r={R + 10}
+          cx={CENTER}
+          cy={CENTER}
+          r={RADIUS + 10}
           fill="none"
-          stroke={tq >= 0 ? accent : "#ff7875"}
+          stroke={effort >= 0 ? accent : "#ff7875"}
           strokeWidth={4}
           strokeOpacity={0.7}
-          strokeDasharray={`${tqFrac * 2 * Math.PI * (R + 10)} ${2 * Math.PI * (R + 10)}`}
-          transform={`rotate(-90 ${C} ${C})`}
+          strokeDasharray={`${effortFraction * 2 * Math.PI * (RADIUS + 10)} ${2 * Math.PI * (RADIUS + 10)}`}
+          transform={`rotate(-90 ${CENTER} ${CENTER})`}
           strokeLinecap="round"
         />
       </svg>
-
       <div style={{ textAlign: "center", marginTop: 4 }}>
         <Typography.Title level={1} style={{ margin: 0, lineHeight: 1, color: accent }}>
-          {running ? pos : "—"}
+          {state?.running ? position : "—"}
         </Typography.Title>
         <Typography.Text type="secondary">
           {config ? `${t("skValue")} ${value.toFixed(2)}` : ""}
-          {endstop ? ` · ${t("skEndstop")}` : num === 0 ? ` · ${t("skUnbounded")}` : ""}
+          {atEndstop ? ` · ${t("skEndstop")}` : count === 0 ? ` · ${t("skUnbounded")}` : ""}
         </Typography.Text>
         <div style={{ marginTop: 6, whiteSpace: "pre-line", fontWeight: 500 }}>
           {config?.text ?? ""}
@@ -770,16 +959,16 @@ function Dial({ config, state }: { config: KnobConfig | null; state: SmartKnobSt
   );
 }
 
-function Tick({ deg, color, long }: { deg: number; color: string; long: boolean }) {
-  const inner = long ? R - 22 : R - 12;
-  const a = lineEnd(deg, R - 2);
-  const b = lineEnd(deg, inner);
+function Tick({ degrees, color, long }: { degrees: number; color: string; long: boolean }) {
+  const inner = long ? RADIUS - 22 : RADIUS - 12;
+  const outerPoint = lineEnd(degrees, RADIUS - 2);
+  const innerPoint = lineEnd(degrees, inner);
   return (
     <line
-      x1={b.x2}
-      y1={b.y2}
-      x2={a.x2}
-      y2={a.y2}
+      x1={innerPoint.x2}
+      y1={innerPoint.y2}
+      x2={outerPoint.x2}
+      y2={outerPoint.y2}
       stroke={color}
       strokeWidth={long ? 4 : 2}
       strokeLinecap="round"
@@ -787,11 +976,22 @@ function Tick({ deg, color, long }: { deg: number; color: string; long: boolean 
   );
 }
 
-function ModeButton({ cfg, active, onClick }: { cfg: KnobConfig; active: boolean; onClick: () => void }) {
-  const hue = (cfg.led_hue / 255) * 360;
+function ModeButton({
+  config,
+  active,
+  disabled,
+  onClick,
+}: {
+  config: KnobConfig;
+  active: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const hue = (config.led_hue / 255) * 360;
   return (
     <Button
       block
+      disabled={disabled}
       onClick={onClick}
       type={active ? "primary" : "default"}
       style={{
@@ -802,73 +1002,146 @@ function ModeButton({ cfg, active, onClick }: { cfg: KnobConfig; active: boolean
         borderColor: active ? undefined : `hsl(${hue}, 40%, 40%)`,
       }}
     >
-      {cfg.text}
+      {config.text}
     </Button>
   );
 }
 
-function Labeled({ label, children }: { label: string; children: React.ReactNode }) {
+function Labeled({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
-      <div>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {label}
-        </Typography.Text>
-      </div>
+      <div><Typography.Text type="secondary" style={{ fontSize: 12 }}>{label}</Typography.Text></div>
       {children}
     </div>
   );
 }
 
-// ─────────────────────────────── helpers ────────────────────────────────────
+function targetKey(target: SmartKnobTarget): string {
+  return `${target.kind}:${target.nodeId}`;
+}
+
+function formatDevice(device: SmartKnobDevice): string {
+  const protocol = device.target.kind === "canopen" ? "CANopen" : "RollerCAN";
+  const offline = device.online ? "" : " · offline";
+  return `[${protocol}] ${nid2hex(device.target.nodeId)} · ${device.name}${offline}`;
+}
+
+function upsertDevice(devices: SmartKnobDevice[], found: SmartKnobDevice): SmartKnobDevice[] {
+  const key = targetKey(found.target);
+  const index = devices.findIndex((device) => targetKey(device.target) === key);
+  if (index < 0) return [...devices, found];
+  const next = [...devices];
+  next[index] = found;
+  return next;
+}
+
+function effortUnitLabel(unit: SmartKnobEffortUnit): string {
+  return unit === "Nm" ? "N·m" : "A";
+}
+
+function createEditor(key: string, profile: SmartKnobProfile): TargetEditor {
+  const first = profile.configs[0] ?? null;
+  return {
+    targetKey: key,
+    modeIndex: 0,
+    customConfig: first ? { ...first, detent_positions: [...first.detent_positions] } : null,
+    tuning: tuningForConfig(first, profile),
+    telemetry: {
+      enabled: profile.telemetryEnabled ?? true,
+      rateHz: profile.telemetryRateHz ?? 50,
+    },
+    perModeTuning: new Map(),
+  };
+}
+
+function cloneEditor(editor: TargetEditor): TargetEditor {
+  return {
+    ...editor,
+    customConfig: editor.customConfig
+      ? { ...editor.customConfig, detent_positions: [...editor.customConfig.detent_positions] }
+      : null,
+    tuning: { ...editor.tuning },
+    telemetry: { ...editor.telemetry },
+    perModeTuning: new Map(
+      [...editor.perModeTuning].map(([index, tuning]) => [index, { ...tuning }]),
+    ),
+  };
+}
+
+function tuningForConfig(config: KnobConfig | null, profile: SmartKnobProfile): SmartKnobTuning {
+  return {
+    pGain: config?.p_gain ?? 0,
+    dGain: config?.d_gain ?? 0,
+    strengthScale: config?.strength_scale ?? (profile.effortUnit === "A" ? 0.04 : 0.15),
+    effortLimit: Math.min(profile.effortLimitMax, profile.effortUnit === "A" ? 0.45 : 2),
+    // Keep the established motor-side safety default even if an older backend
+    // advertises only the protocol's absolute 1000-permille capability.
+    maxOutputPermille: Math.min(profile.maxOutputPermille, 700),
+    frictionCompensation: config?.friction_compensation ?? 0,
+    clickEffort: config?.click_torque_nm ?? 0,
+  };
+}
+
+function configWithTuning(config: KnobConfig, tuning: SmartKnobTuning): KnobConfig {
+  return {
+    ...config,
+    detent_positions: [...config.detent_positions],
+    strength_scale: tuning.strengthScale,
+    friction_compensation: tuning.frictionCompensation,
+    click_torque_nm: tuning.clickEffort,
+    p_gain: tuning.pGain,
+    d_gain: tuning.dGain,
+  };
+}
 
 const DEG = Math.PI / 180;
 const CLICK_WIDTH_THRESHOLD_RAD = 3 * DEG;
 
-function recommendedPGain(cfg: KnobConfig): number {
-  return cfg.detent_strength_unit * 4.0;
+function recommendedPGain(config: KnobConfig): number {
+  return config.detent_strength_unit * 4;
 }
 
-function recommendedDGain(cfg: KnobConfig): number {
-  if (cfg.detent_positions.length > 0) return 0;
-  if (cfg.click_torque_nm > 0 || cfg.position_width_radians < CLICK_WIDTH_THRESHOLD_RAD) return 0;
-
-  const lower = cfg.detent_strength_unit * 0.08;
-  const upper = cfg.detent_strength_unit * 0.02;
-  const wLower = 3 * DEG;
-  const wUpper = 8 * DEG;
-  const raw = lower + ((upper - lower) / (wUpper - wLower)) * (cfg.position_width_radians - wLower);
+function recommendedDGain(config: KnobConfig): number {
+  if (config.detent_positions.length > 0) return 0;
+  if (config.click_torque_nm > 0 || config.position_width_radians < CLICK_WIDTH_THRESHOLD_RAD) return 0;
+  const lower = config.detent_strength_unit * 0.08;
+  const upper = config.detent_strength_unit * 0.02;
+  const widthLower = 3 * DEG;
+  const widthUpper = 8 * DEG;
+  const raw = lower + ((upper - lower) / (widthUpper - widthLower)) * (config.position_width_radians - widthLower);
   return clamp(raw, Math.min(lower, upper), Math.max(lower, upper));
 }
 
-/** End coordinates of a line from center at `deg` (0°=+x, CW) and radius. */
-function lineEnd(deg: number, radius: number): { x2: number; y2: number } {
-  const rad = (deg * Math.PI) / 180;
-  return { x2: C + radius * Math.cos(rad), y2: C + radius * Math.sin(rad) };
+function lineEnd(degrees: number, radius: number): { x2: number; y2: number } {
+  const radians = (degrees * Math.PI) / 180;
+  return {
+    x2: CENTER + radius * Math.cos(radians),
+    y2: CENTER + radius * Math.sin(radians),
+  };
 }
 
-function positionCount(c: KnobConfig): number {
-  return c.max_position >= c.min_position ? c.max_position - c.min_position + 1 : 0;
+function positionCount(config: KnobConfig): number {
+  return config.max_position >= config.min_position
+    ? config.max_position - config.min_position + 1
+    : 0;
 }
 
-function degOf(rad: number | null | undefined): number {
-  if (rad == null) return 0;
-  return (rad * 180) / Math.PI;
+function degOf(radians: number | null | undefined): number {
+  return radians == null ? 0 : (radians * 180) / Math.PI;
 }
 
-function radToDeg(rad: number): number {
-  return (rad * 180) / Math.PI;
+function radToDeg(radians: number): number {
+  return (radians * 180) / Math.PI;
 }
 
-function degToRad(deg: number): number {
-  return (deg * Math.PI) / 180;
+function degToRad(degrees: number): number {
+  return (degrees * Math.PI) / 180;
 }
 
-function clamp(x: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, x));
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.max(minimum, Math.min(maximum, value));
 }
 
-function fmt(v: number | null | undefined, digits = 3): string {
-  if (v == null || Number.isNaN(v)) return "—";
-  return v.toFixed(digits);
+function fmt(value: number | null | undefined, digits = 3): string {
+  return value == null || Number.isNaN(value) ? "—" : value.toFixed(digits);
 }

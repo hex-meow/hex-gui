@@ -1739,6 +1739,7 @@ dependencies = [
  "canopen-sdo",
  "chrono",
  "env_logger",
+ "getrandom 0.3.4",
  "hex-arm-dynamics",
  "hex-motor",
  "log",
