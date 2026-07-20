@@ -902,6 +902,38 @@ export function LiftPanel({ connected }: { connected: boolean }) {
                     {t("liftSendGoal")}
                   </Button>
                 </div>
+                <div className="lift-position-presets">
+                  <Button
+                    disabled={!canMove || !positionBoundsValid || commandBusy}
+                    loading={busy === "position-min"}
+                    onClick={() => {
+                      const target = state.position_min_m;
+                      setPositionGoal(target);
+                      void command(
+                        "position-min",
+                        () => api.liftSetPosition(target),
+                        "liftGoalSent"
+                      );
+                    }}
+                  >
+                    ↓ {t("liftGoToMinimum")}
+                  </Button>
+                  <Button
+                    disabled={!canMove || !positionBoundsValid || commandBusy}
+                    loading={busy === "position-max"}
+                    onClick={() => {
+                      const target = state.position_max_m;
+                      setPositionGoal(target);
+                      void command(
+                        "position-max",
+                        () => api.liftSetPosition(target),
+                        "liftGoalSent"
+                      );
+                    }}
+                  >
+                    ↑ {t("liftGoToMaximum")}
+                  </Button>
+                </div>
                 {!canMove && (
                   <Typography.Text type="secondary" className="lift-inline-blocker">
                     {motionBlockers.map((key) => t(key)).join(" · ")}

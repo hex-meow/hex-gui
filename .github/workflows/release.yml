@@ -59,14 +59,23 @@ jobs:
       # Shared proto contract lives in a sibling repo; build.rs compiles it via
       # ROBOT_PROTO_DIR. Check it out (pinned commit) so a fresh CI checkout resolves.
       # Bump `ref` when the proto changes; switch to `main` if you prefer latest.
-      # Pinned to the commit that adds the controller-config RPC messages
-      # (ConfigGet/Validate/Set/Restart, ControllerInfo) — no tag carries them yet.
+      # Pinned to the commit that includes controller config, EE/lift, machine
+      # layout and URDF mount-link messages — no tag carries all of them yet.
       - name: Check out shared proto (hex-robot-proto)
         uses: actions/checkout@v4
         with:
           repository: hex-meow/hex-robot-proto
-          ref: 3100e231a80f3d7e47e89f63c07579900759f8ff
+          ref: e52860ad1226af49b46f702033d9eb94fa17248e
           path: _proto
+      - name: Verify shared proto inputs
+        shell: bash
+        run: |
+          for file in common controller robot base arm ee lift events; do
+            test -f "_proto/proto/$file.proto" || {
+              echo "Missing shared proto: $file.proto" >&2
+              exit 1
+            }
+          done
       - name: Point the build at the shared proto
         shell: bash # forward-slash relative path → works on Linux/macOS/Windows
         run: echo "ROBOT_PROTO_DIR=../_proto/proto" >> "$GITHUB_ENV"

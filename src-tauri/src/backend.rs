@@ -19,7 +19,9 @@ use std::{error::Error as StdError, fmt};
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use can_transport::{CanBus, CanBusState, CanCapabilities, CanFilter, CanFrame, CanIoError, CanRx};
+use can_transport::{
+    CanBus, CanBusState, CanCapabilities, CanFilter, CanFrame, CanId, CanIoError, CanRx,
+};
 use tokio::sync::{mpsc, oneshot};
 
 /// A raw backend send is allowed to occupy the one submission slot for at
@@ -151,6 +153,102 @@ fn protect_bus(inner: Arc<dyn CanBus>) -> Arc<dyn CanBus> {
     ProtectedCanBus::new(inner, SEND_TIMEOUT)
 }
 
+const TSDO_BASE: u32 = 0x580;
+const TSDO_FAMILY_MASK: u32 = 0x780;
+
+/// Tighten canopen-sdo's family-wide TSDO subscription to the node encoded in
+/// the filter id. The dependency currently asks for mask 0x780 even though its
+/// id field still contains the exact `0x580 + node-id` COB-ID.
+fn exact_tsdo_filter(filter: CanFilter) -> Option<(CanFilter, u16)> {
+    if filter.extended || filter.mask != TSDO_FAMILY_MASK {
+        return None;
+    }
+    if !(TSDO_BASE + 1..=TSDO_BASE + 0x7F).contains(&filter.id) {
+        return None;
+    }
+    let expected = filter.id as u16;
+    Some((CanFilter::exact_standard(expected), expected))
+}
+
+/// App-wide CAN decorator that gives every SDO transaction a node-exact RX
+/// queue. The validating receiver is deliberately retained after narrowing:
+/// if a backend ever violates its filter contract, the unexpected frame is
+/// visible in normal application logs instead of being silently ignored by
+/// the SDO state machine.
+struct ExactSdoBus {
+    inner: Arc<dyn CanBus>,
+}
+
+#[async_trait]
+impl CanBus for ExactSdoBus {
+    async fn send(&self, frame: CanFrame) -> Result<(), CanIoError> {
+        self.inner.send(frame).await
+    }
+
+    async fn subscribe(&self, filter: CanFilter) -> Result<Box<dyn CanRx>, CanIoError> {
+        let Some((exact, expected)) = exact_tsdo_filter(filter) else {
+            return self.inner.subscribe(filter).await;
+        };
+        let inner = self.inner.subscribe(exact).await?;
+        Ok(Box::new(ValidatedSdoRx { inner, expected }))
+    }
+
+    fn capabilities(&self) -> CanCapabilities {
+        self.inner.capabilities()
+    }
+
+    async fn bus_state(&self) -> Result<Option<CanBusState>, CanIoError> {
+        self.inner.bus_state().await
+    }
+}
+
+struct ValidatedSdoRx {
+    inner: Box<dyn CanRx>,
+    expected: u16,
+}
+
+impl ValidatedSdoRx {
+    fn validate(&self, frame: &CanFrame) {
+        if frame.id() == CanId::Standard(self.expected) {
+            return;
+        }
+        log::warn!(
+            "SDO RX filter violation: expected TSDO 0x{:03X} (node 0x{:02X}), got id={:?} kind={:?} dlc={} data={:02X?}",
+            self.expected,
+            self.expected - TSDO_BASE as u16,
+            frame.id(),
+            frame.kind(),
+            frame.dlc(),
+            frame.data(),
+        );
+    }
+}
+
+#[async_trait]
+impl CanRx for ValidatedSdoRx {
+    async fn recv(&mut self) -> std::result::Result<CanFrame, CanIoError> {
+        let frame = self.inner.recv().await?;
+        self.validate(&frame);
+        Ok(frame)
+    }
+
+    fn try_recv(&mut self) -> std::result::Result<Option<CanFrame>, CanIoError> {
+        let frame = self.inner.try_recv()?;
+        if let Some(frame) = frame.as_ref() {
+            self.validate(frame);
+        }
+        Ok(frame)
+    }
+}
+
+fn with_exact_sdo_filter(bus: Arc<dyn CanBus>) -> Arc<dyn CanBus> {
+    Arc::new(ExactSdoBus { inner: bus })
+}
+
+fn decorate_bus(inner: Arc<dyn CanBus>) -> Arc<dyn CanBus> {
+    protect_bus(with_exact_sdo_filter(inner))
+}
+
 /// Open a bus. `hw_timestamp` asks the backend to stamp received frames with
 /// its hardware clock (gs_usb only, needs firmware support); the returned bool
 /// reports whether that actually engaged.
@@ -171,7 +269,7 @@ pub async fn open_bus(spec: &str, hw_timestamp: bool) -> Result<(Arc<dyn CanBus>
             "gs_usb ch{channel} opened: {:?}, hw_ts={hw_ts}",
             bus.capabilities()
         );
-        return Ok((protect_bus(Arc::new(bus)), hw_ts));
+        return Ok((decorate_bus(Arc::new(bus)), hw_ts));
     }
 
     let (kind, _name) = match spec.split_once(':') {
@@ -185,7 +283,7 @@ pub async fn open_bus(spec: &str, hw_timestamp: bool) -> Result<(Arc<dyn CanBus>
                 .with_context(|| format!("opening SocketCAN interface '{_name}'"))?;
             // SocketCAN hardware timestamps would need SO_TIMESTAMPING,
             // which can-transport does not expose yet.
-            Ok((protect_bus(Arc::new(bus)), false))
+            Ok((decorate_bus(Arc::new(bus)), false))
         }
         other => bail!(
             "backend '{other}' is not available on this build \
@@ -384,5 +482,21 @@ mod tests {
         release.add_permits(1);
         assert!(first.await.unwrap().is_ok());
         assert!(live.await.unwrap().is_ok());
+    }
+
+    #[test]
+    fn narrows_family_wide_tsdo_filter_to_encoded_node() {
+        let broad = CanFilter::standard(0x594, TSDO_FAMILY_MASK as u16);
+        let (exact, expected) = exact_tsdo_filter(broad).expect("TSDO filter");
+        assert_eq!(expected, 0x594);
+        assert_eq!(exact, CanFilter::exact_standard(0x594));
+    }
+
+    #[test]
+    fn leaves_non_sdo_and_invalid_node_filters_unchanged() {
+        assert!(exact_tsdo_filter(CanFilter::pass_all_standard()).is_none());
+        assert!(exact_tsdo_filter(CanFilter::standard(0x180, 0x780)).is_none());
+        assert!(exact_tsdo_filter(CanFilter::standard(0x580, 0x780)).is_none());
+        assert!(exact_tsdo_filter(CanFilter::exact_standard(0x594)).is_none());
     }
 }

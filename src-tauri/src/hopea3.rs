@@ -41,8 +41,12 @@ use tokio::task::JoinHandle;
 // out of the kinematics entirely. `0x60FF` target velocity and the feedback
 // velocity are both wheel rev/s; no gear factor is applied anywhere below.
 
-/// Wheel radius (m). Wheel diameter is 0.2 m.
-const WHEEL_RADIUS_M: f64 = 0.1;
+/// Wheel radius (m). Wheel diameter is 0.154 m.
+const WHEEL_RADIUS_M: f64 = 0.077;
+
+/// Distance from each wheel's ground-contact point to the chassis centre (m).
+/// The wheel-centre circle diameter is 0.648 m.
+const WHEEL_CENTER_DISTANCE_M: f64 = 0.324;
 
 /// The three motors' Node-IDs, indexed the same as [`CONTACTS_M`]:
 /// `[motor1 (top-left), motor2 (bottom), motor3 (top-right)]`.
@@ -53,12 +57,19 @@ const NODE_IDS: [u8; 3] = [1, 2, 3];
 /// metres, with the origin at **motor 2's contact** (as given). Indexed
 /// `[motor1, motor2, motor3]`.
 ///
-/// From the spec: motor 1 is 489.1 mm forward (X) and 281.8 mm left (Y) of
-/// motor 2; motors 1/3 are mirrored across the X axis. This is ~equilateral.
+/// The three contacts form an equilateral triangle on a 648 mm diameter circle.
+/// Relative to motor 2, motors 1/3 are 486 mm forward (X) and approximately
+/// 280.593 mm left/right (Y).
 const CONTACTS_M: [[f64; 2]; 3] = [
-    [0.4891, 0.2818],  // motor 1, top-left
-    [0.0, 0.0],        // motor 2, bottom (given zero point)
-    [0.4891, -0.2818], // motor 3, top-right
+    [
+        1.5 * WHEEL_CENTER_DISTANCE_M,
+        0.866_025_403_784_438_6 * WHEEL_CENTER_DISTANCE_M,
+    ], // motor 1, top-left
+    [0.0, 0.0], // motor 2, bottom (given zero point)
+    [
+        1.5 * WHEEL_CENTER_DISTANCE_M,
+        -0.866_025_403_784_438_6 * WHEEL_CENTER_DISTANCE_M,
+    ], // motor 3, top-right
 ];
 
 /// Extra offset (m, chassis frame) applied **on top of the contact centroid**
@@ -777,4 +788,28 @@ fn wrap_pi(a: f64) -> f64 {
         a += tau;
     }
     a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CONTACTS_M, WHEEL_RADIUS_M};
+
+    #[test]
+    fn wheel_diameter_is_154_mm() {
+        assert!((2.0 * WHEEL_RADIUS_M - 0.154).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn wheel_centre_circle_diameter_is_648_mm() {
+        let centroid = [
+            CONTACTS_M.iter().map(|point| point[0]).sum::<f64>() / 3.0,
+            CONTACTS_M.iter().map(|point| point[1]).sum::<f64>() / 3.0,
+        ];
+
+        for point in CONTACTS_M {
+            let distance =
+                ((point[0] - centroid[0]).powi(2) + (point[1] - centroid[1]).powi(2)).sqrt();
+            assert!((2.0 * distance - 0.648).abs() < 1e-12);
+        }
+    }
 }

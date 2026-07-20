@@ -171,10 +171,6 @@
   white-space: nowrap;
 }
 
-.can-trace-row--tx {
-  background: rgba(231, 91, 43, 0.12);
-}
-
 .can-trace-cell {
   min-width: 0;
   height: 100%;

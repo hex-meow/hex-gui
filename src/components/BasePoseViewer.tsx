@@ -89,7 +89,7 @@ export function BasePoseViewer({ connected, poseX, poseY, theta, vx, vy, wz }: B
 
     const axes = new THREE.Group();
     axes.add(makeAxis(0xe75b2b, new THREE.Vector3(1, 0, 0), "+X"));
-    axes.add(makeAxis(0x63d18f, new THREE.Vector3(0, 0, 1), "+Y"));
+    axes.add(makeAxis(0x63d18f, new THREE.Vector3(0, 0, -1), "+Y"));
     axes.position.set(-4.8, 0.02, -4.8);
     scene.add(axes);
 
@@ -106,8 +106,9 @@ export function BasePoseViewer({ connected, poseX, poseY, theta, vx, vy, wz }: B
     velocityRef.current = velocity;
     robot.add(velocity);
 
-    const yawLeft = makeYawIndicator(1);
-    const yawRight = makeYawIndicator(-1);
+    // ROS +Y maps to Three.js -Z, so positive yaw follows the negative XZ arc.
+    const yawLeft = makeYawIndicator(-1);
+    const yawRight = makeYawIndicator(1);
     yawLeftRef.current = yawLeft;
     yawRightRef.current = yawRight;
     robot.add(yawLeft.group, yawRight.group);
@@ -158,15 +159,17 @@ export function BasePoseViewer({ connected, poseX, poseY, theta, vx, vy, wz }: B
     const yawRight = yawRightRef.current;
     if (!robot || !velocity || !yawLeft || !yawRight) return;
 
-    robot.position.set(poseX, 0, poseY);
-    robot.rotation.y = -theta;
+    // Preserve ROS planar handedness in Three.js' Y-up world:
+    // ROS (X forward, Y left) -> Three.js (X, -Z).
+    robot.position.set(poseX, 0, -poseY);
+    robot.rotation.y = theta;
 
     const speed = Math.hypot(vx, vy);
     if (speed > MOTION_EPSILON) {
       const velocityScale = Math.min(speed / FULL_LINEAR_SPEED_MPS, 1);
       velocity.visible = true;
       velocity.position.set(0, VELOCITY_ARROW_Y, 0);
-      velocity.setDirection(new THREE.Vector3(vx, 0, vy).normalize());
+      velocity.setDirection(new THREE.Vector3(vx, 0, -vy).normalize());
       velocity.setLength(
         VELOCITY_ARROW_MAX_LENGTH * velocityScale,
         VELOCITY_ARROW_MAX_HEAD_LENGTH * velocityScale,
@@ -183,7 +186,7 @@ export function BasePoseViewer({ connected, poseX, poseY, theta, vx, vy, wz }: B
     updateYawIndicator(yawLeft, yawScale);
     updateYawIndicator(yawRight, yawScale);
 
-    const p = new THREE.Vector3(poseX, 0.035, poseY);
+    const p = new THREE.Vector3(poseX, 0.035, -poseY);
     const last = lastTrailRef.current;
     if (!connected) {
       trailPointsRef.current = [p.clone()];
@@ -195,7 +198,7 @@ export function BasePoseViewer({ connected, poseX, poseY, theta, vx, vy, wz }: B
       lastTrailRef.current = p.clone();
     }
     updateTrail();
-    updateCameraTarget(poseX, poseY);
+    updateCameraTarget(poseX, -poseY);
     renderScene();
   }, [connected, poseX, poseY, theta, vx, vy, wz]);
 
@@ -213,12 +216,12 @@ export function BasePoseViewer({ connected, poseX, poseY, theta, vx, vy, wz }: B
     trail.geometry = new THREE.BufferGeometry().setFromPoints(trailPointsRef.current);
   };
 
-  const updateCameraTarget = (x: number, y: number) => {
+  const updateCameraTarget = (x: number, z: number) => {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
     if (!camera || !controls) return;
 
-    const nextTarget = new THREE.Vector3(x, 0, y);
+    const nextTarget = new THREE.Vector3(x, 0, z);
     const previousTarget = cameraTargetRef.current ?? controls.target.clone();
     const delta = nextTarget.clone().sub(previousTarget);
     camera.position.add(delta);
