@@ -518,6 +518,42 @@ export interface RobotNode {
   model: string;
 }
 
+// ── Controller HAL (RobotConsole read-only hardware view) ──
+export interface HardwareField {
+  name: string;
+  value: string;
+}
+
+export interface HardwareResource {
+  id: string;
+  kind: string;
+  model: string;
+  key: string;
+  alive: boolean;
+  sample_age_ms: number | null;
+  sample_bytes: number | null;
+  header_present: boolean | null;
+  seq: string | null;
+  stamp_ns: string | null;
+  sync_ns: string | null;
+  fields: HardwareField[];
+  decode_error: string | null;
+}
+
+export interface HardwareController {
+  controller_id: string;
+  reported_controller_ids: string[];
+  supervisor_versions: string[];
+  info_reply_count: number;
+  resources: HardwareResource[];
+  warnings: string[];
+}
+
+export interface HardwareSnapshot {
+  controllers: HardwareController[];
+  errors: string[];
+}
+
 // ── Controller Wi-Fi (hex-wifi JSON API over the Robot Console Zenoh session) ──
 export interface WifiSsid {
   hex: string;

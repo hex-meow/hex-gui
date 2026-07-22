@@ -25,6 +25,7 @@ use crate::zenoh_config::{
 use crate::zenoh_ee::{
     ConsoleUrdf, EeInfo, MountEdgeDto, RobotNode, SceneRobot, ZenohEeConn, ZenohEeState,
 };
+use crate::zenoh_hw::HardwareSnapshotDto;
 
 /// Anything we hand back to the frontend.
 type CmdResult<T> = Result<T, String>;
@@ -1187,6 +1188,18 @@ pub async fn ee_discover_all(state: State<'_, AppState>) -> CmdResult<Vec<RobotN
     let g = state.zenoh_ee.lock().await;
     let c = g.as_ref().ok_or_else(|| "未连接 EE Zenoh".to_string())?;
     Ok(c.discover_all().await)
+}
+
+/// Robot Console controller-HAL 只读快照：hw/info + liveliness + 最新 hw/<id> 样本。
+#[tauri::command]
+pub async fn hardware_snapshot(state: State<'_, AppState>) -> CmdResult<HardwareSnapshotDto> {
+    let (session, monitor) = {
+        let g = state.zenoh_ee.lock().await;
+        g.as_ref()
+            .map(ZenohEeConn::hardware_client)
+            .ok_or_else(|| "未连接 Robot Console Zenoh".to_string())?
+    };
+    Ok(monitor.snapshot(&session).await)
 }
 
 #[tauri::command]

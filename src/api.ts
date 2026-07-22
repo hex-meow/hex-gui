@@ -3,7 +3,7 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfo, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftState, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
+import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfo, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftState, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
 
 export const api = {
   connect: (iface: string, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -195,6 +195,7 @@ export const api = {
   eeDisconnect: () => invoke<void>("ee_disconnect"),
   eeDiscover: () => invoke<EeInfo[]>("ee_discover"),
   eeDiscoverAll: () => invoke<RobotNode[]>("ee_discover_all"),
+  hardwareSnapshot: () => invoke<HardwareSnapshot>("hardware_snapshot"),
   eeAcquire: (prefix: string, model: string) => invoke<void>("ee_acquire", { prefix, model }),
   eeSetFocus: (prefix: string) => invoke<void>("ee_set_focus", { prefix }),
   eeGoto: (q: number, kp?: number) => invoke<void>("ee_goto", { q, kp: kp ?? null }),

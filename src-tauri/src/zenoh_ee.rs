@@ -140,6 +140,7 @@ struct Ctrl {
 pub struct ZenohEeConn {
     session: zenoh::Session,
     ctrl: Arc<Ctrl>,
+    hardware: Arc<crate::zenoh_hw::HardwareMonitor>,
 }
 
 impl ZenohEeConn {
@@ -155,6 +156,7 @@ impl ZenohEeConn {
         }
         let session = zenoh::open(cfg).await.map_err(|e| anyhow!("zenoh open: {e}"))?;
         tokio::time::sleep(Duration::from_millis(700)).await;
+        let hardware = crate::zenoh_hw::HardwareMonitor::start(&session).await;
         let ctrl = Arc::new(Ctrl {
             prefix: StdMutex::new(None),
             session_id: AtomicU32::new(0),
@@ -295,7 +297,14 @@ impl ZenohEeConn {
             });
         }
 
-        Ok(Self { session, ctrl })
+        Ok(Self { session, ctrl, hardware })
+    }
+
+    /// 克隆只读 HAL monitor/session，让 Tauri command 在网络 query 前释放 AppState mutex。
+    pub(crate) fn hardware_client(
+        &self,
+    ) -> (zenoh::Session, Arc<crate::zenoh_hw::HardwareMonitor>) {
+        (self.session.clone(), self.hardware.clone())
     }
 
     /// 发现 EE(kind==EE),并逐个拉 ee/description 补细节。

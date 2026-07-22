@@ -4,9 +4,9 @@
 // 连接复用 zenoh_ee 模块的会话(ee_discover_all 做全量发现,所有 kind 一次拿全)。
 
 import { useCallback, useEffect, useState } from "react";
-import { App as AntdApp, Button, Card, Empty, Input, InputNumber, Layout, Menu, Segmented, Space, Tag } from "antd";
+import { Alert, App as AntdApp, Button, Card, Empty, Input, InputNumber, Layout, Menu, Segmented, Space, Tag } from "antd";
 import { api } from "../api";
-import type { RobotNode } from "../types";
+import type { HardwareSnapshot, RobotNode } from "../types";
 import type { MountEdge } from "../types";
 import { useI18n } from "../i18n";
 import EePanel from "./EePanel";
@@ -16,9 +16,12 @@ import { MachineViewer } from "./MachineViewer";
 import { EeQuickStrip } from "./EeQuickStrip";
 import type { SceneRobot } from "../types";
 import { WifiSettingsDrawer } from "./WifiSettingsDrawer";
+import { HardwarePanel } from "./HardwarePanel";
 
 const { Sider, Content } = Layout;
 const DISCOVER_MS = 3000;
+const HARDWARE_SNAPSHOT_MS = 500;
+const EMPTY_HARDWARE: HardwareSnapshot = { controllers: [], errors: [] };
 
 const KIND_COLOR: Record<string, string> = { arm: "geekblue", base: "purple", lift: "gold", ee: "cyan" };
 
@@ -29,6 +32,8 @@ export default function RobotConsole() {
   const [connected, setConnected] = useState(false);
   const [nodes, setNodes] = useState<RobotNode[]>([]);
   const [sel, setSel] = useState<RobotNode | null>(null);
+  const [hardwareCid, setHardwareCid] = useState<string | null>(null);
+  const [hardware, setHardware] = useState<HardwareSnapshot>(EMPTY_HARDWARE);
   const [scene, setScene] = useState<SceneRobot[]>([]);
   const [held, setHeld] = useState<Set<string>>(new Set());
   const [machines, setMachines] = useState<Record<string, MountEdge[]>>({});
@@ -48,7 +53,8 @@ export default function RobotConsole() {
   const disconnect = useCallback(async () => {
     await Promise.allSettled([api.armRelease(), api.zenohRelease(), api.eeRelease()]);
     await Promise.allSettled([api.armDisconnect(), api.zenohDisconnect(), api.eeDisconnect()]);
-    setConnected(false); setNodes([]); setSel(null); setHeld(new Set()); setWifiOpen(false);
+    setConnected(false); setNodes([]); setSel(null); setHardwareCid(null);
+    setHardware(EMPTY_HARDWARE); setHeld(new Set()); setWifiOpen(false);
   }, []);
 
   // 周期全量发现(在线/离线以"出现在发现结果里"为准;liveliness 精细三态是后续优化)
@@ -61,6 +67,25 @@ export default function RobotConsole() {
     };
     tick();
     const iv = setInterval(tick, DISCOVER_MS);
+    return () => { stop = true; clearInterval(iv); };
+  }, [connected]);
+
+  // HAL 只读快照：hw/info 清单 + liveliness + 后端缓存的最新 hw/<id> payload。
+  useEffect(() => {
+    if (!connected) { setHardware(EMPTY_HARDWARE); return; }
+    let stop = false;
+    let running = false;
+    const tick = async () => {
+      if (running) return;
+      running = true;
+      try {
+        const snapshot = await api.hardwareSnapshot();
+        if (!stop) setHardware(snapshot);
+      } catch { /* transient; keep the last honest snapshot */ }
+      finally { running = false; }
+    };
+    tick();
+    const iv = setInterval(tick, HARDWARE_SNAPSHOT_MS);
     return () => { stop = true; clearInterval(iv); };
   }, [connected]);
 
@@ -107,22 +132,43 @@ export default function RobotConsole() {
     if (!byCid.has(n.cid)) byCid.set(n.cid, []);
     byCid.get(n.cid)!.push(n);
   }
-  const menuItems = [...byCid.entries()].map(([cid, ns]) => ({
-    key: `cid:${cid}`,
-    label: `controller ${cid.slice(0, 8)}…`,
-    children: ns.map((n) => ({
-      key: n.prefix,
-      label: (
-        <Space size={6}>
-          <span>{n.robot_index}</span>
-          <Tag color={KIND_COLOR[n.kind_name] ?? "default"} style={{ marginInlineEnd: 0 }}>{n.kind_name}</Tag>
-          <span style={{ opacity: 0.65, fontSize: 12 }}>{n.model}</span>
-          {held.has(n.prefix) && <Tag color="green" style={{ marginInlineEnd: 0 }}>控制中</Tag>}
-        </Space>
-      ),
-    })),
-  }));
-  const wifiCids = [...byCid.keys()].map((cid) => `hexmeow/${cid}`);
+  const hardwareByCid = new Map(hardware.controllers.map((controller) => [controller.controller_id, controller]));
+  const allCids = [...new Set([...byCid.keys(), ...hardwareByCid.keys()])].sort();
+  const menuItems = allCids.map((cid) => {
+    const ns = byCid.get(cid) ?? [];
+    const hw = hardwareByCid.get(cid);
+    const alive = hw?.resources.filter((resource) => resource.alive).length ?? 0;
+    const total = hw?.resources.length ?? 0;
+    return {
+      key: `cid:${cid}`,
+      label: `controller ${cid.slice(0, 8)}…`,
+      children: [
+        {
+          key: `hw:${cid}`,
+          label: (
+            <Space size={6}>
+              <span>{t("hwTitle")}</span>
+              {hw
+                ? <Tag color={total === 0 ? "default" : alive === total ? "green" : alive > 0 ? "orange" : "red"}>{alive}/{total}</Tag>
+                : <Tag color="red">no hw/info</Tag>}
+            </Space>
+          ),
+        },
+        ...ns.map((n) => ({
+          key: n.prefix,
+          label: (
+            <Space size={6}>
+              <span>{n.robot_index}</span>
+              <Tag color={KIND_COLOR[n.kind_name] ?? "default"} style={{ marginInlineEnd: 0 }}>{n.kind_name}</Tag>
+              <span style={{ opacity: 0.65, fontSize: 12 }}>{n.model}</span>
+              {held.has(n.prefix) && <Tag color="green" style={{ marginInlineEnd: 0 }}>控制中</Tag>}
+            </Space>
+          ),
+        })),
+      ],
+    };
+  });
+  const wifiCids = allCids.map((cid) => `hexmeow/${cid}`);
 
   return (
     <Layout style={{ height: "100%", background: "transparent" }}>
@@ -143,7 +189,9 @@ export default function RobotConsole() {
         >
           {t("wifiSettings")}
         </Button>
-        {connected && nodes.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("consoleSearching")} />}
+        {connected && nodes.length === 0 && hardware.controllers.length === 0 && (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("consoleSearching")} />
+        )}
         {connected && (
           <div style={{ fontSize: 12, opacity: 0.75, padding: "2px 4px 6px" }}>
             {held.size > 0 && (
@@ -169,22 +217,48 @@ export default function RobotConsole() {
           mode="inline"
           style={{ borderInlineEnd: 0 }}
           defaultOpenKeys={menuItems.map((m) => m.key)}
-          selectedKeys={sel ? [sel.prefix] : []}
+          selectedKeys={hardwareCid ? [`hw:${hardwareCid}`] : sel ? [sel.prefix] : []}
           items={menuItems}
-          onClick={({ key }) => setSel(nodes.find((n) => n.prefix === key) ?? null)}
+          onClick={({ key }) => {
+            if (key.startsWith("hw:")) {
+              setHardwareCid(key.slice(3));
+              setSel(null);
+              return;
+            }
+            setHardwareCid(null);
+            setSel(nodes.find((n) => n.prefix === key) ?? null);
+          }}
         />
       </Sider>
       <Content style={{ padding: 14, overflow: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
-        {connected && (
+        {connected && !hardwareCid && hardware.errors.length > 0 && (
+          <Alert
+            type="error"
+            showIcon
+            message={t("hwDiscoveryError")}
+            description={hardware.errors.join("\n")}
+          />
+        )}
+        {connected && !hardwareCid && (
           <Card size="small" styles={{ body: { padding: 6 } }}>
             <MachineViewer robots={scene} selected={sel?.prefix ?? null} spacing={spacing}
               machines={machines} focusMode={focusMode}
-              onSelect={(prefix) => { const n = nodes.find((x) => x.prefix === prefix); if (n) setSel(n); }}
+              onSelect={(prefix) => {
+                const n = nodes.find((x) => x.prefix === prefix);
+                if (n) { setHardwareCid(null); setSel(n); }
+              }}
               height={340} />
           </Card>
         )}
-        {!sel && (
+        {!sel && !hardwareCid && (
           <Empty description={connected ? t("consolePickRobot") : t("consoleConnectFirst")} style={{ marginTop: connected ? 24 : 80 }} />
+        )}
+        {hardwareCid && (
+          <HardwarePanel
+            cid={hardwareCid}
+            controller={hardwareByCid.get(hardwareCid)}
+            discoveryErrors={hardware.errors}
+          />
         )}
         {sel && sel.kind_name === "ee" && <EePanel key={sel.prefix} node={sel} />}
         {sel && sel.kind_name === "arm" && (() => {

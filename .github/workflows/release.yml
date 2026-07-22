@@ -65,7 +65,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: hex-meow/hex-robot-proto
-          ref: e52860ad1226af49b46f702033d9eb94fa17248e
+          # EstopState.engaged presence + PowerState/HwInfo used by RobotConsole hardware view.
+          ref: 3cb43f1ad3dd392ef9dc65f6904129f4cff16122
           path: _proto
       - name: Verify shared proto inputs
         shell: bash

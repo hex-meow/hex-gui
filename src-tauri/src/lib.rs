@@ -21,6 +21,7 @@ mod zenoh_arm;
 mod zenoh_base;
 mod zenoh_config;
 mod zenoh_ee;
+mod zenoh_hw;
 mod zenoh_wifi;
 
 use std::sync::atomic::Ordering;
@@ -172,6 +173,7 @@ pub fn run() {
             commands::ee_disconnect,
             commands::ee_discover,
             commands::ee_discover_all,
+            commands::hardware_snapshot,
             commands::ee_acquire,
             commands::ee_set_focus,
             commands::ee_goto,
