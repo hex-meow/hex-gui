@@ -2146,6 +2146,132 @@ pub async fn ee_machines(
         .unwrap_or_default())
 }
 
+// ───────────────────────── Robot Console Wi-Fi(Zenoh) ──────────────────────
+
+async fn console_zenoh_session(state: &AppState) -> CmdResult<zenoh::Session> {
+    state
+        .zenoh_ee
+        .lock()
+        .await
+        .as_ref()
+        .map(ZenohEeConn::session)
+        .ok_or_else(|| "未连接 Robot Console Zenoh".to_string())
+}
+
+#[tauri::command]
+pub async fn wifi_discover(
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<crate::zenoh_wifi::WifiControllerDto>> {
+    let session = console_zenoh_session(&state).await?;
+    crate::zenoh_wifi::discover(&session).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn wifi_status(
+    state: State<'_, AppState>,
+    cid: String,
+) -> CmdResult<crate::zenoh_wifi::WifiStatusDto> {
+    let session = console_zenoh_session(&state).await?;
+    crate::zenoh_wifi::status(&session, &cid).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn wifi_scan(
+    state: State<'_, AppState>,
+    cid: String,
+) -> CmdResult<Vec<crate::zenoh_wifi::WifiScanEntryDto>> {
+    let session = console_zenoh_session(&state).await?;
+    crate::zenoh_wifi::scan(&session, &cid).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn wifi_networks(
+    state: State<'_, AppState>,
+    cid: String,
+) -> CmdResult<Vec<crate::zenoh_wifi::WifiSavedNetworkDto>> {
+    let session = console_zenoh_session(&state).await?;
+    crate::zenoh_wifi::networks(&session, &cid)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn wifi_validate(
+    state: State<'_, AppState>,
+    cid: String,
+    ssid: String,
+    passphrase: String,
+    hidden: bool,
+    country: Option<String>,
+) -> CmdResult<()> {
+    let session = console_zenoh_session(&state).await?;
+    crate::zenoh_wifi::validate(&session, &cid, &ssid, passphrase, hidden, country)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn wifi_set(
+    state: State<'_, AppState>,
+    cid: String,
+    ssid: String,
+    passphrase: String,
+    hidden: bool,
+    country: Option<String>,
+    expected_revision: Option<u64>,
+) -> CmdResult<crate::zenoh_wifi::WifiJobDto> {
+    let session = console_zenoh_session(&state).await?;
+    crate::zenoh_wifi::set(
+        &session,
+        &cid,
+        &ssid,
+        passphrase,
+        hidden,
+        country,
+        expected_revision,
+    )
+    .await
+    .map_err(err)
+}
+
+#[tauri::command]
+pub async fn wifi_forget(
+    state: State<'_, AppState>,
+    cid: String,
+    ssid_hex: String,
+    expected_revision: Option<u64>,
+) -> CmdResult<crate::zenoh_wifi::WifiJobDto> {
+    let session = console_zenoh_session(&state).await?;
+    crate::zenoh_wifi::forget(&session, &cid, &ssid_hex, expected_revision)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn wifi_forget_all(
+    state: State<'_, AppState>,
+    cid: String,
+    expected_revision: Option<u64>,
+) -> CmdResult<crate::zenoh_wifi::WifiJobDto> {
+    let session = console_zenoh_session(&state).await?;
+    crate::zenoh_wifi::forget_all(&session, &cid, expected_revision)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn wifi_job(
+    state: State<'_, AppState>,
+    cid: String,
+    job_id: String,
+) -> CmdResult<crate::zenoh_wifi::WifiJobDto> {
+    let session = console_zenoh_session(&state).await?;
+    crate::zenoh_wifi::job(&session, &cid, &job_id)
+        .await
+        .map_err(err)
+}
+
 // ───────────────────────── Lift direct-CAN application ──────────────────────
 
 /// Attach to one lift node and read its identity/nameplate/configuration.

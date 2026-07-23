@@ -697,6 +697,45 @@ export interface RobotNode {
   model: string;
 }
 
+// ── Controller Wi-Fi (hex-wifi JSON API over the Robot Console Zenoh session) ──
+export interface WifiSsid {
+  hex: string;
+  display: string;
+}
+
+export interface WifiStatus {
+  state: "unavailable" | "disconnected" | "associating" | "connected" | string;
+  connected: WifiSsid | null;
+  revision: number;
+}
+
+export interface WifiController {
+  cid: string;
+  status: WifiStatus;
+}
+
+export interface WifiScanEntry {
+  ssid: WifiSsid;
+  signal_dbm: number;
+  security: "open" | "wpa2_personal" | "wpa3_personal" | "unknown" | string;
+}
+
+export interface WifiSavedNetwork {
+  ssid: WifiSsid;
+  enabled: boolean;
+  connected: boolean;
+}
+
+export interface WifiJob {
+  job_id: string;
+  request_id: string;
+  operation: "set" | "forget" | "forget_all" | string;
+  state: "queued" | "running" | "succeeded" | "failed" | string;
+  revision: number | null;
+  error_code: string | null;
+  error_message: string | null;
+}
+
 export interface ZenohEeState {
   controlling: boolean;
   holder: number;

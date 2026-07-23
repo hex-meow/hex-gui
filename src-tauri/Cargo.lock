@@ -1740,6 +1740,7 @@ dependencies = [
  "chrono",
  "env_logger",
  "getrandom 0.3.4",
+ "hex",
  "hex-arm-dynamics",
  "hex-motor",
  "log",

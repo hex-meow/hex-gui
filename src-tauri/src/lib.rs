@@ -25,6 +25,7 @@ mod zenoh_arm;
 mod zenoh_base;
 mod zenoh_config;
 mod zenoh_ee;
+mod zenoh_wifi;
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
@@ -244,6 +245,15 @@ pub fn run() {
             commands::ee_scene,
             commands::console_get_urdf,
             commands::ee_machines,
+            commands::wifi_discover,
+            commands::wifi_status,
+            commands::wifi_scan,
+            commands::wifi_networks,
+            commands::wifi_validate,
+            commands::wifi_set,
+            commands::wifi_forget,
+            commands::wifi_forget_all,
+            commands::wifi_job,
             commands::arm_connect,
             commands::arm_disconnect,
             commands::arm_discover,
