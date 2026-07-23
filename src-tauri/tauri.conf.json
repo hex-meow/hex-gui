@@ -5,7 +5,7 @@
   "identifier": "com.hexmecha.hex-motor-gui",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://127.0.0.1:14320",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },

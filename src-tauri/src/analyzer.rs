@@ -261,20 +261,34 @@ pub enum FilterSpec {
     All,
     /// Match a CANopen node across its function-code ranges. `include_nodeless`
     /// keeps NMT/SYNC/TIME/LSS (which carry no node) visible for context.
-    Node { node: u8, include_nodeless: bool },
+    Node {
+        node: u8,
+        include_nodeless: bool,
+    },
     /// Bit-mask filter within one id width, mirroring `CanFilter::matches`.
-    Mask { id: u32, mask: u32, extended: bool },
+    Mask {
+        id: u32,
+        mask: u32,
+        extended: bool,
+    },
 }
 
 impl FilterSpec {
     fn matches(&self, id: CanId) -> bool {
         match self {
             FilterSpec::All => true,
-            FilterSpec::Mask { id: fid, mask, extended } => match id {
+            FilterSpec::Mask {
+                id: fid,
+                mask,
+                extended,
+            } => match id {
                 CanId::Standard(s) => !*extended && (s as u32 & mask) == (fid & mask),
                 CanId::Extended(e) => *extended && (e & mask) == (fid & mask),
             },
-            FilterSpec::Node { node, include_nodeless } => match id {
+            FilterSpec::Node {
+                node,
+                include_nodeless,
+            } => match id {
                 // CANopen is 11-bit only; extended frames have no node.
                 CanId::Extended(_) => false,
                 CanId::Standard(s) => {
@@ -283,8 +297,18 @@ impl FilterSpec {
                     let node_bearing = n != 0
                         && matches!(
                             fc,
-                            0x080 | 0x180 | 0x200 | 0x280 | 0x300 | 0x380 | 0x400 | 0x480
-                                | 0x500 | 0x580 | 0x600 | 0x700
+                            0x080
+                                | 0x180
+                                | 0x200
+                                | 0x280
+                                | 0x300
+                                | 0x380
+                                | 0x400
+                                | 0x480
+                                | 0x500
+                                | 0x580
+                                | 0x600
+                                | 0x700
                         );
                     if node_bearing && n == *node {
                         return true;
@@ -562,7 +586,10 @@ impl CanAnalyzer {
             t0,
         });
 
-        log::info!("CAN analyzer capturing on {spec:?} ({:?})", bus.capabilities());
+        log::info!(
+            "CAN analyzer capturing on {spec:?} ({:?})",
+            bus.capabilities()
+        );
         Ok(Self {
             bus,
             t0,
@@ -587,7 +614,10 @@ impl CanAnalyzer {
     /// (possibly seconds-long, with retries) SDO transfer. Because the SDO
     /// client sends through the mirror, its requests appear in the trace.
     pub fn sdo_handles(&self) -> (Arc<dyn CanBus>, Arc<tokio::sync::Mutex<()>>) {
-        (self.mirror.clone() as Arc<dyn CanBus>, self.sdo_lock.clone())
+        (
+            self.mirror.clone() as Arc<dyn CanBus>,
+            self.sdo_lock.clone(),
+        )
     }
 
     /// Cursor-based trace slice: frames with `seq > after_seq`, up to `max`, that
@@ -644,7 +674,10 @@ impl CanAnalyzer {
                 .collect();
             (rows, self.status_dto(&st))
         };
-        let rows = rows.into_iter().map(|(k, e)| agg_dto(k, e, now_us)).collect();
+        let rows = rows
+            .into_iter()
+            .map(|(k, e)| agg_dto(k, e, now_us))
+            .collect();
         AggReplyDto { rows, status }
     }
 
@@ -692,9 +725,11 @@ impl CanAnalyzer {
             CanId::new_standard(spec.id as u16).map_err(|e| anyhow!("bad standard id: {e}"))?
         };
         let frame = if spec.rtr {
-            CanFrame::new_remote(id, spec.dlc.min(8)).map_err(|e| anyhow!("build RTR frame: {e}"))?
+            CanFrame::new_remote(id, spec.dlc.min(8))
+                .map_err(|e| anyhow!("build RTR frame: {e}"))?
         } else if spec.fd {
-            CanFrame::new_fd(id, &spec.data, spec.brs).map_err(|e| anyhow!("build FD frame: {e}"))?
+            CanFrame::new_fd(id, &spec.data, spec.brs)
+                .map_err(|e| anyhow!("build FD frame: {e}"))?
         } else {
             CanFrame::new_data(id, &spec.data).map_err(|e| anyhow!("build data frame: {e}"))?
         };

@@ -3,7 +3,62 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfo, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftState, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
+import type {
+  ArmInfo,
+  ArmUrdf,
+  BaseInfo,
+  CanAggReply,
+  CanAnalyzerStatus,
+  CanBusHealth,
+  CanFilterSpec,
+  CanSendSpec,
+  CanTraceReply,
+  ConfigGetDto,
+  ConfigSetResult,
+  ConfigValidateResult,
+  ConsoleUrdf,
+  ControllerInfo,
+  DamiaoConfig,
+  DamiaoDiscoveredDevice,
+  DamiaoMode,
+  DamiaoState,
+  DamiaoTarget,
+  RollerCanControlDevice,
+  RollerCanControlMode,
+  RollerCanControlState,
+  RollerCanControlTarget,
+  EeInfo,
+  EventsSnapshot,
+  Hopea3InitProgress,
+  Hopea3State,
+  ImuState,
+  KnobConfig,
+  LiftState,
+  LiveState,
+  LogLine,
+  MotorInfo,
+  MotorMode,
+  MotorTarget,
+  MountEdge,
+  RestartResult,
+  RobotNode,
+  SceneRobot,
+  SmartKnobDevice,
+  SmartKnobProfile,
+  SmartKnobStartRequest,
+  SmartKnobTarget,
+  SmartKnobTelemetry,
+  SmartKnobTuning,
+  UnifiedSmartKnobState,
+  WifiController,
+  WifiJob,
+  WifiSavedNetwork,
+  WifiScanEntry,
+  WifiStatus,
+  ZenohArmState,
+  ZenohBaseState,
+  ZenohEeState,
+} from "./types";
 
 export const api = {
   connect: (iface: string, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -26,6 +81,54 @@ export const api = {
   disable: (nid: number) => invoke<void>("disable", { nid }),
   clearError: (nid: number) => invoke<void>("clear_error", { nid }),
   getStatus: (nid: number) => invoke<LiveState>("get_status", { nid }),
+
+  // DAMIAO DM-J4310-2EC V1.1 (raw standard CAN, independent of CiA 402).
+  damiaoListDevices: () =>
+    invoke<DamiaoDiscoveredDevice[]>("damiao_list_devices"),
+  damiaoSafeRescan: () => invoke<void>("damiao_safe_rescan"),
+  damiaoAttach: (config: DamiaoConfig) =>
+    invoke<DamiaoState>("damiao_attach", { config }),
+  damiaoDetach: (motorId: number) => invoke<void>("damiao_detach", { motorId }),
+  damiaoGetState: (motorId: number) =>
+    invoke<DamiaoState>("damiao_get_state", { motorId }),
+  damiaoSetMode: (motorId: number, mode: DamiaoMode) =>
+    invoke<DamiaoState>("damiao_set_mode", { motorId, mode }),
+  damiaoEnable: (motorId: number) => invoke<void>("damiao_enable", { motorId }),
+  damiaoDisable: (motorId: number) => invoke<void>("damiao_disable", { motorId }),
+  damiaoDisableAll: () => invoke<void>("damiao_disable_all"),
+  damiaoClearFault: (motorId: number) =>
+    invoke<void>("damiao_clear_fault", { motorId }),
+  damiaoSetZero: (motorId: number) => invoke<void>("damiao_set_zero", { motorId }),
+  damiaoSendTarget: (motorId: number, target: DamiaoTarget, repeat: boolean) =>
+    invoke<void>("damiao_send_target", { motorId, target, repeat }),
+  damiaoStopStream: (motorId: number) =>
+    invoke<void>("damiao_stop_stream", { motorId }),
+
+  // Unit RollerCAN public stock-firmware control protocol. This is separate
+  // from the firmware-owned SmartKnob API below.
+  rollerCanControlListDevices: () =>
+    invoke<RollerCanControlDevice[]>("rollercan_control_list_devices"),
+  rollerCanControlRescan: () => invoke<void>("rollercan_control_rescan"),
+  rollerCanControlAttach: (nodeId: number) =>
+    invoke<RollerCanControlState>("rollercan_control_attach", { nodeId }),
+  rollerCanControlDetach: (nodeId: number) =>
+    invoke<void>("rollercan_control_detach", { nodeId }),
+  rollerCanControlGetState: (nodeId: number) =>
+    invoke<RollerCanControlState>("rollercan_control_get_state", { nodeId }),
+  rollerCanControlSetMode: (nodeId: number, mode: RollerCanControlMode) =>
+    invoke<RollerCanControlState>("rollercan_control_set_mode", { nodeId, mode }),
+  rollerCanControlEnable: (nodeId: number) =>
+    invoke<void>("rollercan_control_enable", { nodeId }),
+  rollerCanControlDisable: (nodeId: number) =>
+    invoke<void>("rollercan_control_disable", { nodeId }),
+  rollerCanControlReleaseStall: (nodeId: number) =>
+    invoke<void>("rollercan_control_release_stall", { nodeId }),
+  rollerCanControlSendTarget: (nodeId: number, target: RollerCanControlTarget) =>
+    invoke<void>("rollercan_control_send_target", { nodeId, target }),
+  rollerCanControlSetCurrentLimit: (nodeId: number, currentMa: number) =>
+    invoke<void>("rollercan_control_set_current_limit", { nodeId, currentMa }),
+  rollerCanControlRefresh: (nodeId: number) =>
+    invoke<void>("rollercan_control_refresh", { nodeId }),
 
   changeNodeId: (nid: number, newId: number) =>
     invoke<void>("change_node_id", { nid, newId }),
@@ -84,51 +187,28 @@ export const api = {
   liftCommissionCsv: () => invoke<string>("lift_commission_csv"),
 
   // SmartKnob Robot Application
-  smartknobConfigs: () => invoke<KnobConfig[]>("smartknob_configs"),
-  smartknobStart: (nid: number, configIndex: number) =>
-    invoke<void>("smartknob_start", { nid, configIndex }),
+  smartknobMonitorStart: () => invoke<void>("smartknob_monitor_start"),
+  smartknobMonitorStop: () => invoke<void>("smartknob_monitor_stop"),
+  smartknobListDevices: () =>
+    invoke<SmartKnobDevice[]>("smartknob_list_devices"),
+  smartknobGetProfile: (target: SmartKnobTarget) =>
+    invoke<SmartKnobProfile>("smartknob_get_profile", { target }),
+  smartknobProbe: (nodeId: number) =>
+    invoke<SmartKnobDevice>("smartknob_probe", { nodeId }),
+  smartknobStart: (request: SmartKnobStartRequest) =>
+    invoke<void>("smartknob_start", { request }),
   smartknobStop: () => invoke<void>("smartknob_stop"),
   smartknobSetConfig: (index: number) =>
     invoke<void>("smartknob_set_config", { index }),
-  smartknobSetTuning: (
-      pGain: number,
-      dGain: number,
-      strengthScale: number,
-      torqueLimitNm: number,
-      maxTorquePermille: number,
-      frictionCompensation: number,
-      clickTorqueNm: number,
-    ) =>
-    invoke<void>("smartknob_set_tuning", {
-      pGain,
-      dGain,
-      strengthScale,
-      torqueLimitNm,
-      maxTorquePermille,
-      frictionCompensation,
-      clickTorqueNm,
-    }),
+  smartknobSetTuning: (tuning: SmartKnobTuning) =>
+    invoke<void>("smartknob_set_tuning", { tuning }),
   smartknobClearError: () => invoke<void>("smartknob_clear_error"),
-  smartknobGetState: () => invoke<SmartKnobState>("smartknob_get_state"),
-  smartknobSetCustomConfig: (cfg: KnobConfig) =>
-    invoke<void>("smartknob_set_custom_config", {
-      position: cfg.position,
-      minPosition: cfg.min_position,
-      maxPosition: cfg.max_position,
-      positionWidthRadians: cfg.position_width_radians,
-      detentStrengthUnit: cfg.detent_strength_unit,
-      endstopStrengthUnit: cfg.endstop_strength_unit,
-      snapPoint: cfg.snap_point,
-      snapPointBias: cfg.snap_point_bias,
-      detentPositions: cfg.detent_positions,
-      clickTorqueNm: cfg.click_torque_nm,
-      frictionCompensation: cfg.friction_compensation,
-      strengthScale: cfg.strength_scale,
-      pGain: cfg.p_gain,
-      dGain: cfg.d_gain,
-      text: cfg.text,
-      ledHue: cfg.led_hue,
-    }),
+  smartknobGetState: () =>
+    invoke<UnifiedSmartKnobState>("smartknob_get_state"),
+  smartknobSetCustomConfig: (config: KnobConfig) =>
+    invoke<void>("smartknob_set_custom_config", { config }),
+  smartknobSetTelemetry: (telemetry: SmartKnobTelemetry) =>
+    invoke<void>("smartknob_set_telemetry", { telemetry }),
 
   // IMU
   imuStart: (nid: number) => invoke<void>("imu_start", { nid }),

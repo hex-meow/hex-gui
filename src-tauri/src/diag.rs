@@ -125,7 +125,13 @@ pub fn parse_log_line(proc: &str, raw: &str) -> LogLine {
             target: target.into(),
             msg: msg.into(),
         },
-        _ => LogLine { proc: proc.into(), ts_ns: 0, level: String::new(), target: String::new(), msg: raw.into() },
+        _ => LogLine {
+            proc: proc.into(),
+            ts_ns: 0,
+            level: String::new(),
+            target: String::new(),
+            msg: raw.into(),
+        },
     }
 }
 
@@ -214,13 +220,25 @@ mod tests {
         assert_eq!(robot_mode_name(3), "OVERTAKEN");
         assert_eq!(robot_mode_name(4), "FATAL_ERROR");
         assert_eq!(robot_mode_name(0), "UNSPECIFIED");
-        assert_eq!(robot_mode_name(99), "UNSPECIFIED", "未知值退化为 UNSPECIFIED,不 panic");
+        assert_eq!(
+            robot_mode_name(99),
+            "UNSPECIFIED",
+            "未知值退化为 UNSPECIFIED,不 panic"
+        );
     }
 
     #[test]
     fn overtaken_text_prefers_human_then_mode_name() {
-        assert_eq!(overtaken_text(1, Some("摇杆接管")), "摇杆接管", "有 human_readable 用之");
-        assert_eq!(overtaken_text(1, Some("")), "JOYSTICK", "空 human_readable 退到短名");
+        assert_eq!(
+            overtaken_text(1, Some("摇杆接管")),
+            "摇杆接管",
+            "有 human_readable 用之"
+        );
+        assert_eq!(
+            overtaken_text(1, Some("")),
+            "JOYSTICK",
+            "空 human_readable 退到短名"
+        );
         assert_eq!(overtaken_text(2, None), "COLLISION");
         assert_eq!(overtaken_text(0, None), "UNSPECIFIED");
     }
@@ -235,7 +253,14 @@ mod tests {
     }
 
     fn ev(sev: i32, code: &str) -> RobotEvent {
-        RobotEvent { seq: 0, severity: sev, code: code.into(), text: String::new(), kv: vec![], ts_ns: 0 }
+        RobotEvent {
+            seq: 0,
+            severity: sev,
+            code: code.into(),
+            text: String::new(),
+            kv: vec![],
+            ts_ns: 0,
+        }
     }
 
     #[test]
@@ -244,8 +269,14 @@ mod tests {
         b.push_live(ev(4, "a"));
         b.push_live(ev(3, "b"));
         let s = b.snapshot();
-        assert_eq!(s.events.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![0, 1]);
-        assert_eq!(s.baseline_seq, 0, "无 reseed 时 baseline 恒 0 → 首个实时事件(seq0>=0)即可通知");
+        assert_eq!(
+            s.events.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert_eq!(
+            s.baseline_seq, 0,
+            "无 reseed 时 baseline 恒 0 → 首个实时事件(seq0>=0)即可通知"
+        );
     }
 
     #[test]
@@ -255,13 +286,19 @@ mod tests {
         b.reseed(vec![ev(1, "h0"), ev(1, "h1"), ev(4, "h2")]);
         let s = b.snapshot();
         assert_eq!(s.baseline_seq, 3);
-        assert!(s.events.iter().all(|e| e.seq < s.baseline_seq), "历史事件 seq 全 < baseline → 不弹通知");
+        assert!(
+            s.events.iter().all(|e| e.seq < s.baseline_seq),
+            "历史事件 seq 全 < baseline → 不弹通知"
+        );
         // 之后一条实时 FATAL → seq3 >= baseline → 应可通知。
         b.push_live(ev(4, "live"));
         let s2 = b.snapshot();
         let live = s2.events.last().unwrap();
         assert_eq!(live.seq, 3);
-        assert!(live.seq >= s2.baseline_seq, "reseed 后的实时事件 seq >= baseline → 弹通知");
+        assert!(
+            live.seq >= s2.baseline_seq,
+            "reseed 后的实时事件 seq >= baseline → 弹通知"
+        );
     }
 
     #[test]
@@ -272,6 +309,10 @@ mod tests {
         b.push_live(ev(4, "y")); // seq 2 >= baseline
         let s = b.snapshot();
         assert_eq!(s.baseline_seq, 2);
-        assert_eq!(s.events.last().unwrap().seq, 2, "seq 全程单调,重连前不会回退(前端水位不被旧值卡住需重连重置)");
+        assert_eq!(
+            s.events.last().unwrap().seq,
+            2,
+            "seq 全程单调,重连前不会回退(前端水位不被旧值卡住需重连重置)"
+        );
     }
 }

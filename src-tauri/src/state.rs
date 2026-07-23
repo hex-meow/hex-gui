@@ -15,10 +15,18 @@ use tokio::sync::Mutex;
 use crate::hopea3::{Hopea3, InitProgress};
 use crate::lift::LiftSession;
 use crate::logging::LogHandle;
-use crate::smartknob::SmartKnob;
+use crate::unified_smartknob::ActiveSmartKnob;
 
 #[derive(Default)]
 pub struct AppState {
+    /// Set synchronously by the native close handler. Long SmartKnob startup
+    /// transactions poll this flag between bounded bus operations so shutdown
+    /// can roll them back before waiting for the lifecycle lock.
+    pub shutdown_requested: AtomicBool,
+    /// Serialises physical adapter open/close operations. Tauri commands can
+    /// otherwise race a slow `connect` against `disconnect` and publish only
+    /// half of the manager/monitor pair.
+    pub connection_op: Mutex<()>,
     pub manager: Mutex<Option<Arc<Cia402Manager>>>,
     /// Active CSV recorders, keyed by node id. Inserted by `start_log`,
     /// removed by `stop_log` / `disconnect`. A `std` mutex is fine: we only
@@ -33,9 +41,6 @@ pub struct AppState {
     /// Direct-CANopen lift debug session. It owns heartbeat/TPDO subscriptions
     /// and the velocity watchdog stream for exactly one lift node.
     pub lift: Mutex<Option<Arc<LiftSession>>>,
-    /// Serializes normal window-close attempts while the lift performs its
-    /// confirmed Stop/Pre-op/Disabled handshake.
-    pub lift_close_in_progress: AtomicBool,
     /// Base(Zenoh):到 hex-controller 的连接(至多一条)。
     pub zenoh: Mutex<Option<crate::zenoh_base::ZenohConn>>,
     /// Arm(Zenoh):到 hex-controller 机械臂的连接(至多一条)。
@@ -46,14 +51,29 @@ pub struct AppState {
     pub zenoh_ee: Mutex<Option<crate::zenoh_ee::ZenohEeConn>>,
     /// The running SmartKnob Robot Application, if started. At most one at a
     /// time (it owns the high-rate haptic loop on the single bus).
-    pub smartknob: Mutex<Option<SmartKnob>>,
+    pub smartknob: Mutex<Option<ActiveSmartKnob>>,
     /// The running IMU session, if started. At most one at a time; it streams
     /// the selected IMU's TPDO1 and publishes a snapshot for the UI to poll.
     pub imu: Mutex<Option<crate::imu::ImuManager>>,
+    /// Direct DAMIAO protocol sessions keyed by motor CAN ID. All sessions
+    /// borrow the same manager-owned CAN bus, so one adapter can control
+    /// several DM-J4310-2EC V1.1 motors independently.
+    pub damiao: Mutex<HashMap<u16, Arc<crate::damiao::DamiaoSession>>>,
+    /// Lazy raw-CAN discovery monitor for the dedicated DAMIAO workspace.
+    /// It scans the protocol's unambiguous 4-bit feedback ID space and is
+    /// stopped together with the physical CAN connection.
+    pub damiao_discovery: Mutex<Option<Arc<crate::damiao::DamiaoDiscovery>>>,
+    /// Stock-firmware Unit RollerCAN control workspace. This stays separate
+    /// from `rollercan`, which belongs to the independent SmartKnob firmware.
+    /// It is created lazily and borrows the manager-owned CAN bus.
+    pub rollercan_control: Mutex<Option<Arc<crate::rollercan_control::RollerCanControl>>>,
     /// The running CAN analyzer session, if started. Owns its *own* bus (opened
     /// directly, no `Cia402Manager`), so it is stopped unconditionally on
     /// `disconnect` / tool switch, independent of `manager`.
     pub analyzer: Mutex<Option<crate::analyzer::CanAnalyzer>>,
+    /// Unit RollerCAN protocol monitor attached to the manager-owned `CanBus`.
+    /// It does not open or own a second physical adapter in the product path.
+    pub rollercan: Mutex<Option<crate::rollercan::RollerCanSession>>,
 }
 
 impl AppState {

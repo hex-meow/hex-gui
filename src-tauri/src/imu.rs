@@ -90,7 +90,10 @@ impl ImuManager {
             tokio::spawn(async move { rx_loop(rx, nid, state, running).await })
         };
 
-        log::info!("IMU 0x{nid:02X}: streaming TPDO1 on COB-ID 0x{:03X}", tpdo1_cob_id(nid));
+        log::info!(
+            "IMU 0x{nid:02X}: streaming TPDO1 on COB-ID 0x{:03X}",
+            tpdo1_cob_id(nid)
+        );
         Ok(Self {
             node_id: nid,
             bus,

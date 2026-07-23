@@ -211,6 +211,25 @@ const STRINGS = {
   mitKp: { en: "kp (Nm/rad)", zh: "kp (Nm/rad)" },
   mitKd: { en: "kd (Nm·s/rad)", zh: "kd (Nm·s/rad)" },
 
+  // Dedicated DAMIAO DM-J4310-2EC V1.1 workspace
+  toolDamiao: { en: "DM-J4310-2EC Motor Control", zh: "DM-J4310-2EC 电机控制" },
+  toolDamiaoDesc: {
+    en: "Dedicated raw-CAN control and telemetry for the DAMIAO DM-J4310-2EC V1.1 geared motor.",
+    zh: "面向达妙 DM-J4310-2EC V1.1 减速电机的专用原始 CAN 控制与反馈窗口。",
+  },
+  catDamiao: { en: "Other motors", zh: "其他电机" },
+  catDamiaoHint: {
+    en: "Expand to choose a vendor-specific motor workspace",
+    zh: "展开后选择厂商专用电机工作区",
+  },
+  tagDamiaoProtocol: { en: "DAMIAO CAN 1 Mbps", zh: "达妙 CAN 1 Mbps" },
+  toolRollerCanControl: { en: "Unit RollerCAN Motor Control", zh: "Unit RollerCAN 电机控制" },
+  toolRollerCanControlDesc: {
+    en: "Stock-firmware speed, position, current and encoder control over extended CAN frames.",
+    zh: "通过扩展 CAN 帧控制原厂固件的速度、位置、电流与编码器模式。",
+  },
+  tagRollerCanProtocol: { en: "RollerCAN 29-bit · 1 Mbps", zh: "RollerCAN 29 位 · 1 Mbps" },
+
   // Tool selector
   toolControl: { en: "Motor Control", zh: "电机控制" },
   toolChangeId: { en: "Change ID", zh: "改 ID" },
@@ -257,8 +276,8 @@ const STRINGS = {
   },
   toolSmartKnob: { en: "SmartKnob", zh: "智能旋钮" },
   toolSmartKnobDesc: {
-    en: "Turn a single 4310/4342 into a haptic knob: software detents, endstops & return-to-center via high-rate MIT torque streaming. No press sensor — switch modes with the on-screen button.",
-    zh: "把单个 4310/4342 变成力反馈旋钮：高频 MIT 力矩流实现软件卡位、限位与回中。无下压传感器——用界面按钮切换模式。",
+    en: "One haptic-knob workspace for CANopen joint motors and Unit RollerCAN. Compatible knobs are discovered automatically; control stays on the PC or firmware as appropriate.",
+    zh: "统一控制 CANopen 关节电机与 Unit RollerCAN 智能旋钮：自动发现兼容设备，并按设备类型在 PC 或固件侧执行触觉控制。",
   },
   toolBaseZenoh: { en: "Base(Zenoh)", zh: "Base(Zenoh)" },
   toolBaseZenohDesc: {
@@ -476,12 +495,18 @@ const STRINGS = {
 
   // SmartKnob panel
   skConnectFirst: { en: "Connect to the bus first.", zh: "请先连接总线。" },
-  skNoMotors: { en: "No motors discovered yet…", zh: "尚未发现电机…" },
+  skNoMotors: { en: "No compatible knobs discovered yet…", zh: "尚未发现兼容旋钮…" },
+  skNoCompatible: { en: "No compatible SmartKnob is online. Automatic discovery is still running.", zh: "暂无兼容的 SmartKnob 在线，后台仍在自动发现。" },
+  skDiscoveryFailed: { en: "Could not start SmartKnob discovery", zh: "无法启动 SmartKnob 自动发现" },
+  skChooseDevice: { en: "Choose a SmartKnob", zh: "请选择一个 SmartKnob" },
+  skMultipleDevices: { en: "Multiple SmartKnobs are online. Verify the selected target before starting.", zh: "有多个 SmartKnob 在线，请确认所选目标后再启动。" },
+  skConfirmDevice: { en: "Confirm selected SmartKnob", zh: "确认所选 SmartKnob" },
   skMotor: { en: "Knob motor", zh: "旋钮电机" },
   skStart: { en: "Start knob", zh: "启动旋钮" },
   skStarting: { en: "Initializing…", zh: "正在初始化…" },
   skStop: { en: "Stop", zh: "停止" },
   skStartFailed: { en: "Start failed", zh: "启动失败" },
+  skStopFailed: { en: "Stop failed; retry Stop", zh: "停止失败，请重试停止" },
   skRunning: { en: "Running", zh: "运行中" },
   skStopped: { en: "Stopped", zh: "已停止" },
   skClearError: { en: "Clear error", zh: "清除错误" },
@@ -492,13 +517,13 @@ const STRINGS = {
   skUnbounded: { en: "Unbounded", zh: "无限旋转" },
   skEndstop: { en: "Endstop", zh: "限位" },
   skAngle: { en: "Shaft angle", zh: "轴角度" },
-  skTorque: { en: "Torque (Nm)", zh: "力矩 (Nm)" },
+  skTorque: { en: "Effort", zh: "作用力" },
   skTuning: { en: "Tuning", zh: "调参" },
-  skStrength: { en: "Strength scale (Nm/unit)", zh: "强度系数 (Nm/单位)" },
-  skTorqueLimit: { en: "Torque limit (Nm)", zh: "力矩上限 (Nm)" },
-  skMaxTorque: { en: "Motor max torque (‰)", zh: "电机最大力矩 (‰)" },
-  skFrictionComp: { en: "Friction comp (Nm)", zh: "摩擦补偿 (Nm)" },
-  skClickTorque: { en: "Click torque (Nm)", zh: "弹片强度 (Nm)" },
+  skStrength: { en: "Strength scale", zh: "强度系数" },
+  skTorqueLimit: { en: "Effort limit", zh: "作用力上限" },
+  skMaxTorque: { en: "Motor output limit", zh: "电机输出上限" },
+  skFrictionComp: { en: "Friction compensation", zh: "摩擦补偿" },
+  skClickTorque: { en: "Click effort", zh: "弹片强度" },
   skPGain: { en: "P-gain", zh: "P 增益" },
   skDGain: { en: "D-gain", zh: "D 增益" },
   skRecommendedGains: { en: "Use recommended P/D", zh: "使用推荐 P/D" },
@@ -515,6 +540,19 @@ const STRINGS = {
   skDetentStrength: { en: "Detent strength", zh: "卡位强度" },
   skEndstopStrength: { en: "Endstop strength", zh: "限位强度" },
   skSnapPoint: { en: "Snap point", zh: "吸附点" },
+  skHostControlled: { en: "PC haptic loop", zh: "PC 侧触觉环" },
+  skFirmwareControlled: { en: "Firmware haptic loop", zh: "固件侧触觉环" },
+  skFirmwareTelemetry: { en: "Firmware telemetry", zh: "固件遥测" },
+  skTelemetryFailed: { en: "Telemetry update failed", zh: "遥测更新失败" },
+  skCommanded: { en: "Commanded", zh: "指令值" },
+  skMeasured: { en: "Measured", zh: "实测值" },
+  skAdvancedProbe: { en: "Advanced: probe a RollerCAN node manually", zh: "高级：手动探测 RollerCAN 节点" },
+  skRollerNode: { en: "Node ID", zh: "节点 ID" },
+  skProbe: { en: "Probe", zh: "探测" },
+  skProbeFound: { en: "RollerCAN found", zh: "已发现 RollerCAN" },
+  skProbeFailed: { en: "RollerCAN probe failed", zh: "RollerCAN 探测失败" },
+  skProfileFailed: { en: "Could not load the device profile", zh: "无法加载设备配置" },
+  skModeChangeFailed: { en: "Mode change failed", zh: "模式切换失败" },
 
 
   // HopeA3 panel

@@ -36,7 +36,7 @@ use hex_motor::canopen::sdo;
 use hex_motor::canopen::tpdo_config::TpdoEntry;
 use hex_motor::cia402::{Cia402Manager, Logic};
 use hex_motor::types::MotorMode;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 
 // ─────────────────────────── tunables / constants ───────────────────────────
@@ -101,8 +101,12 @@ const PID_LIMIT: f64 = 10.0;
 //    direction) whenever the position changes when the detent width is
 //    too small for the P factor to work well."
 
-/// Click duration per direction (ticks at 1 kHz).  5 ms → 10 ms total per click.
-const CLICK_TICKS_PER_PHASE: u32 = 5;
+/// Click duration per direction. The loop targets 1 kHz, but Windows/USB
+/// scheduling can miss ticks, so the pulse is timed from `Instant` instead of
+/// counting loop iterations.
+const CLICK_PHASE_DURATION: Duration = Duration::from_millis(5);
+const CLICK_TOTAL_DURATION: Duration = Duration::from_millis(10);
+const HAPTIC_TIMING_WARN_THRESHOLD: Duration = Duration::from_millis(3);
 
 /// Default live-tunables.
 pub const DEFAULT_STRENGTH_SCALE: f64 = 0.15; // Nm per firmware PID unit
@@ -119,7 +123,7 @@ const DEG: f64 = std::f64::consts::PI / 180.0;
 /// One haptic preset — the equivalent of the firmware's `PB_SmartKnobConfig`.
 /// Serialized to the UI so the mode buttons + dial stay in sync with the
 /// backend.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KnobConfig {
     /// Initial logical position when this mode is selected.
     pub position: i32,
@@ -222,31 +226,198 @@ pub fn preset_configs() -> Vec<KnobConfig> {
             strength_scale: DEFAULT_STRENGTH_SCALE,
             p_gain: 0.0,
             d_gain: 0.0,
-            ..p("", 0, 0, -1, 10.0, 0.0, 1.0, 0.55, 0.0, 0.03, 0.35, 0.0, 0.0, 120)
+            ..p(
+                "", 0, 0, -1, 10.0, 0.0, 1.0, 0.55, 0.0, 0.03, 0.35, 0.0, 0.0, 120,
+            )
         },
         // ── classic presets ──
         // The two arguments before `led_hue` are this mode's explicit
         // `p_gain` and `d_gain`; edit them per preset to customize feel.
-        p("Unbounded\nNo detents", 0, 0, -1, 10.0, 0.0, 1.0, 1.1, 0.0, 0.09, 0.15, 0.0, 0.0, 200),
-        p("Bounded 0-10\nNo detents", 0, 0, 10, 10.0, 0.0, 1.0, 1.1, 0.0, 0.05, 0.25, 0.0, 0.0, 0),
-        p("Multi-rev\nNo detents", 0, 0, 72, 10.0, 0.0, 1.0, 1.1, 0.0, 0.08, DEFAULT_STRENGTH_SCALE, 0.0, 0.0, 73),
-        p("On/off\nStrong detent", 0, 0, 1, 60.0, 1.0, 1.0, 0.55, 0.0, 0.05, 0.25, 4.0, 0.11, 157),
-        p("Return-to-center", 0, 0, 0, 60.0, 0.01, 0.6, 1.1, 0.0, DEFAULT_FRICTION_COMPENSATION, 0.05, 0.04, 0.0002, 45),
-        p("Fine values\nNo detents", 127, 0, 255, 1.0, 0.0, 1.0, 1.1, 0.0, 0.02, 0.3, 0.0, 0.0, 219),
+        p(
+            "Unbounded\nNo detents",
+            0,
+            0,
+            -1,
+            10.0,
+            0.0,
+            1.0,
+            1.1,
+            0.0,
+            0.09,
+            0.15,
+            0.0,
+            0.0,
+            200,
+        ),
+        p(
+            "Bounded 0-10\nNo detents",
+            0,
+            0,
+            10,
+            10.0,
+            0.0,
+            1.0,
+            1.1,
+            0.0,
+            0.05,
+            0.25,
+            0.0,
+            0.0,
+            0,
+        ),
+        p(
+            "Multi-rev\nNo detents",
+            0,
+            0,
+            72,
+            10.0,
+            0.0,
+            1.0,
+            1.1,
+            0.0,
+            0.08,
+            DEFAULT_STRENGTH_SCALE,
+            0.0,
+            0.0,
+            73,
+        ),
+        p(
+            "On/off\nStrong detent",
+            0,
+            0,
+            1,
+            60.0,
+            1.0,
+            1.0,
+            0.55,
+            0.0,
+            0.05,
+            0.25,
+            4.0,
+            0.11,
+            157,
+        ),
+        p(
+            "Return-to-center",
+            0,
+            0,
+            0,
+            60.0,
+            0.01,
+            0.6,
+            1.1,
+            0.0,
+            DEFAULT_FRICTION_COMPENSATION,
+            0.05,
+            0.04,
+            0.0002,
+            45,
+        ),
+        p(
+            "Fine values\nNo detents",
+            127,
+            0,
+            255,
+            1.0,
+            0.0,
+            1.0,
+            1.1,
+            0.0,
+            0.02,
+            0.3,
+            0.0,
+            0.0,
+            219,
+        ),
         KnobConfig {
             click_torque_nm: 0.37,
-            ..p("Fine values\nWith detents", 127, 0, 255, 1.0, 1.0, 1.0, 1.1, 0.0, DEFAULT_FRICTION_COMPENSATION, 0.25, 4.0, 0.0, 25)
+            ..p(
+                "Fine values\nWith detents",
+                127,
+                0,
+                255,
+                1.0,
+                1.0,
+                1.0,
+                1.1,
+                0.0,
+                DEFAULT_FRICTION_COMPENSATION,
+                0.25,
+                4.0,
+                0.0,
+                25,
+            )
         },
-        p("Coarse values\nStrong detents", 0, 0, 31, 8.225806452, 2.5, 1.0, 1.1, 0.0, 0.08, 0.75, 10.0, 0.05, 200),
+        p(
+            "Coarse values\nStrong detents",
+            0,
+            0,
+            31,
+            8.225806452,
+            2.5,
+            1.0,
+            1.1,
+            0.0,
+            0.08,
+            0.75,
+            10.0,
+            0.05,
+            200,
+        ),
         KnobConfig {
             click_torque_nm: 1.20,
-            ..p("Coarse values\nWeak detents", 0, 0, 31, 8.225806452, 0.2, 1.0, 1.1, 0.0, 0.02, 1.5, 0.8, 0.0, 0)
+            ..p(
+                "Coarse values\nWeak detents",
+                0,
+                0,
+                31,
+                8.225806452,
+                0.2,
+                1.0,
+                1.1,
+                0.0,
+                0.02,
+                1.5,
+                0.8,
+                0.0,
+                0,
+            )
         },
         KnobConfig {
             detent_positions: vec![2, 10, 21, 22],
-            ..p("Magnetic detents", 0, 0, 31, 7.0, 2.5, 1.0, 0.7, 0.0, 0.01, 0.8, 10.0, 0.0, 73)
+            ..p(
+                "Magnetic detents",
+                0,
+                0,
+                31,
+                7.0,
+                2.5,
+                1.0,
+                0.7,
+                0.0,
+                0.01,
+                0.8,
+                10.0,
+                0.0,
+                73,
+            )
         },
-        p("Return-to-center\nwith detents", 0, -6, 6, 60.0, 1.0, 1.0, 0.55, 0.4, 0.02, 0.15, 4.0, 0.02, 157),
+        p(
+            "Return-to-center\nwith detents",
+            0,
+            -6,
+            6,
+            60.0,
+            1.0,
+            1.0,
+            0.55,
+            0.4,
+            0.02,
+            0.15,
+            4.0,
+            0.02,
+            157,
+        ),
     ]
 }
 
@@ -294,13 +465,26 @@ impl Default for Tuning {
 impl Tuning {
     fn from_config(config: &KnobConfig) -> Self {
         Self {
-            p_gain: config.p_gain.max(0.0),
-            d_gain: config.d_gain.max(0.0),
+            p_gain: config.p_gain,
+            d_gain: config.d_gain,
             strength_scale: config.strength_scale,
             torque_limit_nm: DEFAULT_TORQUE_LIMIT_NM,
             max_torque_permille: DEFAULT_MAX_TORQUE_PERMILLE,
             friction_compensation: config.friction_compensation,
             click_torque_nm: config.click_torque_nm,
+        }
+        .sanitized()
+    }
+
+    fn sanitized(self) -> Self {
+        Self {
+            p_gain: finite_nonnegative(self.p_gain),
+            d_gain: finite_nonnegative(self.d_gain),
+            strength_scale: finite_nonnegative(self.strength_scale),
+            torque_limit_nm: finite_nonnegative(self.torque_limit_nm),
+            max_torque_permille: self.max_torque_permille.min(1000),
+            friction_compensation: finite_nonnegative(self.friction_compensation),
+            click_torque_nm: finite_nonnegative(self.click_torque_nm),
         }
     }
 }
@@ -316,20 +500,45 @@ const MIN_POSITION_WIDTH_RAD: f64 = 0.001;
 /// feedback → self-accelerating knob). `max_position < min_position` is left
 /// alone — that is the documented "unbounded" convention.
 fn sanitize_custom_config(mut c: KnobConfig) -> KnobConfig {
-    c.position_width_radians = c.position_width_radians.max(MIN_POSITION_WIDTH_RAD);
-    c.p_gain = c.p_gain.max(0.0);
-    c.d_gain = c.d_gain.max(0.0);
-    c.strength_scale = c.strength_scale.max(0.0);
-    c.endstop_strength_unit = c.endstop_strength_unit.max(0.0);
-    c.detent_strength_unit = c.detent_strength_unit.max(0.0);
-    c.friction_compensation = c.friction_compensation.max(0.0);
-    c.click_torque_nm = c.click_torque_nm.max(0.0);
-    c.snap_point = c.snap_point.clamp(0.1, 2.0);
-    c.snap_point_bias = c.snap_point_bias.clamp(-1.0, 1.0);
+    c.position_width_radians = finite_at_least(c.position_width_radians, MIN_POSITION_WIDTH_RAD);
+    c.p_gain = finite_nonnegative(c.p_gain);
+    c.d_gain = finite_nonnegative(c.d_gain);
+    c.strength_scale = finite_nonnegative(c.strength_scale);
+    c.endstop_strength_unit = finite_nonnegative(c.endstop_strength_unit);
+    c.detent_strength_unit = finite_nonnegative(c.detent_strength_unit);
+    c.friction_compensation = finite_nonnegative(c.friction_compensation);
+    c.click_torque_nm = finite_nonnegative(c.click_torque_nm);
+    c.snap_point = finite_or(c.snap_point, 0.55).clamp(0.1, 2.0);
+    c.snap_point_bias = finite_or(c.snap_point_bias, 0.0).clamp(-1.0, 1.0);
     if c.min_position <= c.max_position {
         c.position = c.position.clamp(c.min_position, c.max_position);
     }
     c
+}
+
+fn finite_or(value: f64, fallback: f64) -> f64 {
+    if value.is_finite() {
+        value
+    } else {
+        fallback
+    }
+}
+
+fn finite_nonnegative(value: f64) -> f64 {
+    finite_at_least(value, 0.0)
+}
+
+fn finite_at_least(value: f64, min: f64) -> f64 {
+    finite_or(value, min).max(min)
+}
+
+fn position_count(config: &KnobConfig) -> i32 {
+    config
+        .max_position
+        .checked_sub(config.min_position)
+        .and_then(|delta| delta.checked_add(1))
+        .filter(|count| *count > 0)
+        .unwrap_or(0)
 }
 
 /// Snapshot handed to the frontend each poll.
@@ -406,6 +615,7 @@ impl SmartKnob {
         mgr: Arc<Cia402Manager>,
         nid: u8,
         config_index: usize,
+        shutdown_requested: &AtomicBool,
     ) -> anyhow::Result<Self> {
         let configs = preset_configs();
         let config_index = config_index.min(configs.len() - 1);
@@ -418,33 +628,49 @@ impl SmartKnob {
         // Per-motor init, retried — same recovery dance as HopeA3.
         let mut last_err = None;
         for attempt in 1..=INIT_ATTEMPTS {
-            match init_motor(&mgr, &bus, sdo_timeout, nid, tuning.max_torque_permille).await {
+            ensure_startup_allowed(&mgr, nid, shutdown_requested).await?;
+            match init_motor(
+                &mgr,
+                &bus,
+                sdo_timeout,
+                nid,
+                tuning.max_torque_permille,
+                shutdown_requested,
+            )
+            .await
+            {
                 Ok(()) => {
                     log::info!("SmartKnob: motor 0x{nid:02X} ready (attempt {attempt})");
                     last_err = None;
                     break;
                 }
                 Err(e) => {
-                    log::warn!("SmartKnob: init 0x{nid:02X} attempt {attempt}/{INIT_ATTEMPTS}: {e}");
+                    log::warn!(
+                        "SmartKnob: init 0x{nid:02X} attempt {attempt}/{INIT_ATTEMPTS}: {e}"
+                    );
+                    if shutdown_requested.load(Ordering::SeqCst) {
+                        let _ = mgr.disable(nid).await;
+                        return Err(anyhow::anyhow!(
+                            "SmartKnob startup cancelled by application shutdown while initializing 0x{nid:02X}: {e:#}"
+                        ));
+                    }
                     last_err = Some(e);
                     let _ = mgr.clear_error(nid).await;
+                    ensure_startup_allowed(&mgr, nid, shutdown_requested).await?;
                     tokio::time::sleep(Duration::from_millis(300)).await;
+                    ensure_startup_allowed(&mgr, nid, shutdown_requested).await?;
                 }
             }
         }
         if let Some(e) = last_err {
-            return Err(e.context(format!("motor 0x{nid:02X} failed after {INIT_ATTEMPTS} attempts")));
+            return Err(e.context(format!(
+                "motor 0x{nid:02X} failed after {INIT_ATTEMPTS} attempts"
+            )));
         }
+        ensure_startup_allowed(&mgr, nid, shutdown_requested).await?;
 
         // Per-mode tuning, seeded from each preset's defaults.
-        let per_mode_tuning: Vec<Tuning> = configs
-            .iter()
-            .map(Tuning::from_config)
-            .collect();
-
-        // Add the following coverage: Directly modify the values for the special mode
-        // The mode index corresponds to the sequence of the preset_configs():
-        
+        let per_mode_tuning: Vec<Tuning> = configs.iter().map(Tuning::from_config).collect();
 
         let per_mode_tuning = Arc::new(StdMutex::new(per_mode_tuning));
 
@@ -473,8 +699,16 @@ impl SmartKnob {
             let custom_config_dirty = custom_config_dirty.clone();
             tokio::spawn(async move {
                 haptic_loop(
-                    mgr, bus, nid, requested_config, tuning, per_mode_tuning,
-                    state, running, custom_config, custom_config_dirty,
+                    mgr,
+                    bus,
+                    nid,
+                    requested_config,
+                    tuning,
+                    per_mode_tuning,
+                    state,
+                    running,
+                    custom_config,
+                    custom_config_dirty,
                 )
                 .await;
             })
@@ -497,7 +731,10 @@ impl SmartKnob {
     /// missing press sensor). Clamped to the preset range.
     pub fn set_config(&self, index: usize) {
         let max = preset_configs().len().saturating_sub(1);
-        *self.requested_config.lock().expect("requested_config poisoned") = index.min(max);
+        *self
+            .requested_config
+            .lock()
+            .expect("requested_config poisoned") = index.min(max);
     }
 
     /// Replace the custom mode config (index 0) with a new one. The haptic
@@ -506,7 +743,8 @@ impl SmartKnob {
     /// 1 kHz loop must never see values that invert clamp bounds or feedback
     /// signs (see [`sanitize_custom_config`]).
     pub fn set_custom_config(&self, config: KnobConfig) {
-        *self.custom_config.lock().expect("custom_config poisoned") = sanitize_custom_config(config);
+        *self.custom_config.lock().expect("custom_config poisoned") =
+            sanitize_custom_config(config);
         self.custom_config_dirty.store(true, Ordering::SeqCst);
     }
 
@@ -523,18 +761,27 @@ impl SmartKnob {
         click_torque_nm: f64,
     ) {
         let clamped = Tuning {
-            p_gain: p_gain.max(0.0),
-            d_gain: d_gain.max(0.0),
-            strength_scale: strength_scale.max(0.0),
-            torque_limit_nm: torque_limit_nm.max(0.0),
+            p_gain,
+            d_gain,
+            strength_scale,
+            torque_limit_nm,
             max_torque_permille: max_torque_permille.min(1000),
-            friction_compensation: friction_compensation.max(0.0),
-            click_torque_nm: click_torque_nm.max(0.0),
-        };
+            friction_compensation,
+            click_torque_nm,
+        }
+        .sanitized();
         *self.tuning.lock().expect("tuning poisoned") = clamped;
         // Persist into the per-mode slot for the current config.
-        let idx = *self.requested_config.lock().expect("requested_config poisoned");
-        if let Some(slot) = self.per_mode_tuning.lock().expect("per_mode_tuning poisoned").get_mut(idx) {
+        let idx = *self
+            .requested_config
+            .lock()
+            .expect("requested_config poisoned");
+        if let Some(slot) = self
+            .per_mode_tuning
+            .lock()
+            .expect("per_mode_tuning poisoned")
+            .get_mut(idx)
+        {
             *slot = clamped;
         }
     }
@@ -573,18 +820,32 @@ async fn init_motor(
     sdo_timeout: Option<Duration>,
     nid: u8,
     max_torque: u16,
+    shutdown_requested: &AtomicBool,
 ) -> anyhow::Result<()> {
     mgr.initialize(nid)
         .await
         .map_err(|e| anyhow::anyhow!("initialize: {e}"))?;
+    ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
 
     let recipe = RpdoRecipe {
         rpdo_index: 0,
         cob_id: rpdo_cob_id(nid),
         entries: vec![
-            TpdoEntry { index: OD_MIT, subindex: MIT_SUB_TFF, bit_len: 32 }, // torque FF
-            TpdoEntry { index: OD_MIT, subindex: MIT_SUB_KD, bit_len: 16 },  // KD
-            TpdoEntry { index: OD_MAX_TORQUE, subindex: 0, bit_len: 16 },    // max torque
+            TpdoEntry {
+                index: OD_MIT,
+                subindex: MIT_SUB_TFF,
+                bit_len: 32,
+            }, // torque FF
+            TpdoEntry {
+                index: OD_MIT,
+                subindex: MIT_SUB_KD,
+                bit_len: 16,
+            }, // KD
+            TpdoEntry {
+                index: OD_MAX_TORQUE,
+                subindex: 0,
+                bit_len: 16,
+            }, // max torque
         ],
         transmission_type: 255,
     };
@@ -594,27 +855,53 @@ async fn init_motor(
         sdo::download(&**bus, nid, w.index, w.subindex, &w.data, sdo_timeout)
             .await
             .map_err(|e| anyhow::anyhow!("rpdo write {:04X}:{}: {e}", w.index, w.subindex))?;
+        ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
         tokio::time::sleep(Duration::from_millis(10)).await;
+        ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
     }
 
     // Zero everything but TFF: PDES, VDES, KP. (KD is streamed, default 0.)
     sdo::download_f32(&**bus, nid, OD_MIT, MIT_SUB_PDES, 0.0, sdo_timeout)
         .await
         .map_err(|e| anyhow::anyhow!("zero PDES: {e}"))?;
+    ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
     sdo::download_f32(&**bus, nid, OD_MIT, MIT_SUB_VDES, 0.0, sdo_timeout)
         .await
         .map_err(|e| anyhow::anyhow!("zero VDES: {e}"))?;
+    ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
     sdo::download_u16(&**bus, nid, OD_MIT, MIT_SUB_KP, 0, sdo_timeout)
         .await
         .map_err(|e| anyhow::anyhow!("zero KP: {e}"))?;
+    ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
 
     mgr.set_max_torque(nid, max_torque)
         .await
         .map_err(|e| anyhow::anyhow!("set_max_torque: {e}"))?;
+    ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
     mgr.set_mode(nid, MotorMode::Mit)
         .await
         .map_err(|e| anyhow::anyhow!("set_mode MIT: {e}"))?;
+    ensure_startup_allowed(mgr, nid, shutdown_requested).await?;
     Ok(())
+}
+
+/// Abort a slow CANopen startup as soon as the native close handler asks for
+/// shutdown. A disable is attempted here because any completed initialization
+/// step may already have transitioned the drive toward operation enabled.
+async fn ensure_startup_allowed(
+    mgr: &Cia402Manager,
+    nid: u8,
+    shutdown_requested: &AtomicBool,
+) -> anyhow::Result<()> {
+    if !shutdown_requested.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    if let Err(error) = mgr.disable(nid).await {
+        log::warn!("SmartKnob: disable 0x{nid:02X} while cancelling startup: {error}");
+    }
+    Err(anyhow::anyhow!(
+        "SmartKnob startup cancelled by application shutdown"
+    ))
 }
 
 // ───────────────────────────── the haptic loop ──────────────────────────────
@@ -650,8 +937,8 @@ struct ClickState {
     /// Logical position at the *previous* tick, used to detect detent
     /// transitions and trigger a click.
     prev_current_position: i32,
-    /// Remaining ticks in the current click sequence (counts down to 0).
-    ticks_remaining: u32,
+    /// Wall-clock start of the current click sequence.
+    started_at: Option<Instant>,
     /// Sign of the first phase of the *next* click (±1).  Flips after each
     /// triggered click so alternating detent transitions feel symmetric.
     dir: f64,
@@ -831,14 +1118,28 @@ fn compute_friction_coulomb(velocity_rad_s: f64, compensation: f64) -> f64 {
 /// A biphasic (alternating-direction) torque burst that fires on each detent
 /// transition. Direction flips so clockwise and counter-clockwise transitions
 /// both feel crisp.
-fn compute_click_torque(click: &mut ClickState, click_torque_nm: f64, click_active: bool) -> f64 {
-    if !click_active || click.ticks_remaining == 0 {
+fn compute_click_torque(
+    click: &mut ClickState,
+    click_torque_nm: f64,
+    click_active: bool,
+    now: Instant,
+) -> f64 {
+    let Some(started_at) = click.started_at else {
+        return 0.0;
+    };
+    if !click_active {
         return 0.0;
     }
-    click.ticks_remaining -= 1;
-    // Phase 1: first direction; Phase 2: reverse.
-    let phase = click.ticks_remaining / CLICK_TICKS_PER_PHASE;
-    let sign = if phase == 1 { click.dir } else { -click.dir };
+    let elapsed = now.duration_since(started_at);
+    if elapsed >= CLICK_TOTAL_DURATION {
+        click.started_at = None;
+        return 0.0;
+    }
+    let sign = if elapsed < CLICK_PHASE_DURATION {
+        click.dir
+    } else {
+        -click.dir
+    };
     sign * click_torque_nm
 }
 
@@ -872,7 +1173,11 @@ async fn haptic_loop(
     let mut active_index = usize::MAX; // force first-tick config apply
     let mut config = configs[0].clone();
     let mut h = Haptic {
-        angle: AngleTracker { shaft_angle: 0.0, accum_rev: 0.0, prev_raw_rev: None },
+        angle: AngleTracker {
+            shaft_angle: 0.0,
+            accum_rev: 0.0,
+            prev_raw_rev: None,
+        },
         detent: DetentState {
             detent_center: 0.0,
             current_position: 0,
@@ -880,14 +1185,35 @@ async fn haptic_loop(
             last_idle_start: None,
             latest_sub_position_unit: 0.0,
         },
-        click: ClickState { prev_current_position: configs[0].position, ticks_remaining: 0, dir: 1.0 },
+        click: ClickState {
+            prev_current_position: configs[0].position,
+            started_at: None,
+            dir: 1.0,
+        },
     };
 
     // Rate-limit RPDO send warnings to once per second (avoids log spam at 1 kHz).
     let mut last_rpdo_warn: Option<Instant> = None;
+    let mut last_timing_warn: Option<Instant> = None;
+    let mut last_tick_at = Instant::now();
 
     while running.load(Ordering::SeqCst) {
         tick.tick().await;
+        let tick_at = Instant::now();
+        let loop_dt = tick_at.duration_since(last_tick_at);
+        last_tick_at = tick_at;
+        if loop_dt > HAPTIC_TIMING_WARN_THRESHOLD {
+            let should_warn = last_timing_warn
+                .map(|t| tick_at.duration_since(t) >= Duration::from_secs(1))
+                .unwrap_or(true);
+            if should_warn {
+                log::warn!(
+                    "SmartKnob: haptic loop tick took {:.2} ms",
+                    loop_dt.as_secs_f64() * 1000.0
+                );
+                last_timing_warn = Some(tick_at);
+            }
+        }
         let mut tun = *tuning.lock().expect("tuning poisoned");
 
         // ── 1. read motor feedback & unwrap to a continuous shaft angle ──
@@ -911,12 +1237,16 @@ async fn haptic_loop(
         };
 
         // ── 2. apply a pending mode switch ──
-        let wanted = (*requested_config.lock().expect("requested_config poisoned")).min(configs.len() - 1);
+        let wanted =
+            (*requested_config.lock().expect("requested_config poisoned")).min(configs.len() - 1);
         if wanted != active_index {
             // Custom mode reads from the live-editable custom_config; presets
             // read from the static preset list.
             config = if configs[wanted].is_custom {
-                custom_config.lock().expect("custom_config poisoned").clone()
+                custom_config
+                    .lock()
+                    .expect("custom_config poisoned")
+                    .clone()
             } else {
                 configs[wanted].clone()
             };
@@ -924,15 +1254,17 @@ async fn haptic_loop(
             // Recenter on the new mode (firmware: position change + detent recenter).
             h.detent.current_position = config.position;
             if config.min_position <= config.max_position {
-                h.detent.current_position =
-                    h.detent.current_position.clamp(config.min_position, config.max_position);
+                h.detent.current_position = h
+                    .detent
+                    .current_position
+                    .clamp(config.min_position, config.max_position);
             }
             // Place the detent centre at the current shaft angle so the knob
             // doesn't jump, biased by the configured sub-position (0 here).
             h.detent.detent_center = h.angle.shaft_angle;
             h.detent.last_idle_start = None;
             h.click.prev_current_position = h.detent.current_position;
-            h.click.ticks_remaining = 0;
+            h.click.started_at = None;
             h.click.dir = 1.0;
             // Restore per-mode tuning (user-tweaked values, or preset defaults on
             // first visit).  Also write them back into the shared Tuning so the
@@ -953,17 +1285,21 @@ async fn haptic_loop(
 
         // ── 2b. pick up custom-config edits on the fly (no mode switch, no
         //        detent recentering — avoids a knob jump while editing live).
-        if config.is_custom && custom_config_dirty.load(Ordering::SeqCst) {
-            custom_config_dirty.store(false, Ordering::SeqCst);
-            config = custom_config.lock().expect("custom_config poisoned").clone();
+        if config.is_custom && custom_config_dirty.swap(false, Ordering::SeqCst) {
+            config = custom_config
+                .lock()
+                .expect("custom_config poisoned")
+                .clone();
             // Keep the logical position inside the (possibly narrowed) new
             // range — the mode-switch path above clamps too. Without this,
             // shrinking max_position leaves current_position out of range
             // with no endstop torque anywhere in between (out_of_bounds only
             // tests equality with the bounds).
             if config.min_position <= config.max_position {
-                h.detent.current_position =
-                    h.detent.current_position.clamp(config.min_position, config.max_position);
+                h.detent.current_position = h
+                    .detent
+                    .current_position
+                    .clamp(config.min_position, config.max_position);
             }
             h.click.prev_current_position = h.detent.current_position;
             // Propagate explicit config fields to the active tuning so the
@@ -972,14 +1308,16 @@ async fn haptic_loop(
             // velocity feedback). strength_scale is deliberately NOT
             // propagated — the user controls it independently via the
             // Tuning — Feel slider.
-            tun.p_gain = config.p_gain.max(0.0);
-            tun.d_gain = config.d_gain.max(0.0);
-            tun.friction_compensation = config.friction_compensation.max(0.0);
-            tun.click_torque_nm = config.click_torque_nm.max(0.0);
+            tun.p_gain = finite_nonnegative(config.p_gain);
+            tun.d_gain = finite_nonnegative(config.d_gain);
+            tun.friction_compensation = finite_nonnegative(config.friction_compensation);
+            tun.click_torque_nm = finite_nonnegative(config.click_torque_nm);
             // Persist into per-mode tuning + shared mutex so the frontend
             // sees the updated values on the next poll.
             if let Some(slot) = per_mode_tuning
-                .lock().expect("per_mode_tuning poisoned").get_mut(active_index)
+                .lock()
+                .expect("per_mode_tuning poisoned")
+                .get_mut(active_index)
             {
                 slot.p_gain = tun.p_gain;
                 slot.d_gain = tun.d_gain;
@@ -989,7 +1327,7 @@ async fn haptic_loop(
             *tuning.lock().expect("tuning poisoned") = tun;
         }
 
-        let num_positions = config.max_position - config.min_position + 1;
+        let num_positions = position_count(&config);
 
         // ── 3. idle re-centering (skip for single-detent / return-to-center modes) ──
         if num_positions != 1 {
@@ -1023,9 +1361,8 @@ async fn haptic_loop(
         let friction_torque = compute_friction_coulomb(velocity_rad_s, tun.friction_compensation);
 
         // ── 8. haptic click pulse ──
-        let click_active = tun.click_torque_nm > 0.0
-            && !out_of_bounds
-            && config.detent_positions.is_empty();
+        let click_active =
+            tun.click_torque_nm > 0.0 && !out_of_bounds && config.detent_positions.is_empty();
         // Track detent transitions unconditionally — if `prev` were only
         // updated while clicks are active, raising the click slider after
         // rotating in a click-less mode would fire a burst into a stationary
@@ -1034,11 +1371,12 @@ async fn haptic_loop(
         if h.detent.current_position != h.click.prev_current_position {
             h.click.prev_current_position = h.detent.current_position;
             if click_active {
-                h.click.ticks_remaining = CLICK_TICKS_PER_PHASE * 2;
+                h.click.started_at = Some(tick_at);
                 h.click.dir = -h.click.dir;
             }
         }
-        let click_torque = compute_click_torque(&mut h.click, tun.click_torque_nm, click_active);
+        let click_torque =
+            compute_click_torque(&mut h.click, tun.click_torque_nm, click_active, tick_at);
 
         // ── 9. clamp total torque ──
         // Runaway guard on the TOTAL command, not just the PID term: above
@@ -1057,6 +1395,7 @@ async fn haptic_loop(
         let data = build_rpdo_frame(torque_nm, tun.max_torque_permille);
         match CanFrame::new_fd(rpdo_cob_id(nid), &data, true) {
             Ok(frame) => {
+                let send_started = Instant::now();
                 if let Err(e) = bus.send(frame).await {
                     // Rate-limit: warn at most once per second to avoid log spam.
                     let now = Instant::now();
@@ -1066,6 +1405,20 @@ async fn haptic_loop(
                     if should_warn {
                         log::warn!("SmartKnob: RPDO send failed: {e}");
                         last_rpdo_warn = Some(now);
+                    }
+                }
+                let send_dt = send_started.elapsed();
+                if send_dt > HAPTIC_TIMING_WARN_THRESHOLD {
+                    let now = Instant::now();
+                    let should_warn = last_timing_warn
+                        .map(|t| now.duration_since(t) >= Duration::from_secs(1))
+                        .unwrap_or(true);
+                    if should_warn {
+                        log::warn!(
+                            "SmartKnob: RPDO send took {:.2} ms",
+                            send_dt.as_secs_f64() * 1000.0
+                        );
+                        last_timing_warn = Some(now);
                     }
                 }
             }
@@ -1224,7 +1577,12 @@ mod tests {
     #[test]
     fn pid_runaway_guard() {
         let cfg = test_config();
-        let tun = Tuning { p_gain: 1.0, d_gain: 0.1, strength_scale: 1.0, ..Default::default() };
+        let tun = Tuning {
+            p_gain: 1.0,
+            d_gain: 0.1,
+            strength_scale: 1.0,
+            ..Default::default()
+        };
         let result = compute_haptic_pid(&cfg, &tun, 5, 0.0, 0.0, MAX_VEL_RAD_S + 1.0, false);
         assert_eq!(result, 0.0);
     }
@@ -1232,7 +1590,12 @@ mod tests {
     #[test]
     fn pid_zero_at_center() {
         let cfg = test_config();
-        let tun = Tuning { p_gain: 1.0, d_gain: 0.0, strength_scale: 1.0, ..Default::default() };
+        let tun = Tuning {
+            p_gain: 1.0,
+            d_gain: 0.0,
+            strength_scale: 1.0,
+            ..Default::default()
+        };
         // At centre with no velocity → input is 0 (angle 0 + dead_zone 0)
         let result = compute_haptic_pid(&cfg, &tun, 5, 0.0, 0.0, 0.0, false);
         assert_eq!(result, 0.0);
@@ -1247,7 +1610,12 @@ mod tests {
             endstop_strength_unit: 2.0,
             ..test_config()
         };
-        let tun = Tuning { p_gain: 4.0, d_gain: 0.0, strength_scale: 0.5, ..Default::default() };
+        let tun = Tuning {
+            p_gain: 4.0,
+            d_gain: 0.0,
+            strength_scale: 0.5,
+            ..Default::default()
+        };
         // Off centre: angle_to_center = 0.01, dead_zone should clamp small values
         let result = compute_haptic_pid(&cfg, &tun, 5, 0.01, 0.0, 0.0, false);
         // input = -0.01, pid = 4.0 * (-0.01) = -0.04, scaled: 0.5 * (-0.04) = -0.02
@@ -1258,7 +1626,12 @@ mod tests {
     fn pid_endstop_uses_config_strength() {
         let cfg = test_config();
         // Even if tun.p_gain is small, endstop uses config.endstop_strength_unit * 4.
-        let tun = Tuning { p_gain: 0.1, d_gain: 0.0, strength_scale: 1.0, ..Default::default() };
+        let tun = Tuning {
+            p_gain: 0.1,
+            d_gain: 0.0,
+            strength_scale: 1.0,
+            ..Default::default()
+        };
         let result = compute_haptic_pid(&cfg, &tun, 5, 0.1, 0.0, 0.0, true);
         // out_of_bounds → p_gain = config.endstop_strength_unit * 4.0 = 4.0
         // input = -0.1, pid = 4.0 * (-0.1) = -0.4
@@ -1271,7 +1644,12 @@ mod tests {
             detent_positions: vec![2, 10, 21],
             ..test_config()
         };
-        let tun = Tuning { p_gain: 4.0, d_gain: 0.0, strength_scale: 1.0, ..Default::default() };
+        let tun = Tuning {
+            p_gain: 4.0,
+            d_gain: 0.0,
+            strength_scale: 1.0,
+            ..Default::default()
+        };
         // current_position=5 is NOT in the magnetic list → input becomes 0.
         let result = compute_haptic_pid(&cfg, &tun, 5, 0.01, 0.0, 0.0, false);
         assert_eq!(result, 0.0);
@@ -1283,7 +1661,12 @@ mod tests {
             detent_positions: vec![2, 10, 21],
             ..test_config()
         };
-        let tun = Tuning { p_gain: 4.0, d_gain: 0.0, strength_scale: 1.0, ..Default::default() };
+        let tun = Tuning {
+            p_gain: 4.0,
+            d_gain: 0.0,
+            strength_scale: 1.0,
+            ..Default::default()
+        };
         // current_position=10 IS in the magnetic list → normal spring.
         let result = compute_haptic_pid(&cfg, &tun, 10, 0.01, 0.0, 0.0, false);
         assert!((result - (-0.04)).abs() < 1e-10);
@@ -1313,36 +1696,56 @@ mod tests {
 
     #[test]
     fn click_inactive_returns_zero() {
-        let mut c = ClickState { prev_current_position: 0, ticks_remaining: 10, dir: 1.0 };
-        let result = compute_click_torque(&mut c, 0.5, false);
+        let now = Instant::now();
+        let mut c = ClickState {
+            prev_current_position: 0,
+            started_at: Some(now),
+            dir: 1.0,
+        };
+        let result = compute_click_torque(&mut c, 0.5, false, now);
         assert_eq!(result, 0.0);
         // State should not change when inactive.
-        assert_eq!(c.ticks_remaining, 10);
+        assert!(c.started_at.is_some());
     }
 
     #[test]
-    fn click_active_decrements_and_returns_torque() {
-        let mut c = ClickState { prev_current_position: 0, ticks_remaining: 6, dir: 1.0 };
+    fn click_first_phase_returns_dir_torque() {
+        let now = Instant::now();
+        let mut c = ClickState {
+            prev_current_position: 0,
+            started_at: Some(now),
+            dir: 1.0,
+        };
         // ticks: 6 → 5, phase = 5/5 = 1, sign = +dir = +1.0
-        let result = compute_click_torque(&mut c, 0.5, true);
+        let result = compute_click_torque(&mut c, 0.5, true, now + Duration::from_millis(2));
         assert_eq!(result, 0.5);
-        assert_eq!(c.ticks_remaining, 5);
+        assert!(c.started_at.is_some());
     }
 
     #[test]
     fn click_second_phase_reverses_sign() {
         // Phase 0: dir=-1.0, ticks_remaining=4 → 3, phase = 3/5 = 0, sign = -(-1.0) = +1.0
-        let mut c = ClickState { prev_current_position: 0, ticks_remaining: 4, dir: -1.0 };
-        let result = compute_click_torque(&mut c, 0.3, true);
+        let now = Instant::now();
+        let mut c = ClickState {
+            prev_current_position: 0,
+            started_at: Some(now),
+            dir: -1.0,
+        };
+        let result = compute_click_torque(&mut c, 0.3, true, now + Duration::from_millis(7));
         assert_eq!(result, 0.3); // +0.3 (reversed from dir=-1.0)
-        assert_eq!(c.ticks_remaining, 3);
     }
 
     #[test]
     fn click_exhausted_returns_zero() {
-        let mut c = ClickState { prev_current_position: 0, ticks_remaining: 0, dir: 1.0 };
-        let result = compute_click_torque(&mut c, 0.5, true);
+        let now = Instant::now();
+        let mut c = ClickState {
+            prev_current_position: 0,
+            started_at: Some(now),
+            dir: 1.0,
+        };
+        let result = compute_click_torque(&mut c, 0.5, true, now + Duration::from_millis(10));
         assert_eq!(result, 0.0);
+        assert!(c.started_at.is_none());
     }
 
     // ── build_rpdo_frame ──
@@ -1370,8 +1773,61 @@ mod tests {
         assert!(!configs.is_empty());
         for (i, c) in configs.iter().enumerate() {
             assert!(!c.text.is_empty(), "preset {i} has empty text");
-            assert!(c.position_width_radians > 0.0, "preset {i} has non-positive width");
-            assert!(c.strength_scale >= 0.0, "preset {i} has negative strength_scale");
+            assert!(
+                c.position_width_radians > 0.0,
+                "preset {i} has non-positive width"
+            );
+            assert!(
+                c.strength_scale >= 0.0,
+                "preset {i} has negative strength_scale"
+            );
         }
+    }
+
+    #[test]
+    fn custom_config_sanitizer_rejects_non_finite_and_negative_values() {
+        let cfg = KnobConfig {
+            position_width_radians: f64::NAN,
+            p_gain: -1.0,
+            d_gain: f64::INFINITY,
+            strength_scale: -0.5,
+            detent_strength_unit: -2.0,
+            endstop_strength_unit: -3.0,
+            friction_compensation: f64::NEG_INFINITY,
+            click_torque_nm: -0.1,
+            snap_point: f64::NAN,
+            snap_point_bias: f64::INFINITY,
+            ..test_config()
+        };
+
+        let sanitized = sanitize_custom_config(cfg);
+
+        assert_eq!(sanitized.position_width_radians, MIN_POSITION_WIDTH_RAD);
+        assert_eq!(sanitized.p_gain, 0.0);
+        assert_eq!(sanitized.d_gain, 0.0);
+        assert_eq!(sanitized.strength_scale, 0.0);
+        assert_eq!(sanitized.detent_strength_unit, 0.0);
+        assert_eq!(sanitized.endstop_strength_unit, 0.0);
+        assert_eq!(sanitized.friction_compensation, 0.0);
+        assert_eq!(sanitized.click_torque_nm, 0.0);
+        assert_eq!(sanitized.snap_point, 0.55);
+        assert_eq!(sanitized.snap_point_bias, 0.0);
+    }
+
+    #[test]
+    fn position_count_handles_unbounded_and_extreme_ranges() {
+        let unbounded = KnobConfig {
+            min_position: 10,
+            max_position: 0,
+            ..test_config()
+        };
+        assert_eq!(position_count(&unbounded), 0);
+
+        let extreme = KnobConfig {
+            min_position: i32::MIN,
+            max_position: i32::MAX,
+            ..test_config()
+        };
+        assert_eq!(position_count(&extreme), 0);
     }
 }

@@ -293,6 +293,52 @@ export const TUTORIALS: Record<string, Slide[]> = {
   arm: placeholderSlides("arm"),
   config: placeholderSlides("config"),
   canalyzer: CANALYZER_SLIDES,
+  damiao: [
+    {
+      title: { en: "1 · Discover and select a motor", zh: "1 · 自动发现并选择电机" },
+      body: {
+        en: "Connect a 1 Mbps CAN bus. IDs 0x0–0xF are scanned automatically with status requests and motion-safe Disable probes; select a discovered motor in the left list. Use manual configuration only for an exceptional ID.",
+        zh: "连接 1 Mbps CAN 总线后，系统会通过状态查询和安全失能探测自动扫描 ID 0x0–0xF；在左侧列表选择电机即可。仅在使用特殊 ID 时才需要手动配置。",
+      },
+    },
+    {
+      title: { en: "2 · Match mapping and attach", zh: "2 · 匹配映射并挂载" },
+      body: {
+        en: "For each motor, verify its feedback Master ID, control mode, and exact PMAX/VMAX/TMAX values from DAMIAO Assistant before attaching. Several motors may remain attached on the same CAN bus, each with independent feedback and target streaming.",
+        zh: "逐台确认反馈 Master ID、控制模式，以及达妙调试助手中完全一致的 PMAX/VMAX/TMAX 后再挂载。同一 CAN 总线可同时保留多台已挂载电机，各自维护反馈与目标流。",
+      },
+    },
+    {
+      title: { en: "3 · Verify feedback and stop safely", zh: "3 · 确认反馈并安全停止" },
+      body: {
+        en: "Confirm fresh telemetry before enabling and start with conservative targets. Use Disable All for a bus-wide stop. Detach, Disconnect, tool switching, and window close safely disable every attached motor before releasing the adapter.",
+        zh: "使能前确认遥测持续刷新，并从保守目标开始。需要整条总线停止时使用“全部失能”。卸载、断开连接、切换工具与关闭窗口都会先安全失能所有已挂载电机，再释放适配器。",
+      },
+    },
+  ],
+  rollercanControl: [
+    {
+      title: { en: "1 · Connect and discover", zh: "1 · 连接并发现" },
+      body: {
+        en: "Connect a CAN interface configured for 1 Mbps. The workspace scans 8-bit RollerCAN IDs with harmless extended-frame pings; the stock default is 0xA8.",
+        zh: "连接配置为 1 Mbps 的 CAN 接口。工作区会用无动作的扩展帧 ping 扫描 8 位 RollerCAN ID；原厂默认 ID 为 0xA8。",
+      },
+    },
+    {
+      title: { en: "2 · Attach and verify feedback", zh: "2 · 挂载并确认反馈" },
+      body: {
+        en: "Attach reads the existing enable state and run mode without changing either. Confirm fresh position, speed, current and voltage feedback before operating the motor.",
+        zh: "挂载只读取已有的使能状态和运行模式，不会更改它们。操作前请确认位置、速度、电流和电压反馈持续刷新。",
+      },
+    },
+    {
+      title: { en: "3 · Disable before changing mode", zh: "3 · 先失能再切换模式" },
+      body: {
+        en: "Choose Speed, Position, Current or Encoder while disabled, set a conservative current limit where available, enable, then send a target. Detach and Disconnect require a confirmed disable.",
+        zh: "失能状态下选择速度、位置、电流或编码器模式；在支持的模式中先设置保守的最大电流，再使能并发送目标。卸载与断开连接都会要求确认失能。",
+      },
+    },
+  ],
 };
 
 // Renders the slide's image/video, falling back to the placeholder caption if

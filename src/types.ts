@@ -6,6 +6,115 @@ export type MotorMode =
   | "Torque"
   | "Mit";
 
+// DAMIAO DM-J4310-2EC V1.1 direct-CAN protocol (not CiA 402).
+export type DamiaoMode = "Mit" | "PositionVelocity" | "Velocity";
+
+export interface DamiaoConfig {
+  motor_id: number;
+  master_id: number;
+  mode: DamiaoMode;
+  p_max: number;
+  v_max: number;
+  t_max: number;
+}
+
+export interface DamiaoDiscoveredDevice {
+  motor_id: number;
+  feedback_can_id: number | null;
+  online: boolean;
+  attached: boolean;
+  status_code: number;
+  status: string;
+  feedback_age_ms: number | null;
+  rx_count: number;
+}
+
+export type DamiaoTarget =
+  | {
+      kind: "Mit";
+      position_rad: number;
+      velocity_rad_s: number;
+      torque_nm: number;
+      kp: number;
+      kd: number;
+    }
+  | {
+      kind: "PositionVelocity";
+      position_rad: number;
+      velocity_rad_s: number;
+    }
+  | { kind: "Velocity"; velocity_rad_s: number };
+
+export interface DamiaoState {
+  attached: boolean;
+  motor_id: number;
+  master_id: number;
+  feedback_can_id: number | null;
+  mode: DamiaoMode;
+  p_max: number;
+  v_max: number;
+  t_max: number;
+  online: boolean;
+  enabled: boolean;
+  streaming: boolean;
+  status_code: number;
+  status: string;
+  position_rad: number | null;
+  velocity_rad_s: number | null;
+  torque_nm: number | null;
+  mos_temp_c: number | null;
+  rotor_temp_c: number | null;
+  feedback_age_ms: number | null;
+  feedback_rate_hz: number | null;
+  rx_count: number;
+  last_error: string | null;
+}
+
+// Unit RollerCAN stock motor-control firmware (CAN 2.0B, 29-bit, 1 Mbps).
+// The independent RollerCAN SmartKnob firmware remains represented by the
+// SmartKnob types further below.
+export type RollerCanControlMode = "Speed" | "Position" | "Current" | "Encoder";
+
+export type RollerCanControlTarget =
+  | { kind: "Speed"; speed_rpm: number }
+  | { kind: "Position"; position_deg: number }
+  | { kind: "Current"; current_ma: number }
+  | { kind: "Encoder"; encoder_count: number };
+
+export interface RollerCanControlDevice {
+  node_id: number;
+  online: boolean;
+  attached: boolean;
+  enabled: boolean;
+  mode: RollerCanControlMode;
+  state_code: number;
+  fault_bits: number;
+  feedback_age_ms: number | null;
+  rx_count: number;
+}
+
+export interface RollerCanControlState {
+  attached: boolean;
+  node_id: number;
+  online: boolean;
+  enabled: boolean;
+  mode: RollerCanControlMode;
+  state_code: number;
+  fault_bits: number;
+  speed_rpm: number | null;
+  position_deg: number | null;
+  current_ma: number | null;
+  voltage_v: number | null;
+  temperature_c: number | null;
+  encoder_count: number | null;
+  position_max_current_ma: number | null;
+  speed_max_current_ma: number | null;
+  feedback_age_ms: number | null;
+  feedback_rate_hz: number | null;
+  rx_count: number;
+  last_error: string | null;
+}
+
 export interface MotorIdentity {
   node_id: number;
   vendor_id: number;
@@ -249,6 +358,76 @@ export interface SmartKnobState {
   click_torque_nm: number;
   p_gain: number;
   d_gain: number;
+}
+
+export type SmartKnobKind = "canopen" | "rollercan";
+export type SmartKnobControlSide = "host" | "firmware";
+export type SmartKnobEffortUnit = "Nm" | "A";
+
+/** Protocol-qualified address. Node IDs may overlap across device kinds. */
+export interface SmartKnobTarget {
+  kind: SmartKnobKind;
+  nodeId: number;
+}
+
+export interface SmartKnobDevice {
+  target: SmartKnobTarget;
+  name: string;
+  online: boolean;
+  controlSide: SmartKnobControlSide;
+  effortUnit: SmartKnobEffortUnit;
+}
+
+export interface SmartKnobProfile {
+  target: SmartKnobTarget;
+  configs: KnobConfig[];
+  controlSide: SmartKnobControlSide;
+  effortUnit: SmartKnobEffortUnit;
+  supportsTemperature: boolean;
+  supportsTelemetry: boolean;
+  effortLimitMax: number;
+  maxOutputPermille: number;
+  telemetryEnabled: boolean | null;
+  telemetryRateHz: number | null;
+}
+
+export interface SmartKnobTuning {
+  pGain: number;
+  dGain: number;
+  strengthScale: number;
+  effortLimit: number;
+  maxOutputPermille: number;
+  frictionCompensation: number;
+  clickEffort: number;
+}
+
+export interface SmartKnobTelemetry {
+  enabled: boolean;
+  rateHz: number;
+}
+
+export interface SmartKnobStartRequest {
+  target: SmartKnobTarget;
+  configIndex: number;
+  customConfig?: KnobConfig;
+  tuning?: SmartKnobTuning;
+  telemetry?: SmartKnobTelemetry;
+}
+
+/**
+ * Unified live state. The legacy snake_case position/config fields remain for
+ * compatibility; effort is consumed only through the unit-aware fields below.
+ */
+export interface UnifiedSmartKnobState extends SmartKnobState {
+  target: SmartKnobTarget | null;
+  controlSide: SmartKnobControlSide;
+  effortUnit: SmartKnobEffortUnit;
+  appliedEffort: number;
+  measuredEffort: number | null;
+  effortLimit: number;
+  maxOutputPermille: number;
+  telemetryEnabled: boolean | null;
+  telemetryRateHz: number | null;
 }
 
 // ── Diagnostics (log / events viewing — mirrors diag.rs DTOs) ──
