@@ -77,7 +77,7 @@ pub struct ZenohBaseState {
     pub vx: f64,
     pub vy: f64,
     pub wz: f64,
-    pub fatal: bool,       // RobotStatus.mode==FATAL_ERROR(电机故障/离线锁存,P1-3)→ 需 clear_fault
+    pub fatal: bool,       // RobotStatus.mode==FATAL_ERROR(机器人故障锁存)→ 原因查看 Events
 }
 
 struct Ctrl {

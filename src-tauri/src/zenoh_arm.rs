@@ -98,7 +98,7 @@ pub struct ZenohArmState {
     pub gravity: [f32; 3],   // 我方所设 base 系重力(默认 [0,0,-9.81])
     pub has_ee: bool,
     pub ee_model: String,
-    pub fatal: bool,         // RobotStatus.mode==FATAL_ERROR(电机故障/离线锁存,P1-3)→ 需 clear_fault
+    pub fatal: bool,         // RobotStatus.mode==FATAL_ERROR(机器人故障锁存)→ 原因查看 Events
 }
 
 /// 一次 URDF 拉取的结果(推给前端 3D 渲染)。`assembled` 由 XML 内容判定:机器人级

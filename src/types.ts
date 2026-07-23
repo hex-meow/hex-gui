@@ -296,7 +296,7 @@ export interface ZenohBaseState {
   vx: number;
   vy: number;
   wz: number;
-  fatal: boolean; // RobotStatus.mode == FATAL_ERROR (latched motor fault/offline)
+  fatal: boolean; // RobotStatus.mode == FATAL_ERROR (latched robot fault; see Events for cause)
 }
 
 // ── Arm(Zenoh) (mirrors zenoh_arm::ZenohArmState / ArmInfo) ──
@@ -329,7 +329,7 @@ export interface ZenohArmState {
   gravity: [number, number, number];
   has_ee: boolean;
   ee_model: string;
-  fatal: boolean; // RobotStatus.mode == FATAL_ERROR (latched motor fault/offline)
+  fatal: boolean; // RobotStatus.mode == FATAL_ERROR (latched robot fault; see Events for cause)
 }
 
 // mirrors zenoh_arm::ArmUrdf —— 供 3D 渲染的 URDF(整机 arm+EE 或臂-only)

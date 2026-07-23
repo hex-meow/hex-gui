@@ -951,12 +951,12 @@ const STRINGS = {
   diagLevelAll: { en: "All", zh: "全部" },
   diagTemp: { en: "temp (℃)", zh: "温度 (℃)" },
   diagFaultTitle: {
-    en: "FATAL_ERROR — motor fault / offline (latched)",
-    zh: "严重故障 FATAL_ERROR —— 电机故障 / 离线(已锁存)",
+    en: "Robot fault (latched)",
+    zh: "机器人故障（已锁存）",
   },
   diagFaultDesc: {
-    en: "Motors are safe-stopped and latched; enabling is refused. Take control and clear the fault to return to idle.",
-    zh: "电机已安全停机并锁存,使能被拒。取得控制权并清除故障后回到空闲态。",
+    en: "See Events for details. After resolving the cause, take control and clear the fault.",
+    zh: "原因请查看 Events。排除故障后，取得控制权并清除故障。",
   },
   diagClearFault: { en: "Clear fault", zh: "清除故障" },
   diagClearNeedControl: { en: "Take control first to clear the fault", zh: "需先取得控制权才能清除故障" },
