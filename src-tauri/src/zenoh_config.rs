@@ -26,7 +26,11 @@ fn enc<M: Message>(m: &M) -> Vec<u8> {
     b
 }
 
-async fn query_one<Resp: Message + Default>(session: &zenoh::Session, key: &str, payload: Vec<u8>) -> Option<Resp> {
+async fn query_one<Resp: Message + Default>(
+    session: &zenoh::Session,
+    key: &str,
+    payload: Vec<u8>,
+) -> Option<Resp> {
     let replies = session.get(key).payload(payload).await.ok()?;
     if let Ok(reply) = replies.recv_async().await {
         if let Ok(sample) = reply.result() {
@@ -56,7 +60,11 @@ pub struct ApiVersionDto {
 
 impl From<pb::ApiVersion> for ApiVersionDto {
     fn from(v: pb::ApiVersion) -> Self {
-        Self { major: v.major, minor: v.minor, patch: v.patch }
+        Self {
+            major: v.major,
+            minor: v.minor,
+            patch: v.patch,
+        }
     }
 }
 
@@ -138,7 +146,12 @@ pub struct CriticalChangeDto {
 
 impl From<pb::CriticalChange> for CriticalChangeDto {
     fn from(c: pb::CriticalChange) -> Self {
-        Self { robot_id: c.robot_id, field: c.field, old: c.old, new: c.new }
+        Self {
+            robot_id: c.robot_id,
+            field: c.field,
+            old: c.old,
+            new: c.new,
+        }
     }
 }
 
@@ -178,9 +191,12 @@ impl ZenohConfigConn {
         let mut cfg = zenoh::Config::default();
         cfg.insert_json5("mode", "\"peer\"").unwrap();
         if !connect.is_empty() {
-            cfg.insert_json5("connect/endpoints", &format!("[\"{connect}\"]")).unwrap();
+            cfg.insert_json5("connect/endpoints", &format!("[\"{connect}\"]"))
+                .unwrap();
         }
-        let session = zenoh::open(cfg).await.map_err(|e| anyhow!("zenoh open: {e}"))?;
+        let session = zenoh::open(cfg)
+            .await
+            .map_err(|e| anyhow!("zenoh open: {e}"))?;
         // 给组播探测/建链一点时间,之后 discover 才能收到 <cid>/info 的回复。
         tokio::time::sleep(Duration::from_millis(700)).await;
         Ok(Self { session })
@@ -214,10 +230,16 @@ impl ZenohConfigConn {
 
     /// 干跑校验:语法 + 结构 + 语义红线 diff。不落盘。
     pub async fn validate(&self, cid: &str, yaml: &str) -> anyhow::Result<ConfigValidateResult> {
-        let req = pb::ConfigValidateRequest { yaml: yaml.to_string() };
-        let r: pb::ConfigValidateResponse = query_one(&self.session, &format!("{cid}/rpc/config/validate"), enc(&req))
-            .await
-            .ok_or_else(|| anyhow!("validate 无回复"))?;
+        let req = pb::ConfigValidateRequest {
+            yaml: yaml.to_string(),
+        };
+        let r: pb::ConfigValidateResponse = query_one(
+            &self.session,
+            &format!("{cid}/rpc/config/validate"),
+            enc(&req),
+        )
+        .await
+        .ok_or_else(|| anyhow!("validate 无回复"))?;
         Ok(ConfigValidateResult {
             ok: r.ok,
             errors: r.errors,
@@ -243,9 +265,10 @@ impl ZenohConfigConn {
             confirm,
             force,
         };
-        let r: pb::ConfigSetResponse = query_one(&self.session, &format!("{cid}/rpc/config/set"), enc(&req))
-            .await
-            .ok_or_else(|| anyhow!("set 无回复"))?;
+        let r: pb::ConfigSetResponse =
+            query_one(&self.session, &format!("{cid}/rpc/config/set"), enc(&req))
+                .await
+                .ok_or_else(|| anyhow!("set 无回复"))?;
         Ok(ConfigSetResult {
             ok: r.ok,
             errors: r.errors,
@@ -257,11 +280,20 @@ impl ZenohConfigConn {
     }
 
     /// 单独"应用"当前已保存的配置(重启全部子进程)。confirm 复述后为 true;force 越过会话检查。
-    pub async fn restart(&self, cid: &str, confirm: bool, force: bool) -> anyhow::Result<RestartResult> {
+    pub async fn restart(
+        &self,
+        cid: &str,
+        confirm: bool,
+        force: bool,
+    ) -> anyhow::Result<RestartResult> {
         let req = pb::RestartRequest { confirm, force };
-        let r: pb::RestartResponse = query_one(&self.session, &format!("{cid}/rpc/restart"), enc(&req))
-            .await
-            .ok_or_else(|| anyhow!("restart 无回复"))?;
-        Ok(RestartResult { ok: r.ok, robots: r.robots })
+        let r: pb::RestartResponse =
+            query_one(&self.session, &format!("{cid}/rpc/restart"), enc(&req))
+                .await
+                .ok_or_else(|| anyhow!("restart 无回复"))?;
+        Ok(RestartResult {
+            ok: r.ok,
+            robots: r.robots,
+        })
     }
 }

@@ -55,6 +55,18 @@ pub struct AppState {
     /// The running IMU session, if started. At most one at a time; it streams
     /// the selected IMU's TPDO1 and publishes a snapshot for the UI to poll.
     pub imu: Mutex<Option<crate::imu::ImuManager>>,
+    /// Direct DAMIAO protocol sessions keyed by motor CAN ID. All sessions
+    /// borrow the same manager-owned CAN bus, so one adapter can control
+    /// several DM-J4310-2EC V1.1 motors independently.
+    pub damiao: Mutex<HashMap<u16, Arc<crate::damiao::DamiaoSession>>>,
+    /// Lazy raw-CAN discovery monitor for the dedicated DAMIAO workspace.
+    /// It scans the protocol's unambiguous 4-bit feedback ID space and is
+    /// stopped together with the physical CAN connection.
+    pub damiao_discovery: Mutex<Option<Arc<crate::damiao::DamiaoDiscovery>>>,
+    /// Stock-firmware Unit RollerCAN control workspace. This stays separate
+    /// from `rollercan`, which belongs to the independent SmartKnob firmware.
+    /// It is created lazily and borrows the manager-owned CAN bus.
+    pub rollercan_control: Mutex<Option<Arc<crate::rollercan_control::RollerCanControl>>>,
     /// The running CAN analyzer session, if started. Owns its *own* bus (opened
     /// directly, no `Cia402Manager`), so it is stopped unconditionally on
     /// `disconnect` / tool switch, independent of `manager`.

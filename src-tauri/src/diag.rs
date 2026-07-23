@@ -220,13 +220,25 @@ mod tests {
         assert_eq!(robot_mode_name(3), "OVERTAKEN");
         assert_eq!(robot_mode_name(4), "FATAL_ERROR");
         assert_eq!(robot_mode_name(0), "UNSPECIFIED");
-        assert_eq!(robot_mode_name(99), "UNSPECIFIED", "未知值退化为 UNSPECIFIED,不 panic");
+        assert_eq!(
+            robot_mode_name(99),
+            "UNSPECIFIED",
+            "未知值退化为 UNSPECIFIED,不 panic"
+        );
     }
 
     #[test]
     fn overtaken_text_prefers_human_then_mode_name() {
-        assert_eq!(overtaken_text(1, Some("摇杆接管")), "摇杆接管", "有 human_readable 用之");
-        assert_eq!(overtaken_text(1, Some("")), "JOYSTICK", "空 human_readable 退到短名");
+        assert_eq!(
+            overtaken_text(1, Some("摇杆接管")),
+            "摇杆接管",
+            "有 human_readable 用之"
+        );
+        assert_eq!(
+            overtaken_text(1, Some("")),
+            "JOYSTICK",
+            "空 human_readable 退到短名"
+        );
         assert_eq!(overtaken_text(2, None), "COLLISION");
         assert_eq!(overtaken_text(0, None), "UNSPECIFIED");
     }

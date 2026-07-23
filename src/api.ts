@@ -18,6 +18,15 @@ import type {
   ConfigValidateResult,
   ConsoleUrdf,
   ControllerInfo,
+  DamiaoConfig,
+  DamiaoDiscoveredDevice,
+  DamiaoMode,
+  DamiaoState,
+  DamiaoTarget,
+  RollerCanControlDevice,
+  RollerCanControlMode,
+  RollerCanControlState,
+  RollerCanControlTarget,
   EeInfo,
   EventsSnapshot,
   Hopea3InitProgress,
@@ -67,6 +76,54 @@ export const api = {
   disable: (nid: number) => invoke<void>("disable", { nid }),
   clearError: (nid: number) => invoke<void>("clear_error", { nid }),
   getStatus: (nid: number) => invoke<LiveState>("get_status", { nid }),
+
+  // DAMIAO DM-J4310-2EC V1.1 (raw standard CAN, independent of CiA 402).
+  damiaoListDevices: () =>
+    invoke<DamiaoDiscoveredDevice[]>("damiao_list_devices"),
+  damiaoSafeRescan: () => invoke<void>("damiao_safe_rescan"),
+  damiaoAttach: (config: DamiaoConfig) =>
+    invoke<DamiaoState>("damiao_attach", { config }),
+  damiaoDetach: (motorId: number) => invoke<void>("damiao_detach", { motorId }),
+  damiaoGetState: (motorId: number) =>
+    invoke<DamiaoState>("damiao_get_state", { motorId }),
+  damiaoSetMode: (motorId: number, mode: DamiaoMode) =>
+    invoke<DamiaoState>("damiao_set_mode", { motorId, mode }),
+  damiaoEnable: (motorId: number) => invoke<void>("damiao_enable", { motorId }),
+  damiaoDisable: (motorId: number) => invoke<void>("damiao_disable", { motorId }),
+  damiaoDisableAll: () => invoke<void>("damiao_disable_all"),
+  damiaoClearFault: (motorId: number) =>
+    invoke<void>("damiao_clear_fault", { motorId }),
+  damiaoSetZero: (motorId: number) => invoke<void>("damiao_set_zero", { motorId }),
+  damiaoSendTarget: (motorId: number, target: DamiaoTarget, repeat: boolean) =>
+    invoke<void>("damiao_send_target", { motorId, target, repeat }),
+  damiaoStopStream: (motorId: number) =>
+    invoke<void>("damiao_stop_stream", { motorId }),
+
+  // Unit RollerCAN public stock-firmware control protocol. This is separate
+  // from the firmware-owned SmartKnob API below.
+  rollerCanControlListDevices: () =>
+    invoke<RollerCanControlDevice[]>("rollercan_control_list_devices"),
+  rollerCanControlRescan: () => invoke<void>("rollercan_control_rescan"),
+  rollerCanControlAttach: (nodeId: number) =>
+    invoke<RollerCanControlState>("rollercan_control_attach", { nodeId }),
+  rollerCanControlDetach: (nodeId: number) =>
+    invoke<void>("rollercan_control_detach", { nodeId }),
+  rollerCanControlGetState: (nodeId: number) =>
+    invoke<RollerCanControlState>("rollercan_control_get_state", { nodeId }),
+  rollerCanControlSetMode: (nodeId: number, mode: RollerCanControlMode) =>
+    invoke<RollerCanControlState>("rollercan_control_set_mode", { nodeId, mode }),
+  rollerCanControlEnable: (nodeId: number) =>
+    invoke<void>("rollercan_control_enable", { nodeId }),
+  rollerCanControlDisable: (nodeId: number) =>
+    invoke<void>("rollercan_control_disable", { nodeId }),
+  rollerCanControlReleaseStall: (nodeId: number) =>
+    invoke<void>("rollercan_control_release_stall", { nodeId }),
+  rollerCanControlSendTarget: (nodeId: number, target: RollerCanControlTarget) =>
+    invoke<void>("rollercan_control_send_target", { nodeId, target }),
+  rollerCanControlSetCurrentLimit: (nodeId: number, currentMa: number) =>
+    invoke<void>("rollercan_control_set_current_limit", { nodeId, currentMa }),
+  rollerCanControlRefresh: (nodeId: number) =>
+    invoke<void>("rollercan_control_refresh", { nodeId }),
 
   changeNodeId: (nid: number, newId: number) =>
     invoke<void>("change_node_id", { nid, newId }),
@@ -125,6 +182,8 @@ export const api = {
   liftCommissionCsv: () => invoke<string>("lift_commission_csv"),
 
   // SmartKnob Robot Application
+  smartknobMonitorStart: () => invoke<void>("smartknob_monitor_start"),
+  smartknobMonitorStop: () => invoke<void>("smartknob_monitor_stop"),
   smartknobListDevices: () =>
     invoke<SmartKnobDevice[]>("smartknob_list_devices"),
   smartknobGetProfile: (target: SmartKnobTarget) =>

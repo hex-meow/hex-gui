@@ -1040,15 +1040,9 @@ impl LiftSession {
     async fn wait_for_mode(&self, expected: u8, timeout: Duration) -> anyhow::Result<()> {
         let deadline = Instant::now() + timeout;
         loop {
-            let actual = read_u8(
-                &*self.bus,
-                self.node_id,
-                MODE_DISPLAY,
-                0,
-                self.sdo_timeout,
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!("read ModeDisplay confirmation: {e}"))?;
+            let actual = read_u8(&*self.bus, self.node_id, MODE_DISPLAY, 0, self.sdo_timeout)
+                .await
+                .map_err(|e| anyhow::anyhow!("read ModeDisplay confirmation: {e}"))?;
             self.state.lock().unwrap().mode_display = actual;
             if actual == expected {
                 return Ok(());
@@ -1361,9 +1355,9 @@ async fn read_u8(
     timeout: Option<Duration>,
 ) -> anyhow::Result<u8> {
     let raw = read_bytes(bus, nid, index, sub, timeout).await?;
-    raw.first().copied().ok_or_else(|| {
-        anyhow::anyhow!("0x{index:04X}:{sub:02X}: expected u8, got 0 bytes")
-    })
+    raw.first()
+        .copied()
+        .ok_or_else(|| anyhow::anyhow!("0x{index:04X}:{sub:02X}: expected u8, got 0 bytes"))
 }
 
 async fn read_u16(

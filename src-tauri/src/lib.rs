@@ -6,6 +6,7 @@
 mod analyzer;
 mod backend;
 mod commands;
+mod damiao;
 mod device_registry;
 mod diag;
 mod dto;
@@ -15,6 +16,7 @@ mod lift;
 mod lift_commission;
 mod logging;
 mod rollercan;
+mod rollercan_control;
 mod sdo_client;
 mod smartknob;
 mod state;
@@ -126,6 +128,31 @@ pub fn run() {
             commands::set_position_preset,
             commands::read_position,
             commands::get_status,
+            commands::damiao_list_devices,
+            commands::damiao_safe_rescan,
+            commands::damiao_attach,
+            commands::damiao_detach,
+            commands::damiao_get_state,
+            commands::damiao_set_mode,
+            commands::damiao_enable,
+            commands::damiao_disable,
+            commands::damiao_disable_all,
+            commands::damiao_clear_fault,
+            commands::damiao_set_zero,
+            commands::damiao_send_target,
+            commands::damiao_stop_stream,
+            commands::rollercan_control_list_devices,
+            commands::rollercan_control_rescan,
+            commands::rollercan_control_attach,
+            commands::rollercan_control_detach,
+            commands::rollercan_control_get_state,
+            commands::rollercan_control_set_mode,
+            commands::rollercan_control_enable,
+            commands::rollercan_control_disable,
+            commands::rollercan_control_release_stall,
+            commands::rollercan_control_send_target,
+            commands::rollercan_control_set_current_limit,
+            commands::rollercan_control_refresh,
             commands::start_log,
             commands::stop_log,
             commands::hopea3_start,
@@ -161,6 +188,8 @@ pub fn run() {
             commands::lift_commission_estop,
             commands::lift_commission_csv,
             commands::smartknob_configs,
+            commands::smartknob_monitor_start,
+            commands::smartknob_monitor_stop,
             commands::smartknob_list_devices,
             commands::smartknob_get_profile,
             commands::smartknob_probe,

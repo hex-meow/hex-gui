@@ -211,6 +211,25 @@ const STRINGS = {
   mitKp: { en: "kp (Nm/rad)", zh: "kp (Nm/rad)" },
   mitKd: { en: "kd (Nm·s/rad)", zh: "kd (Nm·s/rad)" },
 
+  // Dedicated DAMIAO DM-J4310-2EC V1.1 workspace
+  toolDamiao: { en: "DM-J4310-2EC Motor Control", zh: "DM-J4310-2EC 电机控制" },
+  toolDamiaoDesc: {
+    en: "Dedicated raw-CAN control and telemetry for the DAMIAO DM-J4310-2EC V1.1 geared motor.",
+    zh: "面向达妙 DM-J4310-2EC V1.1 减速电机的专用原始 CAN 控制与反馈窗口。",
+  },
+  catDamiao: { en: "Other motors", zh: "其他电机" },
+  catDamiaoHint: {
+    en: "Expand to choose a vendor-specific motor workspace",
+    zh: "展开后选择厂商专用电机工作区",
+  },
+  tagDamiaoProtocol: { en: "DAMIAO CAN 1 Mbps", zh: "达妙 CAN 1 Mbps" },
+  toolRollerCanControl: { en: "Unit RollerCAN Motor Control", zh: "Unit RollerCAN 电机控制" },
+  toolRollerCanControlDesc: {
+    en: "Stock-firmware speed, position, current and encoder control over extended CAN frames.",
+    zh: "通过扩展 CAN 帧控制原厂固件的速度、位置、电流与编码器模式。",
+  },
+  tagRollerCanProtocol: { en: "RollerCAN 29-bit · 1 Mbps", zh: "RollerCAN 29 位 · 1 Mbps" },
+
   // Tool selector
   toolControl: { en: "Motor Control", zh: "电机控制" },
   toolChangeId: { en: "Change ID", zh: "改 ID" },
@@ -444,6 +463,7 @@ const STRINGS = {
   skConnectFirst: { en: "Connect to the bus first.", zh: "请先连接总线。" },
   skNoMotors: { en: "No compatible knobs discovered yet…", zh: "尚未发现兼容旋钮…" },
   skNoCompatible: { en: "No compatible SmartKnob is online. Automatic discovery is still running.", zh: "暂无兼容的 SmartKnob 在线，后台仍在自动发现。" },
+  skDiscoveryFailed: { en: "Could not start SmartKnob discovery", zh: "无法启动 SmartKnob 自动发现" },
   skChooseDevice: { en: "Choose a SmartKnob", zh: "请选择一个 SmartKnob" },
   skMultipleDevices: { en: "Multiple SmartKnobs are online. Verify the selected target before starting.", zh: "有多个 SmartKnob 在线，请确认所选目标后再启动。" },
   skConfirmDevice: { en: "Confirm selected SmartKnob", zh: "确认所选 SmartKnob" },
@@ -492,11 +512,6 @@ const STRINGS = {
   skTelemetryFailed: { en: "Telemetry update failed", zh: "遥测更新失败" },
   skCommanded: { en: "Commanded", zh: "指令值" },
   skMeasured: { en: "Measured", zh: "实测值" },
-  skMixedBusTitle: { en: "Incompatible SmartKnob protocols detected on one bus", zh: "同一总线上检测到不兼容的 SmartKnob 协议" },
-  skMixedBusBody: {
-    en: "CANopen uses CAN-FD with 5 Mbit/s BRS while RollerCAN is Classic CAN only. Disconnect one device type before starting.",
-    zh: "CANopen 使用带 5 Mbit/s BRS 的 CAN-FD，而 RollerCAN 仅支持 Classic CAN。启动前请断开其中一种设备。",
-  },
   skAdvancedProbe: { en: "Advanced: probe a RollerCAN node manually", zh: "高级：手动探测 RollerCAN 节点" },
   skRollerNode: { en: "Node ID", zh: "节点 ID" },
   skProbe: { en: "Probe", zh: "探测" },

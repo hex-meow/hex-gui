@@ -1,9 +1,10 @@
 //! RollerCAN firmware-owned SmartKnob session.
 //!
-//! Unit RollerCAN is not a HEX/CiA402 motor. The default device speaks a
-//! proprietary CAN 2.0 29-bit extended-frame protocol at 1 Mbps, with default
-//! node id `0xA8`. The STM32 owns the 1 kHz haptic loop; this module sends mode
-//! and tuning parameters and decodes the firmware's unsolicited telemetry.
+//! Unit RollerCAN is not a HEX/CiA402 motor. The SmartKnob firmware speaks a
+//! proprietary 29-bit extended-ID protocol using 8-byte CAN-FD frames with BRS
+//! at 1 Mbit/s nominal / 5 Mbit/s data, with default node id `0xA8`. The STM32
+//! owns the 1 kHz haptic loop; this module sends mode and tuning parameters and
+//! decodes the firmware's unsolicited telemetry.
 //!
 //! There is deliberately no host-side haptic control loop here. The remaining
 //! code handles discovery, protocol I/O, verified configuration transactions,
@@ -73,6 +74,10 @@ const PARAM_READ_TIMEOUT: Duration = Duration::from_millis(120);
 const PARAM_READ_ATTEMPTS: usize = 3;
 const ENABLE_STATUS_TIMEOUT: Duration = Duration::from_millis(200);
 const VERIFY_SCALED_TOLERANCE: i32 = 2;
+
+fn is_rollercan_frame_kind(kind: FrameKind) -> bool {
+    matches!(kind, FrameKind::Fd { brs: true })
+}
 
 fn ensure_start_not_cancelled(shutdown_requested: Option<&AtomicBool>) -> Result<()> {
     if shutdown_requested.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
@@ -537,6 +542,8 @@ pub struct RollerCanSession {
     state: Arc<StdMutex<RollerCanState>>,
     rx_task: JoinHandle<()>,
     discovery_task: JoinHandle<()>,
+    discovery_enabled: Arc<AtomicBool>,
+    discovery_gate: Arc<tokio::sync::Mutex<()>>,
     running: Arc<AtomicBool>,
     requested_config: Arc<StdMutex<usize>>,
     tuning: Arc<StdMutex<Tuning>>,
@@ -560,10 +567,14 @@ impl RollerCanSession {
         let state = Arc::new(StdMutex::new(RollerCanState::default()));
         let rx_task = tokio::spawn(drain_loop(rx, state.clone()));
         let send_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let discovery_enabled = Arc::new(AtomicBool::new(false));
+        let discovery_gate = Arc::new(tokio::sync::Mutex::new(()));
         let discovery_task = tokio::spawn(discovery_loop(
             bus.clone(),
             state.clone(),
             send_lock.clone(),
+            discovery_enabled.clone(),
+            discovery_gate.clone(),
         ));
         let configs = preset_configs();
         let per_mode_tuning = configs.iter().map(Tuning::from_config).collect();
@@ -573,6 +584,8 @@ impl RollerCanSession {
             state,
             rx_task,
             discovery_task,
+            discovery_enabled,
+            discovery_gate,
             running: Arc::new(AtomicBool::new(false)),
             requested_config: Arc::new(StdMutex::new(0)),
             tuning: Arc::new(StdMutex::new(tuning)),
@@ -588,10 +601,6 @@ impl RollerCanSession {
         self.state.lock().unwrap().devices(Instant::now())
     }
 
-    pub fn has_online_device(&self) -> bool {
-        self.devices().iter().any(|device| device.online)
-    }
-
     pub fn may_be_active(&self) -> bool {
         self.running.load(Ordering::SeqCst)
     }
@@ -604,8 +613,26 @@ impl RollerCanSession {
         self.state.lock().unwrap().telemetry_for(node_id)
     }
 
-    /// Immediately probe one node (manual-ID fallback). Discovery continues
-    /// in the background even if this call returns before the replies arrive.
+    /// Enable CAN-FD discovery for the SmartKnob workspace. Attaching a session
+    /// is deliberately receive-only so the legacy Classic CAN control window
+    /// never sees unsolicited FD frames merely because the app connected.
+    pub async fn start_discovery(&self) -> Result<()> {
+        let _gate = self.discovery_gate.lock().await;
+        if self.discovery_enabled.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        probe_node(&self.bus, &self.send_lock, ROLLER_DEFAULT_NODE_ID).await
+    }
+
+    /// Disable SmartKnob discovery and wait for any already-started discovery
+    /// transaction to finish. Once this returns, the monitor cannot emit more
+    /// CAN-FD frames until `start_discovery` is called again.
+    pub async fn stop_discovery(&self) {
+        self.discovery_enabled.store(false, Ordering::SeqCst);
+        let _barrier = self.discovery_gate.lock().await;
+    }
+
+    /// Immediately probe one node (manual-ID fallback).
     pub async fn probe(&self, node_id: u8) -> Result<()> {
         probe_node(&self.bus, &self.send_lock, node_id).await
     }
@@ -614,10 +641,12 @@ impl RollerCanSession {
     /// The receive task deliberately stays alive so nonce-correlated status
     /// and parameter readback can still confirm that output is disabled.
     pub fn begin_shutdown(&self) {
+        self.discovery_enabled.store(false, Ordering::SeqCst);
         self.discovery_task.abort();
     }
 
     pub async fn stop(self) {
+        self.discovery_enabled.store(false, Ordering::SeqCst);
         self.discovery_task.abort();
         let target = *self.target_id.lock().unwrap();
         if let Some(target) = target {
@@ -1422,7 +1451,8 @@ async fn send_command(
     let raw_id =
         ((cmd as u32) << 24) | ((param as u32) << 16) | ((host_id as u32) << 8) | target_id as u32;
     let id = CanId::new_extended(raw_id).map_err(|e| anyhow!("bad RollerCAN id: {e}"))?;
-    let frame = CanFrame::new_data(id, &data).map_err(|e| anyhow!("build frame: {e}"))?;
+    let frame =
+        CanFrame::new_fd(id, &data, true).map_err(|e| anyhow!("build CAN-FD+BRS frame: {e}"))?;
     let _serialized = send_lock.lock().await;
     bus.send(frame)
         .await
@@ -1479,11 +1509,9 @@ async fn discovery_loop(
     bus: Arc<dyn CanBus>,
     state: Arc<StdMutex<RollerCanState>>,
     send_lock: Arc<tokio::sync::Mutex<()>>,
+    discovery_enabled: Arc<AtomicBool>,
+    discovery_gate: Arc<tokio::sync::Mutex<()>>,
 ) {
-    if let Err(error) = probe_node(&bus, &send_lock, ROLLER_DEFAULT_NODE_ID).await {
-        log::warn!("RollerCAN default-node probe failed: {error}");
-    }
-
     let mut scan = tokio::time::interval(DISCOVERY_STEP);
     scan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut known = tokio::time::interval(KNOWN_PING_PERIOD);
@@ -1499,6 +1527,10 @@ async fn discovery_loop(
     loop {
         tokio::select! {
             _ = scan.tick() => {
+                let _gate = discovery_gate.lock().await;
+                if !discovery_enabled.load(Ordering::SeqCst) {
+                    continue;
+                }
                 let target = cursor;
                 cursor = cursor.wrapping_add(1);
                 if let Err(error) = send_command(
@@ -1509,6 +1541,10 @@ async fn discovery_loop(
                 }
             }
             _ = known.tick() => {
+                let _gate = discovery_gate.lock().await;
+                if !discovery_enabled.load(Ordering::SeqCst) {
+                    continue;
+                }
                 let candidates: Vec<u8> = {
                     let mut registry = state.lock().unwrap();
                     registry.nodes.iter_mut().filter_map(|(&node_id, node)| {
@@ -1527,6 +1563,10 @@ async fn discovery_loop(
                 }
             }
             _ = identify.tick() => {
+                let _gate = discovery_gate.lock().await;
+                if !discovery_enabled.load(Ordering::SeqCst) {
+                    continue;
+                }
                 let candidates: Vec<u8> = {
                     let registry = state.lock().unwrap();
                     registry.nodes.iter().filter_map(|(&node_id, node)| {
@@ -1691,7 +1731,7 @@ async fn drain_loop(mut rx: Box<dyn CanRx>, state: Arc<StdMutex<RollerCanState>>
     loop {
         match rx.recv().await {
             Ok(frame) => {
-                if !matches!(frame.kind(), FrameKind::Data) {
+                if !is_rollercan_frame_kind(frame.kind()) {
                     continue;
                 }
                 let raw = frame.id().raw();
@@ -2087,6 +2127,8 @@ mod tests {
             state,
             rx_task: tokio::spawn(async {}),
             discovery_task: tokio::spawn(async {}),
+            discovery_enabled: Arc::new(AtomicBool::new(false)),
+            discovery_gate: Arc::new(tokio::sync::Mutex::new(())),
             running: Arc::new(AtomicBool::new(false)),
             requested_config: Arc::new(StdMutex::new(0)),
             tuning: Arc::new(StdMutex::new(Tuning::from_config(&configs[0]))),
@@ -2125,6 +2167,55 @@ mod tests {
         data[..2].copy_from_slice(&index.to_le_bytes());
         data[4..].copy_from_slice(&value.to_le_bytes());
         data
+    }
+
+    #[test]
+    fn protocol_accepts_only_can_fd_frames_with_brs() {
+        assert!(is_rollercan_frame_kind(FrameKind::Fd { brs: true }));
+        assert!(!is_rollercan_frame_kind(FrameKind::Fd { brs: false }));
+        assert!(!is_rollercan_frame_kind(FrameKind::Data));
+        assert!(!is_rollercan_frame_kind(FrameKind::Remote));
+    }
+
+    #[tokio::test]
+    async fn command_frames_use_can_fd_with_brs() {
+        let concrete = Arc::new(FakeBus::default());
+        let bus: Arc<dyn CanBus> = concrete.clone();
+        let send_lock = Arc::new(tokio::sync::Mutex::new(()));
+
+        send_command(&bus, &send_lock, 0x12, 0, 7, 0xA8, [0x5A; 8], "CAN-FD test")
+            .await
+            .unwrap();
+
+        let attempts = concrete.attempts.lock().unwrap();
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].kind(), FrameKind::Fd { brs: true });
+        assert!(attempts[0].id().is_extended());
+        assert_eq!(attempts[0].data(), &[0x5A; 8]);
+    }
+
+    #[tokio::test]
+    async fn attached_monitor_is_silent_until_enabled_and_quiesces_on_stop() {
+        let bus = Arc::new(FakeBus::default());
+        let session = RollerCanSession::attach(bus.clone()).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert!(bus.attempts.lock().unwrap().is_empty());
+
+        session.start_discovery().await.unwrap();
+        session.stop_discovery().await;
+        let stopped_at = bus.attempts.lock().unwrap().len();
+        assert!(stopped_at >= 5);
+        assert!(bus
+            .attempts
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|frame| frame.kind() == FrameKind::Fd { brs: true }));
+
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(bus.attempts.lock().unwrap().len(), stopped_at);
+        session.stop().await;
     }
 
     #[test]

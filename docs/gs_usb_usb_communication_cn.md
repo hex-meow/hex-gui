@@ -113,22 +113,16 @@ CAN-FD data phase timing 值：
 | `sjw` | 3 |
 | `brp` | 1 |
 
-### Classic CAN 路径
+### 共享 CAN-FD 通道上的帧类型
 
-RollerCAN 使用 `open_classic_1m_bus(spec)`。对于 `gs_usb`，代码打开的是：
+适配器通道只使用 `fd_1m_5m()` 打开一次。与旧版原厂固件通信时，应用仍可在
+支持 FD 的通道上发送 Classic CAN 帧；但 RollerCAN SmartKnob 专用固件的双向
+通信固定使用开启 BRS 的 8 字节 CAN-FD 帧。
 
-```rust
-GsUsbConfig::classic_1m().with_channel(channel)
-```
-
-含义是：
-
-- 只使用 classic CAN 2.0。
-- 1 Mbit/s。
-- 不启用 CAN-FD。
-- USB frame 里的 data arm 是 8 字节，不是 64 字节。
-
-RollerCAN 走这条路径，是因为它的设备协议是 extended classic CAN，不是 CAN-FD。
+RollerCAN SmartKnob 自动发现受窗口生命周期约束：应用连接总线时只建立接收订阅，
+不会发送 FD 探测帧；SmartKnob 窗口挂载后才启用 FD 扫描，卸载时会等待扫描完全
+停稳。旧版原厂 RollerCAN Control 窗口启动时也会在第一次 Classic CAN 探测前
+再次强制停用 SmartKnob FD 扫描。
 
 ## USB 初始化流程
 
@@ -474,15 +468,16 @@ can_dlc:   12
 flags:     FLAG_FD | FLAG_BRS = 0x06
 ```
 
-### RollerCAN
+### RollerCAN SmartKnob 专用固件
 
-RollerCAN 使用 classic 1 Mbit 路径，不使用 CAN-FD。它发送 extended classic
-CAN data frame。
+RollerCAN SmartKnob 专用固件使用与另一条 SmartKnob 路径相同的固定配置：
+标称段 1 Mbit/s、数据段 5 Mbit/s。命令、响应和遥测全部使用开启 BRS 的
+extended CAN-FD 帧。
 
 CAN frame：
 
 ```text
-kind:       classic CAN data frame
+kind:       CAN-FD data frame, BRS enabled
 CAN ID:     extended 29-bit
 payload:    8 bytes
 ```
@@ -550,11 +545,11 @@ enable sequence 写入：
 2. `0x7006 = 0`
 3. `0x7004 = 1`
 
-因为 RollerCAN 以 classic mode 打开 adapter，每个 RollerCAN frame 对应的 USB bulk
-OUT transfer 是：
+因为 adapter 处于 CAN-FD mode，每个 8 字节 RollerCAN SmartKnob frame 对应的
+USB bulk OUT transfer 是：
 
 ```text
-12-byte header + 8-byte data arm = 20 bytes
+12-byte header + 64-byte data arm = 76 bytes
 ```
 
 示例：`cmd = 0x12`，`param = 0`，`host_id = 0`，`target_id = 0x7f`，
@@ -580,7 +575,7 @@ gs_host_frame:
   can_id       -> 7f 00 00 92
   can_dlc      -> 08
   channel      -> 00 by default
-  flags        -> 00
+  flags        -> 06 (FLAG_FD | FLAG_BRS)
   reserved     -> 00
   data         -> 06 70 00 00 d2 04 00 00
 ```
@@ -595,12 +590,12 @@ gs_host_frame:
    `BREQ_MODE` 之前。
 4. frame traffic 应该发往 bulk OUT endpoint `0x01`。
 5. 接收 traffic 应该来自 bulk IN endpoint `0x81`。
-6. Classic-mode RollerCAN write 应该是 20-byte bulk OUT payload。
-7. CAN-FD mode SmartKnob/HopeA3 write 应该是 76-byte bulk OUT payload。
+6. RollerCAN SmartKnob、CANopen SmartKnob 和 HopeA3 write 都应该是 76-byte
+   bulk OUT payload。
+7. RollerCAN SmartKnob 应该是开启 BRS 的 extended CAN-FD frame。
 8. bulk OUT payload 的 byte offsets `4..8` 应该能解码出 CAN ID 和 SocketCAN
    风格 flags。
-9. byte `10` 对 CAN-FD+BRS frame 应该是 `0x06`，对 classic RollerCAN frame
-   应该是 `0x00`。
+9. 所有 SmartKnob CAN-FD+BRS frame 的 byte `10` 都应该是 `0x06`。
 
 ## 常见误区
 
@@ -610,5 +605,6 @@ gs_host_frame:
 - 在 FD adapter mode 下，即使实际 CAN payload 只有 8 字节，USB data arm 也是 64 字节。
 - 适配器返回的 TX echo/completion frame 不等于从 CAN bus 收到的 frame。依赖库只有在
   `echo_id == 0xffff_ffff` 时才把它当作真实 RX frame。
-- RollerCAN 是有意使用 classic CAN。把它放到 FD 路径会改变 adapter mode，并且不符合该设备协议。
+- 不要混淆旧版原厂 RollerCAN 固件与 SmartKnob 专用固件：前者可能使用 Classic
+  CAN 帧，后者固定要求 1 Mbit/s / 5 Mbit/s CAN-FD+BRS。
 

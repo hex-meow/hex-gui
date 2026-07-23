@@ -5,6 +5,7 @@
 //! concurrently on the same bus (the underlying [`Cia402Manager`] already
 //! serialises overlapping ops via its `inflight_ops` set).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,8 +14,16 @@ use hex_motor::types::MotorMode;
 use tauri::State;
 
 use crate::backend;
+use crate::damiao::{
+    DamiaoConfig, DamiaoDiscoveredDevice, DamiaoDiscovery, DamiaoMode, DamiaoSession, DamiaoState,
+    DamiaoTarget,
+};
 use crate::diag::{EventsSnapshot, LogLine};
 use crate::dto::{LiveStateDto, MotorInfoDto, MotorModeDto, MotorTargetDto};
+use crate::rollercan_control::{
+    RollerCanControl, RollerCanControlDevice, RollerCanControlMode, RollerCanControlState,
+    RollerCanControlTarget,
+};
 use crate::state::AppState;
 use crate::unified_smartknob::{
     ActiveSmartKnob, SmartKnobControlSide, SmartKnobDevice, SmartKnobEffortUnit, SmartKnobKind,
@@ -75,6 +84,116 @@ pub(crate) async fn stop_lift_session(state: &AppState) -> CmdResult<()> {
     Ok(())
 }
 
+async fn damiao_session(state: &AppState, motor_id: u16) -> CmdResult<Arc<DamiaoSession>> {
+    state
+        .damiao
+        .lock()
+        .await
+        .get(&motor_id)
+        .cloned()
+        .ok_or_else(|| format!("DAMIAO motor 0x{motor_id:X} is not attached"))
+}
+
+async fn damiao_discovery(state: &AppState) -> CmdResult<Arc<DamiaoDiscovery>> {
+    let mut guard = state.damiao_discovery.lock().await;
+    if let Some(discovery) = guard.as_ref() {
+        return Ok(discovery.clone());
+    }
+    let discovery = DamiaoDiscovery::start(manager(state).await?)
+        .await
+        .map_err(err)?;
+    *guard = Some(discovery.clone());
+    Ok(discovery)
+}
+
+async fn rollercan_control(state: &AppState) -> CmdResult<Arc<RollerCanControl>> {
+    let mut guard = state.rollercan_control.lock().await;
+    // The stock RollerCAN control workspace speaks Classic CAN. Quiesce the
+    // SmartKnob firmware's FD discovery before every entry into its command
+    // path, including when the controller was already created. This keeps an
+    // earlier/overlapping UI lifecycle from injecting FD frames on this bus.
+    if let Some(session) = state.rollercan.lock().await.as_ref() {
+        session.stop_discovery().await;
+    }
+    if let Some(controller) = guard.as_ref() {
+        return Ok(controller.clone());
+    }
+    let mgr = manager(state).await?;
+    let controller = RollerCanControl::start(mgr.bus()).await.map_err(err)?;
+    *guard = Some(controller.clone());
+    Ok(controller)
+}
+
+async fn ensure_rollercan_control_available(state: &AppState, node_id: u8) -> CmdResult<()> {
+    let active = state.smartknob.lock().await;
+    if matches!(
+        active.as_ref(),
+        Some(ActiveSmartKnob::Rollercan { node_id: active_node }) if *active_node == node_id
+    ) {
+        return Err(format!(
+            "RollerCAN 0x{node_id:02X} is owned by the SmartKnob firmware session; stop SmartKnob first"
+        ));
+    }
+    Ok(())
+}
+
+/// Keep a failed confirmed-disable retryable during a manual disconnect.
+pub(crate) async fn stop_rollercan_control(state: &AppState, force: bool) -> CmdResult<()> {
+    let controller = match state.rollercan_control.lock().await.clone() {
+        Some(controller) => controller,
+        None => return Ok(()),
+    };
+    let stop_result = controller.stop(force).await.map_err(err);
+    if stop_result.is_err() && !force {
+        return stop_result;
+    }
+    let mut guard = state.rollercan_control.lock().await;
+    if guard
+        .as_ref()
+        .is_some_and(|current| Arc::ptr_eq(current, &controller))
+    {
+        guard.take();
+    }
+    stop_result
+}
+
+/// Keep every failed safe-disable retryable during a manual disconnect.
+pub(crate) async fn stop_damiao_sessions(state: &AppState) -> CmdResult<()> {
+    let sessions: Vec<(u16, Arc<DamiaoSession>)> = state
+        .damiao
+        .lock()
+        .await
+        .iter()
+        .map(|(&motor_id, session)| (motor_id, session.clone()))
+        .collect();
+    let mut failures = Vec::new();
+    for (motor_id, session) in sessions {
+        match session.shutdown().await {
+            Ok(()) => {
+                let mut guard = state.damiao.lock().await;
+                if guard
+                    .get(&motor_id)
+                    .is_some_and(|current| Arc::ptr_eq(current, &session))
+                {
+                    guard.remove(&motor_id);
+                }
+            }
+            Err(error) => failures.push(format!("0x{motor_id:X}: {error}")),
+        }
+    }
+    if failures.is_empty() {
+        if let Some(discovery) = state.damiao_discovery.lock().await.take() {
+            discovery.stop();
+        }
+        Ok(())
+    } else {
+        Err(format!(
+            "failed to safely disable DAMIAO motor(s): {}",
+            failures.join("; ")
+        ))
+    }
+}
+
 #[tauri::command]
 pub async fn connect(
     state: State<'_, AppState>,
@@ -113,6 +232,8 @@ pub async fn disconnect(state: State<'_, AppState>) -> CmdResult<()> {
     // completed. A manual disconnect reports failure instead of silently
     // dropping the only handle that can retry the stop.
     stop_lift_session(&state).await?;
+    stop_rollercan_control(&state, false).await?;
+    stop_damiao_sessions(&state).await?;
     disconnect_state(&state).await;
     Ok(())
 }
@@ -125,6 +246,11 @@ pub(crate) async fn disconnect_state(state: &AppState) {
     log::info!("disconnect cleanup: waiting for lifecycle lock");
     let _connection_op = state.connection_op.lock().await;
     log::info!("disconnect cleanup: lifecycle lock acquired; quiescing RollerCAN discovery");
+    if let Err(error) = stop_rollercan_control(state, true).await {
+        log::warn!(
+            "RollerCAN control disable during forced disconnect failed; motor power must be removed before handling it: {error}"
+        );
+    }
     if let Some(session) = state.rollercan.lock().await.as_ref() {
         session.begin_shutdown();
     }
@@ -146,6 +272,21 @@ pub(crate) async fn disconnect_state(state: &AppState) {
     }
     if let Some(app) = state.imu.lock().await.take() {
         app.stop().await;
+    }
+    let damiao_sessions = {
+        let mut guard = state.damiao.lock().await;
+        std::mem::take(&mut *guard)
+    };
+    for (motor_id, session) in damiao_sessions {
+        if let Err(error) = session.shutdown().await {
+            log::warn!(
+                "DAMIAO 0x{motor_id:X} safe disable during forced disconnect failed: {error}"
+            );
+            session.force_stop();
+        }
+    }
+    if let Some(discovery) = state.damiao_discovery.lock().await.take() {
+        discovery.stop();
     }
     // The analyzer owns its own bus, so stop it unconditionally (it may be the
     // only thing running — the user never called the manager-based connect()).
@@ -303,6 +444,328 @@ pub async fn get_status(state: State<'_, AppState>, nid: u8) -> CmdResult<LiveSt
     let mgr = manager(&state).await?;
     let snap = mgr.status(nid);
     Ok((&snap).into())
+}
+
+// ---------------------------------------------------------------------------
+// DAMIAO DM-J4310-2EC V1.1 direct-CAN control
+
+#[tauri::command]
+pub async fn damiao_list_devices(
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<DamiaoDiscoveredDevice>> {
+    let discovery = damiao_discovery(&state).await?;
+    let mut devices: BTreeMap<u16, DamiaoDiscoveredDevice> = discovery
+        .snapshot()
+        .into_iter()
+        .map(|device| (device.motor_id, device))
+        .collect();
+    let sessions: Vec<Arc<DamiaoSession>> = state.damiao.lock().await.values().cloned().collect();
+    for session in sessions {
+        let snapshot = session.snapshot();
+        devices.insert(
+            snapshot.motor_id,
+            DamiaoDiscoveredDevice {
+                motor_id: snapshot.motor_id,
+                feedback_can_id: snapshot.feedback_can_id,
+                online: snapshot.online,
+                attached: true,
+                status_code: snapshot.status_code,
+                status: snapshot.status,
+                feedback_age_ms: snapshot.feedback_age_ms,
+                rx_count: snapshot.rx_count,
+            },
+        );
+    }
+    Ok(devices.into_values().collect())
+}
+
+#[tauri::command]
+pub async fn damiao_safe_rescan(state: State<'_, AppState>) -> CmdResult<()> {
+    damiao_discovery(&state).await?.request_safe_sweep();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn damiao_attach(
+    state: State<'_, AppState>,
+    config: DamiaoConfig,
+) -> CmdResult<DamiaoState> {
+    let mgr = manager(&state).await?;
+    let mut guard = state.damiao.lock().await;
+    if guard.contains_key(&config.motor_id) {
+        return Err(format!(
+            "DAMIAO motor 0x{:X} is already attached",
+            config.motor_id
+        ));
+    }
+    if let Some(existing) = guard
+        .keys()
+        .find(|&&motor_id| motor_id & 0x0F == config.motor_id & 0x0F)
+    {
+        return Err(format!(
+            "DAMIAO motor 0x{:X} conflicts with attached motor 0x{existing:X}: V1.1 feedback carries only the low 4 ID bits",
+            config.motor_id
+        ));
+    }
+    let session = DamiaoSession::start(mgr, config).await.map_err(err)?;
+    let snapshot = session.snapshot();
+    guard.insert(config.motor_id, session);
+    drop(guard);
+    if let Ok(discovery) = damiao_discovery(&state).await {
+        discovery.set_attached(config.motor_id, true);
+    }
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub async fn damiao_detach(state: State<'_, AppState>, motor_id: u16) -> CmdResult<()> {
+    let session = damiao_session(&state, motor_id).await?;
+    session.shutdown().await.map_err(err)?;
+    let mut guard = state.damiao.lock().await;
+    if guard
+        .get(&motor_id)
+        .is_some_and(|current| Arc::ptr_eq(current, &session))
+    {
+        guard.remove(&motor_id);
+    }
+    drop(guard);
+    if let Some(discovery) = state.damiao_discovery.lock().await.as_ref() {
+        discovery.set_attached(motor_id, false);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn damiao_get_state(state: State<'_, AppState>, motor_id: u16) -> CmdResult<DamiaoState> {
+    Ok(damiao_session(&state, motor_id).await?.snapshot())
+}
+
+#[tauri::command]
+pub async fn damiao_set_mode(
+    state: State<'_, AppState>,
+    motor_id: u16,
+    mode: DamiaoMode,
+) -> CmdResult<DamiaoState> {
+    damiao_session(&state, motor_id)
+        .await?
+        .switch_mode(mode)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn damiao_enable(state: State<'_, AppState>, motor_id: u16) -> CmdResult<()> {
+    damiao_session(&state, motor_id)
+        .await?
+        .enable()
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn damiao_disable(state: State<'_, AppState>, motor_id: u16) -> CmdResult<()> {
+    damiao_session(&state, motor_id)
+        .await?
+        .disable()
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn damiao_disable_all(state: State<'_, AppState>) -> CmdResult<()> {
+    let sessions: Vec<(u16, Arc<DamiaoSession>)> = state
+        .damiao
+        .lock()
+        .await
+        .iter()
+        .map(|(&motor_id, session)| (motor_id, session.clone()))
+        .collect();
+    let mut failures = Vec::new();
+    for (motor_id, session) in sessions {
+        if let Err(error) = session.disable().await {
+            failures.push(format!("0x{motor_id:X}: {error}"));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "failed to disable DAMIAO motor(s): {}",
+            failures.join("; ")
+        ))
+    }
+}
+
+#[tauri::command]
+pub async fn damiao_clear_fault(state: State<'_, AppState>, motor_id: u16) -> CmdResult<()> {
+    damiao_session(&state, motor_id)
+        .await?
+        .clear_fault()
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn damiao_set_zero(state: State<'_, AppState>, motor_id: u16) -> CmdResult<()> {
+    damiao_session(&state, motor_id)
+        .await?
+        .set_zero()
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn damiao_send_target(
+    state: State<'_, AppState>,
+    motor_id: u16,
+    target: DamiaoTarget,
+    repeat: bool,
+) -> CmdResult<()> {
+    damiao_session(&state, motor_id)
+        .await?
+        .send_target(target, repeat)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn damiao_stop_stream(state: State<'_, AppState>, motor_id: u16) -> CmdResult<()> {
+    damiao_session(&state, motor_id).await?.stop_stream();
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Unit RollerCAN stock-firmware motor control (29-bit extended CAN, 1 Mbps)
+
+#[tauri::command]
+pub async fn rollercan_control_list_devices(
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<RollerCanControlDevice>> {
+    Ok(rollercan_control(&state).await?.devices())
+}
+
+#[tauri::command]
+pub async fn rollercan_control_rescan(state: State<'_, AppState>) -> CmdResult<()> {
+    rollercan_control(&state).await?.request_scan();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rollercan_control_attach(
+    state: State<'_, AppState>,
+    node_id: u8,
+) -> CmdResult<RollerCanControlState> {
+    ensure_rollercan_control_available(&state, node_id).await?;
+    rollercan_control(&state)
+        .await?
+        .attach(node_id)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_control_detach(state: State<'_, AppState>, node_id: u8) -> CmdResult<()> {
+    ensure_rollercan_control_available(&state, node_id).await?;
+    rollercan_control(&state)
+        .await?
+        .detach(node_id)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_control_get_state(
+    state: State<'_, AppState>,
+    node_id: u8,
+) -> CmdResult<RollerCanControlState> {
+    rollercan_control(&state)
+        .await?
+        .snapshot(node_id)
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_control_set_mode(
+    state: State<'_, AppState>,
+    node_id: u8,
+    mode: RollerCanControlMode,
+) -> CmdResult<RollerCanControlState> {
+    ensure_rollercan_control_available(&state, node_id).await?;
+    rollercan_control(&state)
+        .await?
+        .set_mode(node_id, mode)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_control_enable(state: State<'_, AppState>, node_id: u8) -> CmdResult<()> {
+    ensure_rollercan_control_available(&state, node_id).await?;
+    rollercan_control(&state)
+        .await?
+        .enable(node_id)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_control_disable(state: State<'_, AppState>, node_id: u8) -> CmdResult<()> {
+    ensure_rollercan_control_available(&state, node_id).await?;
+    rollercan_control(&state)
+        .await?
+        .disable(node_id)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_control_release_stall(
+    state: State<'_, AppState>,
+    node_id: u8,
+) -> CmdResult<()> {
+    ensure_rollercan_control_available(&state, node_id).await?;
+    rollercan_control(&state)
+        .await?
+        .release_stall(node_id)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_control_send_target(
+    state: State<'_, AppState>,
+    node_id: u8,
+    target: RollerCanControlTarget,
+) -> CmdResult<()> {
+    ensure_rollercan_control_available(&state, node_id).await?;
+    rollercan_control(&state)
+        .await?
+        .send_target(node_id, target)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_control_set_current_limit(
+    state: State<'_, AppState>,
+    node_id: u8,
+    current_ma: f64,
+) -> CmdResult<()> {
+    ensure_rollercan_control_available(&state, node_id).await?;
+    rollercan_control(&state)
+        .await?
+        .set_current_limit(node_id, current_ma)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn rollercan_control_refresh(state: State<'_, AppState>, node_id: u8) -> CmdResult<()> {
+    rollercan_control(&state)
+        .await?
+        .refresh(node_id)
+        .await
+        .map_err(err)
 }
 
 /// Start recording this motor's full-rate stream to a fresh CSV file. Returns
@@ -478,6 +941,27 @@ pub fn smartknob_configs() -> Vec<crate::smartknob::KnobConfig> {
     crate::smartknob::preset_configs()
 }
 
+/// Explicitly enable RollerCAN SmartKnob CAN-FD discovery while its workspace
+/// is mounted. A normal bus connection remains receive-only for this protocol.
+#[tauri::command]
+pub async fn smartknob_monitor_start(state: State<'_, AppState>) -> CmdResult<()> {
+    let guard = state.rollercan.lock().await;
+    let session = guard
+        .as_ref()
+        .ok_or_else(|| "not connected: RollerCAN monitor is unavailable".to_string())?;
+    session.start_discovery().await.map_err(err)
+}
+
+/// Stop RollerCAN SmartKnob discovery and wait until no background FD probe is
+/// in flight. Receiving telemetry remains available for an active session.
+#[tauri::command]
+pub async fn smartknob_monitor_stop(state: State<'_, AppState>) -> CmdResult<()> {
+    if let Some(session) = state.rollercan.lock().await.as_ref() {
+        session.stop_discovery().await;
+    }
+    Ok(())
+}
+
 /// List protocol-qualified SmartKnob targets found on the shared CAN bus.
 #[tauri::command]
 pub async fn smartknob_list_devices(state: State<'_, AppState>) -> CmdResult<Vec<SmartKnobDevice>> {
@@ -519,23 +1003,6 @@ pub async fn smartknob_list_devices(state: State<'_, AppState>) -> CmdResult<Vec
     }
     devices.sort_by_key(|device| (device.target.kind as u8, device.target.node_id));
 
-    // Discovery can finish after a session was started. Enforce the physical
-    // bus compatibility rule continuously, not just at start time: the next
-    // UI discovery poll stops an active session if the other protocol family
-    // appears (and retries the stop on later polls if a disable send fails).
-    let canopen_online = devices
-        .iter()
-        .any(|device| device.online && device.target.kind == SmartKnobKind::Canopen);
-    let rollercan_online = devices
-        .iter()
-        .any(|device| device.online && device.target.kind == SmartKnobKind::Rollercan);
-    if canopen_online && rollercan_online {
-        if let Err(error) = stop_active_smartknob(&state).await {
-            log::error!(
-                "failed to stop SmartKnob after mixed CANopen/RollerCAN discovery: {error}"
-            );
-        }
-    }
     Ok(devices)
 }
 
@@ -638,27 +1105,6 @@ pub async fn smartknob_start(
         return Err("SmartKnob already running; stop it first".into());
     }
 
-    let canopen_online = mgr.list().iter().any(|motor| {
-        motor.online
-            && motor.identity.as_ref().is_some_and(|identity| {
-                crate::device_registry::classify(identity.vendor_id, identity.product_code)
-                    == crate::device_registry::DeviceKind::Motor
-            })
-    });
-    let rollercan_online = state
-        .rollercan
-        .lock()
-        .await
-        .as_ref()
-        .map(crate::rollercan::RollerCanSession::has_online_device)
-        .unwrap_or(false);
-    if canopen_online && rollercan_online {
-        return Err(
-            "cannot start SmartKnob: CANopen and RollerCAN devices are both online on this physical bus; RollerCAN is Classic-only and cannot safely share CAN-FD+BRS traffic. Disconnect one protocol family or use a separate adapter"
-                .into(),
-        );
-    }
-
     match request.target.kind {
         SmartKnobKind::Canopen => {
             let target_online = mgr.list().iter().any(|motor| {
@@ -707,6 +1153,19 @@ pub async fn smartknob_start(
             *guard = Some(ActiveSmartKnob::Canopen(app));
         }
         SmartKnobKind::Rollercan => {
+            if state
+                .rollercan_control
+                .lock()
+                .await
+                .as_ref()
+                .and_then(|controller| controller.attached_node())
+                == Some(request.target.node_id)
+            {
+                return Err(format!(
+                    "RollerCAN 0x{:02X} is attached to the stock-firmware control window; detach it before starting SmartKnob",
+                    request.target.node_id
+                ));
+            }
             let session_guard = state.rollercan.lock().await;
             let session = session_guard
                 .as_ref()

@@ -66,12 +66,9 @@ export function SmartKnobPanel({ connected }: { connected: boolean }) {
   const liveCommandSeqRef = useRef<Promise<void>>(Promise.resolve());
   const modeSwitchingRef = useRef(false);
   const onlineSetRef = useRef<string[]>([]);
+  const monitorLifecycleRef = useRef<Promise<void>>(Promise.resolve());
 
   const onlineDevices = useMemo(() => devices.filter((device) => device.online), [devices]);
-  const mixedOnline = useMemo(
-    () => new Set(onlineDevices.map((device) => device.target.kind)).size > 1,
-    [onlineDevices],
-  );
   const selectedDevice = useMemo(
     () => devices.find((device) => targetKey(device.target) === selectedKey) ?? null,
     [devices, selectedKey],
@@ -94,6 +91,25 @@ export function SmartKnobPanel({ connected }: { connected: boolean }) {
     liveCommandSeqRef.current = result.then(() => undefined, () => undefined);
     return result;
   }, []);
+
+  // RollerCAN SmartKnob discovery emits CAN-FD+BRS probes. Keep that traffic
+  // scoped to this mounted workspace so the stock Classic CAN control window
+  // can share the application without its device seeing any FD frames.
+  useEffect(() => {
+    if (!connected) return;
+    const started = monitorLifecycleRef.current.then(() => api.smartknobMonitorStart());
+    monitorLifecycleRef.current = started.catch(() => undefined);
+    started.catch((error) => {
+      message.error(`${t("skDiscoveryFailed")}: ${errMsg(error)}`);
+    });
+    return () => {
+      // Put stop on the same queue. The next effect setup also appends to this
+      // queue, so rapid disconnect/reconnect and development remounts cannot
+      // reorder a new start ahead of the preceding stop.
+      const stopped = monitorLifecycleRef.current.then(() => api.smartknobMonitorStop());
+      monitorLifecycleRef.current = stopped.catch(() => undefined);
+    };
+  }, [connected, message, t]);
 
   // Discover both CANopen and RollerCAN knobs through the shared bus manager.
   useEffect(() => {
@@ -249,7 +265,6 @@ export function SmartKnobPanel({ connected }: { connected: boolean }) {
       !selectedDevice?.online
       || !readyProfile
       || !readyEditor
-      || mixedOnline
       || (onlineDevices.length > 1 && !selectionConfirmed)
     ) return;
     const config = readyProfile.configs[readyEditor.modeIndex];
@@ -283,7 +298,7 @@ export function SmartKnobPanel({ connected }: { connected: boolean }) {
     } finally {
       setStarting(false);
     }
-  }, [selectedDevice, readyProfile, readyEditor, mixedOnline, onlineDevices.length, selectionConfirmed, message, t]);
+  }, [selectedDevice, readyProfile, readyEditor, onlineDevices.length, selectionConfirmed, message, t]);
 
   const stop = useCallback(async () => {
     try {
@@ -489,7 +504,6 @@ export function SmartKnobPanel({ connected }: { connected: boolean }) {
       && readyProfile
       && readyEditor
       && readyProfile.configs.length > 0
-      && !mixedOnline
       && (onlineDevices.length <= 1 || selectionConfirmed),
   );
 
@@ -562,15 +576,7 @@ export function SmartKnobPanel({ connected }: { connected: boolean }) {
             </Space>
           )}
 
-          {mixedOnline && (
-            <Alert
-              type="error"
-              showIcon
-              message={t("skMixedBusTitle")}
-              description={t("skMixedBusBody")}
-            />
-          )}
-          {!mixedOnline && onlineDevices.length > 1 && (
+          {onlineDevices.length > 1 && (
             <Alert
               type="info"
               showIcon

@@ -116,23 +116,18 @@ The CAN-FD data phase timing values are:
 | `sjw` | 3 |
 | `brp` | 1 |
 
-### Classic CAN path
+### Frame types on the shared CAN-FD path
 
-`open_classic_1m_bus(spec)` is used by RollerCAN. For `gs_usb`, it opens:
+The adapter channel is opened once with `fd_1m_5m()`. Applications may still
+put a Classic CAN frame on that FD-capable channel when talking to legacy stock
+firmware, but the dedicated RollerCAN SmartKnob firmware uses 8-byte CAN-FD
+frames with BRS in both directions.
 
-```rust
-GsUsbConfig::classic_1m().with_channel(channel)
-```
-
-That means:
-
-- Classic CAN 2.0 only.
-- 1 Mbit/s.
-- CAN-FD is not enabled.
-- Payload arm in the USB frame is 8 bytes instead of 64 bytes.
-
-RollerCAN uses this path because its protocol is extended classic CAN, not
-CAN-FD.
+RollerCAN SmartKnob discovery is lifecycle-scoped: connecting the application
+only installs a receive subscription and emits no FD probe. Mounting the
+SmartKnob workspace enables FD discovery; unmounting it waits for discovery to
+quiesce. Starting the legacy stock RollerCAN Control workspace also disables
+SmartKnob discovery defensively before its first Classic CAN probe.
 
 ## USB Setup Sequence
 
@@ -486,15 +481,16 @@ can_dlc:   12
 flags:     FLAG_FD | FLAG_BRS = 0x06
 ```
 
-### RollerCAN
+### RollerCAN SmartKnob firmware
 
-RollerCAN uses the classic 1 Mbit path, not CAN-FD. It sends extended classic
-CAN data frames.
+The dedicated RollerCAN SmartKnob firmware uses the same fixed 1 Mbit/s
+nominal / 5 Mbit/s data configuration as the other SmartKnob path. Every
+command, response, and telemetry message is an extended CAN-FD frame with BRS.
 
 CAN frame:
 
 ```text
-kind:       classic CAN data frame
+kind:       CAN-FD data frame, BRS enabled
 CAN ID:     extended 29-bit
 payload:    8 bytes
 ```
@@ -562,11 +558,11 @@ The enable sequence writes:
 2. `0x7006 = 0`
 3. `0x7004 = 1`
 
-Because RollerCAN opens the adapter in classic mode, the USB bulk OUT transfer
-for each RollerCAN frame is:
+Because the adapter is in CAN-FD mode, the USB bulk OUT transfer for each
+8-byte RollerCAN SmartKnob frame is:
 
 ```text
-12-byte header + 8-byte data arm = 20 bytes
+12-byte header + 64-byte data arm = 76 bytes
 ```
 
 Example for `cmd = 0x12`, `param = 0`, `host_id = 0`, `target_id = 0x7f`, and
@@ -592,7 +588,7 @@ gs_host_frame:
   can_id       -> 7f 00 00 92
   can_dlc      -> 08
   channel      -> 00 by default
-  flags        -> 00
+  flags        -> 06 (FLAG_FD | FLAG_BRS)
   reserved     -> 00
   data         -> 06 70 00 00 d2 04 00 00
 ```
@@ -607,12 +603,12 @@ When capturing USB traffic with USBPcap/Wireshark or similar tools:
    before `BREQ_MODE`.
 4. Frame traffic should go to bulk OUT endpoint `0x01`.
 5. Received traffic should come from bulk IN endpoint `0x81`.
-6. Classic-mode RollerCAN writes should be 20-byte bulk OUT payloads.
-7. CAN-FD mode SmartKnob/HopeA3 writes should be 76-byte bulk OUT payloads.
+6. RollerCAN SmartKnob, CANopen SmartKnob, and HopeA3 writes should be 76-byte
+   bulk OUT payloads.
+7. RollerCAN SmartKnob frames should be extended CAN-FD frames with BRS.
 8. Byte offsets `4..8` of a bulk OUT payload should decode to the CAN ID plus
    SocketCAN-style flags.
-9. Byte `10` should be `0x06` for CAN-FD+BRS frames and `0x00` for classic
-   RollerCAN frames.
+9. Byte `10` should be `0x06` for every SmartKnob CAN-FD+BRS frame.
 
 ## Common Pitfalls
 
@@ -625,6 +621,7 @@ When capturing USB traffic with USBPcap/Wireshark or similar tools:
   payload is only 8 bytes.
 - TX echo/completion frames from the adapter are not the same as received CAN
   bus frames. The dependency ignores them unless `echo_id == 0xffff_ffff`.
-- RollerCAN is intentionally classic CAN. Opening it through the FD path would
-  change adapter mode and does not match that device protocol.
+- Do not confuse legacy stock RollerCAN firmware with the dedicated SmartKnob
+  firmware. The former may use Classic CAN frames; the latter requires the
+  fixed 1 Mbit/s / 5 Mbit/s CAN-FD+BRS configuration.
 

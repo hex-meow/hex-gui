@@ -22,7 +22,11 @@ fn enc<M: Message>(m: &M) -> Vec<u8> {
     b
 }
 
-async fn query_one<Resp: Message + Default>(session: &zenoh::Session, key: &str, payload: Vec<u8>) -> Option<Resp> {
+async fn query_one<Resp: Message + Default>(
+    session: &zenoh::Session,
+    key: &str,
+    payload: Vec<u8>,
+) -> Option<Resp> {
     let replies = session.get(key).payload(payload).await.ok()?;
     if let Ok(reply) = replies.recv_async().await {
         if let Ok(sample) = reply.result() {
@@ -34,17 +38,34 @@ async fn query_one<Resp: Message + Default>(session: &zenoh::Session, key: &str,
 
 fn op_mode_name(m: i32) -> &'static str {
     match m {
-        1 => "DISABLED", 2 => "ACTIVE", 3 => "PASSIVE", 4 => "GRAVITY_COMP",
-        100 => "FAULT", 101 => "CALIBRATING", _ => "UNSPECIFIED",
+        1 => "DISABLED",
+        2 => "ACTIVE",
+        3 => "PASSIVE",
+        4 => "GRAVITY_COMP",
+        100 => "FAULT",
+        101 => "CALIBRATING",
+        _ => "UNSPECIFIED",
     }
 }
 
 fn grasp_name(v: i32) -> &'static str {
-    match v { 1 => "MOVING", 2 => "AT_POSITION", 3 => "HOLDING", 4 => "LOST", _ => "" }
+    match v {
+        1 => "MOVING",
+        2 => "AT_POSITION",
+        3 => "HOLDING",
+        4 => "LOST",
+        _ => "",
+    }
 }
 
 pub fn kind_name(k: i32) -> &'static str {
-    match k { 1 => "arm", 2 => "base", 3 => "lift", 4 => "ee", _ => "?" } // HAND→EE 改名(11 §0.3)
+    match k {
+        1 => "arm",
+        2 => "base",
+        3 => "lift",
+        4 => "ee",
+        _ => "?",
+    } // HAND→EE 改名(11 §0.3)
 }
 
 /// 发现到的一个 EE。
@@ -64,7 +85,7 @@ pub struct EeInfo {
 /// 设备树节点(机器人控制台的全量发现;所有 kind)。
 #[derive(Serialize, Clone)]
 pub struct RobotNode {
-    pub prefix: String,      // hexmeow/<cid>/<idx>
+    pub prefix: String, // hexmeow/<cid>/<idx>
     pub cid: String,
     pub robot_index: String,
     pub kind: i32,
@@ -88,9 +109,9 @@ pub struct SceneRobot {
 /// 整机挂载边(M3:<cid>/machine queryable 的 DTO 镜像;13 §4)。
 #[derive(Serialize, Clone)]
 pub struct MountEdgeDto {
-    pub parent: String,       // robot id(如 base0)
-    pub parent_link: String,  // 挂载点 link 名(如 arm_mount_0)
-    pub child: String,        // robot id(如 arm0)
+    pub parent: String,      // robot id(如 base0)
+    pub parent_link: String, // 挂载点 link 名(如 arm_mount_0)
+    pub child: String,       // robot id(如 arm0)
     pub xyz: [f32; 3],
     pub rpy: [f32; 3],
 }
@@ -107,15 +128,15 @@ pub struct ConsoleUrdf {
 pub struct ZenohEeState {
     pub controlling: bool,
     pub holder: u32,
-    pub mode: String,            // 我方所设 OperatingMode(取控作用域)
-    pub robot_mode: String,      // STANDBY/RUNNING/OVERTAKEN/FATAL_ERROR(只读观察)
+    pub mode: String,       // 我方所设 OperatingMode(取控作用域)
+    pub robot_mode: String, // STANDBY/RUNNING/OVERTAKEN/FATAL_ERROR(只读观察)
     pub model: String,
     pub prefix: String,
     pub q: Vec<f32>,
     pub dq: Vec<f32>,
     pub tau: Vec<f32>,
-    pub grasp_state: String,     // MOVING/AT_POSITION/HOLDING/LOST(EeStatus,设备侧 1kHz 判定)
-    pub estop_behavior: i32,     // 1=保位 2=松开 3=抗拒张开(EeStatus 回传当前生效值)
+    pub grasp_state: String, // MOVING/AT_POSITION/HOLDING/LOST(EeStatus,设备侧 1kHz 判定)
+    pub estop_behavior: i32, // 1=保位 2=松开 3=抗拒张开(EeStatus 回传当前生效值)
     pub pos_min: Vec<f32>,
     pub pos_max: Vec<f32>,
     pub opening_poly: Vec<f32>,
@@ -147,9 +168,12 @@ impl ZenohEeConn {
         let mut cfg = zenoh::Config::default();
         cfg.insert_json5("mode", "\"peer\"").unwrap();
         if !connect.is_empty() {
-            cfg.insert_json5("connect/endpoints", &format!("[\"{connect}\"]")).unwrap();
+            cfg.insert_json5("connect/endpoints", &format!("[\"{connect}\"]"))
+                .unwrap();
         }
-        let session = zenoh::open(cfg).await.map_err(|e| anyhow!("zenoh open: {e}"))?;
+        let session = zenoh::open(cfg)
+            .await
+            .map_err(|e| anyhow!("zenoh open: {e}"))?;
         tokio::time::sleep(Duration::from_millis(700)).await;
         let ctrl = Arc::new(Ctrl {
             prefix: StdMutex::new(None),
@@ -173,17 +197,25 @@ impl ZenohEeConn {
                 loop {
                     tick.tick().await;
                     let sid = c.session_id.load(Ordering::Relaxed);
-                    if sid == 0 { continue; }
-                    let Some(prefix) = c.prefix.lock().unwrap().clone() else { continue };
-                    let Some(q) = *c.target.lock().unwrap() else { continue };
+                    if sid == 0 {
+                        continue;
+                    }
+                    let Some(prefix) = c.prefix.lock().unwrap().clone() else {
+                        continue;
+                    };
+                    let Some(q) = *c.target.lock().unwrap() else {
+                        continue;
+                    };
                     let kp = *c.kp.lock().unwrap();
                     let jt = pb::JointTrajectory {
                         header: None,
                         session_id: sid,
                         points: vec![pb::JointSetpoint {
-                            q: vec![q], dq: vec![],
+                            q: vec![q],
+                            dq: vec![],
                             kp: kp.map(|k| vec![k]).unwrap_or_default(), // 空 = 控制器默认增益
-                            kd: vec![], tau_ff: vec![],
+                            kd: vec![],
+                            tau_ff: vec![],
                         }],
                         t_from_start_ns: vec![20_000_000], // 一阶保持(发送周期),滑条拖动更平滑
                         on_timeout: pb::TimeoutBehavior::Hold as i32,
@@ -193,15 +225,24 @@ impl ZenohEeConn {
             });
         }
         // ee/joint_state 订阅(按观察 prefix 精确匹配;读永远开放)。
-        if let Ok(sub) = session.declare_subscriber("hexmeow/**/ee/joint_state").await {
+        if let Ok(sub) = session
+            .declare_subscriber("hexmeow/**/ee/joint_state")
+            .await
+        {
             let c = ctrl.clone();
             tokio::spawn(async move {
                 while let Ok(sample) = sub.recv_async().await {
-                    let Some(p) = c.view_prefix.lock().unwrap().clone() else { continue };
-                    if sample.key_expr().as_str() != format!("{p}/ee/joint_state") { continue; }
+                    let Some(p) = c.view_prefix.lock().unwrap().clone() else {
+                        continue;
+                    };
+                    if sample.key_expr().as_str() != format!("{p}/ee/joint_state") {
+                        continue;
+                    }
                     if let Ok(js) = pb::JointState::decode(&*sample.payload().to_bytes()) {
                         let mut st = c.state.lock().unwrap();
-                        st.q = js.q; st.dq = js.dq; st.tau = js.tau_est;
+                        st.q = js.q;
+                        st.dq = js.dq;
+                        st.tau = js.tau_est;
                     }
                 }
             });
@@ -214,16 +255,23 @@ impl ZenohEeConn {
             let c = ctrl.clone();
             tokio::spawn(async move {
                 use std::time::Instant;
-                let mut seq_track: std::collections::HashMap<String, (u64, u32, Instant)> = std::collections::HashMap::new();
+                let mut seq_track: std::collections::HashMap<String, (u64, u32, Instant)> =
+                    std::collections::HashMap::new();
                 while let Ok(sample) = sub.recv_async().await {
                     let key = sample.key_expr().as_str();
                     // hexmeow/<cid>/<idx>/<kind>/joint_state → 前 3 段 = robot prefix
                     let parts: Vec<&str> = key.split('/').collect();
-                    if parts.len() != 5 { continue; }
+                    if parts.len() != 5 {
+                        continue;
+                    }
                     let prefix = parts[..3].join("/");
                     if let Ok(js) = pb::JointState::decode(&*sample.payload().to_bytes()) {
                         if let Some(seq) = js.header.as_ref().map(|h| h.seq) {
-                            let e = seq_track.entry(prefix.clone()).or_insert((seq, 0u32, Instant::now()));
+                            let e = seq_track.entry(prefix.clone()).or_insert((
+                                seq,
+                                0u32,
+                                Instant::now(),
+                            ));
                             // 判定要点(修误报):**5s 窗口内的回退频率**才是双发布者特征——
                             // ①相邻 ±5 乱序(调度抖动)不计;②大跳(>10k)= 重启重置基线,单次不计;
                             // 但双发布者计数器相距很远时每个样本都触发大跳 → 按频率照样报。
@@ -231,15 +279,17 @@ impl ZenohEeConn {
                             if seq >= last {
                                 e.0 = seq;
                             } else if last - seq > 10_000 {
-                                e.0 = seq; e.1 += 1; // 重启(窗口内 1 次,不报)或远距双发布者(高频,报)
+                                e.0 = seq;
+                                e.1 += 1; // 重启(窗口内 1 次,不报)或远距双发布者(高频,报)
                             } else if last - seq > 5 {
-                                e.1 += 1;            // 近距交替回退(双发布者典型)
+                                e.1 += 1; // 近距交替回退(双发布者典型)
                             }
                             if e.2.elapsed().as_secs() >= 5 {
                                 if e.1 >= 20 {
                                     log::warn!("{prefix}/joint_state seq 5s 内回退 {} 次——疑似双发布者(孤儿进程?),3D 会两套位形闪烁", e.1);
                                 }
-                                e.1 = 0; e.2 = Instant::now();
+                                e.1 = 0;
+                                e.2 = Instant::now();
                             }
                         }
                         c.scene_joints.lock().unwrap().insert(prefix, js.q);
@@ -252,8 +302,12 @@ impl ZenohEeConn {
             let c = ctrl.clone();
             tokio::spawn(async move {
                 while let Ok(sample) = sub.recv_async().await {
-                    let Some(p) = c.view_prefix.lock().unwrap().clone() else { continue };
-                    if sample.key_expr().as_str() != format!("{p}/ee/status") { continue; }
+                    let Some(p) = c.view_prefix.lock().unwrap().clone() else {
+                        continue;
+                    };
+                    if sample.key_expr().as_str() != format!("{p}/ee/status") {
+                        continue;
+                    }
                     if let Ok(es) = pb::EeStatus::decode(&*sample.payload().to_bytes()) {
                         let mut st = c.state.lock().unwrap();
                         st.grasp_state = grasp_name(es.grasp_state).into();
@@ -267,7 +321,9 @@ impl ZenohEeConn {
             let c = ctrl.clone();
             tokio::spawn(async move {
                 while let Ok(sample) = sub.recv_async().await {
-                    let Ok(s) = pb::RobotStatus::decode(&*sample.payload().to_bytes()) else { continue };
+                    let Ok(s) = pb::RobotStatus::decode(&*sample.payload().to_bytes()) else {
+                        continue;
+                    };
                     let key = sample.key_expr().as_str();
                     if let Some(vp) = c.view_prefix.lock().unwrap().clone() {
                         if key == format!("{vp}/status") {
@@ -277,14 +333,20 @@ impl ZenohEeConn {
                             st.robot_mode = crate::diag::robot_mode_name(s.mode).into();
                         }
                     }
-                    let Some(p) = c.prefix.lock().unwrap().clone() else { continue };
-                    if key != format!("{p}/status") { continue; }
+                    let Some(p) = c.prefix.lock().unwrap().clone() else {
+                        continue;
+                    };
+                    if key != format!("{p}/status") {
+                        continue;
+                    }
                     let our_sid = c.session_id.load(Ordering::Relaxed);
                     if our_sid != 0 && s.session_holder != our_sid {
                         c.session_id.store(0, Ordering::Relaxed);
                         *c.target.lock().unwrap() = None;
                         let mut st = c.state.lock().unwrap();
-                        st.controlling = false; st.holder = s.session_holder; st.mode = "DISABLED".into();
+                        st.controlling = false;
+                        st.holder = s.session_holder;
+                        st.mode = "DISABLED".into();
                         log::warn!("EE: 失去控制权(当前 holder={})", s.session_holder);
                     }
                 }
@@ -298,12 +360,30 @@ impl ZenohEeConn {
     pub async fn discover(&self) -> Vec<EeInfo> {
         let mut out = Vec::new();
         for n in self.discover_all().await {
-            if n.kind != pb::RobotKind::Ee as i32 { continue; }
-            let mut info = EeInfo { prefix: n.prefix.clone(), model: n.model, ..Default::default() };
-            if let Some(d) = query_one::<pb::EeDescription>(&self.session, &format!("{}/ee/description", n.prefix), vec![]).await {
-                info.dof = d.dof; info.joint_names = d.joint_names;
-                info.pos_min = d.pos_min; info.pos_max = d.pos_max; info.tau_max = d.tau_max;
-                if let Some(m) = d.opening_map { info.opening_poly = m.poly; info.width_max = m.width_max; }
+            if n.kind != pb::RobotKind::Ee as i32 {
+                continue;
+            }
+            let mut info = EeInfo {
+                prefix: n.prefix.clone(),
+                model: n.model,
+                ..Default::default()
+            };
+            if let Some(d) = query_one::<pb::EeDescription>(
+                &self.session,
+                &format!("{}/ee/description", n.prefix),
+                vec![],
+            )
+            .await
+            {
+                info.dof = d.dof;
+                info.joint_names = d.joint_names;
+                info.pos_min = d.pos_min;
+                info.pos_max = d.pos_max;
+                info.tau_max = d.tau_max;
+                if let Some(m) = d.opening_map {
+                    info.opening_poly = m.poly;
+                    info.width_max = m.width_max;
+                }
             }
             out.push(info);
         }
@@ -322,7 +402,8 @@ impl ZenohEeConn {
                         let parts: Vec<&str> = prefix.split('/').collect(); // hexmeow/<cid>/<idx>
                         let cid = parts.get(1).unwrap_or(&"").to_string();
                         out.push(RobotNode {
-                            prefix, cid,
+                            prefix,
+                            cid,
                             robot_index: d.robot_index.clone(),
                             kind: d.kind,
                             kind_name: kind_name(d.kind).into(),
@@ -335,31 +416,74 @@ impl ZenohEeConn {
         out.sort_by(|a, b| (&a.cid, &a.robot_index).cmp(&(&b.cid, &b.robot_index)));
         // M2:缓存节点 + 补关节名(3s 发现节拍上做,scene() 纯读不触网)。
         for n in &out {
-            let have = self.ctrl.scene_names.lock().unwrap().contains_key(&n.prefix);
-            if have { continue; }
+            let have = self
+                .ctrl
+                .scene_names
+                .lock()
+                .unwrap()
+                .contains_key(&n.prefix);
+            if have {
+                continue;
+            }
             let names: Option<Vec<String>> = match n.kind_name.as_str() {
-                "arm" => query_one::<pb::ArmDescription>(&self.session, &format!("{}/arm/description", n.prefix), vec![]).await.map(|d| d.joint_names),
-                "ee" => query_one::<pb::EeDescription>(&self.session, &format!("{}/ee/description", n.prefix), vec![]).await.map(|d| d.joint_names),
-                "lift" => query_one::<pb::LiftDescription>(&self.session, &format!("{}/lift/description", n.prefix), vec![]).await.map(|d| d.joint_names),
+                "arm" => query_one::<pb::ArmDescription>(
+                    &self.session,
+                    &format!("{}/arm/description", n.prefix),
+                    vec![],
+                )
+                .await
+                .map(|d| d.joint_names),
+                "ee" => query_one::<pb::EeDescription>(
+                    &self.session,
+                    &format!("{}/ee/description", n.prefix),
+                    vec![],
+                )
+                .await
+                .map(|d| d.joint_names),
+                "lift" => query_one::<pb::LiftDescription>(
+                    &self.session,
+                    &format!("{}/lift/description", n.prefix),
+                    vec![],
+                )
+                .await
+                .map(|d| d.joint_names),
                 _ => Some(vec![]), // base 等:无关节名(前端画占位盒)
             };
             if let Some(names) = names {
-                self.ctrl.scene_names.lock().unwrap().insert(n.prefix.clone(), names);
+                self.ctrl
+                    .scene_names
+                    .lock()
+                    .unwrap()
+                    .insert(n.prefix.clone(), names);
             }
         }
         // M3:每 cid 取一次 <cid>/machine(无 machine 段 = 无 key = 散装,三态①)。
         let cids: std::collections::HashSet<String> = out.iter().map(|n| n.cid.clone()).collect();
         for cid in cids {
             let key = format!("hexmeow/{cid}/machine");
-            let edges = query_one::<pb::MachineLayout>(&self.session, &key, vec![]).await.map(|m| {
-                m.edges.into_iter().map(|e| MountEdgeDto {
-                    parent: e.parent, parent_link: e.parent_link, child: e.child,
-                    xyz: e.xyz.map(|v| [v.x, v.y, v.z]).unwrap_or_default(),
-                    rpy: e.rpy.map(|v| [v.x, v.y, v.z]).unwrap_or_default(),
-                }).collect::<Vec<_>>()
-            });
+            let edges = query_one::<pb::MachineLayout>(&self.session, &key, vec![])
+                .await
+                .map(|m| {
+                    m.edges
+                        .into_iter()
+                        .map(|e| MountEdgeDto {
+                            parent: e.parent,
+                            parent_link: e.parent_link,
+                            child: e.child,
+                            xyz: e.xyz.map(|v| [v.x, v.y, v.z]).unwrap_or_default(),
+                            rpy: e.rpy.map(|v| [v.x, v.y, v.z]).unwrap_or_default(),
+                        })
+                        .collect::<Vec<_>>()
+                });
             let mut g = self.ctrl.machines.lock().unwrap();
-            match edges { Some(e) => { g.insert(cid, e); } None => { g.remove(&cid); } }
+            match edges {
+                Some(e) => {
+                    g.insert(cid, e);
+                }
+                None => {
+                    g.remove(&cid);
+                }
+            }
         }
         *self.ctrl.scene_nodes.lock().unwrap() = out.clone();
         out
@@ -375,25 +499,46 @@ impl ZenohEeConn {
         let nodes = self.ctrl.scene_nodes.lock().unwrap().clone();
         let joints = self.ctrl.scene_joints.lock().unwrap();
         let names = self.ctrl.scene_names.lock().unwrap();
-        nodes.into_iter().map(|n| SceneRobot {
-            joint_names: names.get(&n.prefix).cloned().unwrap_or_default(),
-            q: joints.get(&n.prefix).cloned().unwrap_or_default(),
-            prefix: n.prefix, cid: n.cid, robot_index: n.robot_index,
-            kind_name: n.kind_name, model: n.model,
-        }).collect()
+        nodes
+            .into_iter()
+            .map(|n| SceneRobot {
+                joint_names: names.get(&n.prefix).cloned().unwrap_or_default(),
+                q: joints.get(&n.prefix).cloned().unwrap_or_default(),
+                prefix: n.prefix,
+                cid: n.cid,
+                robot_index: n.robot_index,
+                kind_name: n.kind_name,
+                model: n.model,
+            })
+            .collect()
     }
 
     /// 通用 URDF 取用(M2):先机器人级 <prefix>/urdf(臂=整机拼装),退 <prefix>/<kind>/urdf。
     pub async fn get_urdf(&self, prefix: &str, kind_name: &str) -> Option<ConsoleUrdf> {
-        if let Some(u) = query_one::<pb::UrdfResource>(&self.session, &format!("{prefix}/urdf"), vec![]).await {
+        if let Some(u) =
+            query_one::<pb::UrdfResource>(&self.session, &format!("{prefix}/urdf"), vec![]).await
+        {
             if !u.xml.is_empty() {
                 let assembled = u.xml.contains("<joint name=\"ee_mount\"");
-                return Some(ConsoleUrdf { xml: u.xml, assembled });
+                return Some(ConsoleUrdf {
+                    xml: u.xml,
+                    assembled,
+                });
             }
         }
-        let u = query_one::<pb::UrdfResource>(&self.session, &format!("{prefix}/{kind_name}/urdf"), vec![]).await?;
-        if u.xml.is_empty() { return None; }
-        Some(ConsoleUrdf { xml: u.xml, assembled: false })
+        let u = query_one::<pb::UrdfResource>(
+            &self.session,
+            &format!("{prefix}/{kind_name}/urdf"),
+            vec![],
+        )
+        .await?;
+        if u.xml.is_empty() {
+            return None;
+        }
+        Some(ConsoleUrdf {
+            xml: u.xml,
+            assembled: false,
+        })
     }
 
     pub async fn acquire(&self, prefix: &str, model: &str) -> anyhow::Result<()> {
@@ -401,23 +546,51 @@ impl ZenohEeConn {
         // 一个模块同时只持一台,同 kind 多持是后续项)。
         if self.ctrl.session_id.load(Ordering::Relaxed) != 0 {
             let cur = self.ctrl.prefix.lock().unwrap().clone();
-            if cur.as_deref() != Some(prefix) { self.release().await; }
+            if cur.as_deref() != Some(prefix) {
+                self.release().await;
+            }
         }
-        let req = pb::AcquireSessionRequest { client_name: Some("hex-motor-gui".into()), liveliness_key: None };
-        let resp: pb::AcquireSessionResponse = query_one(&self.session, &format!("{prefix}/rpc/acquire_session"), enc(&req))
-            .await.ok_or_else(|| anyhow!("acquire 无回复"))?;
+        let req = pb::AcquireSessionRequest {
+            client_name: Some("hex-motor-gui".into()),
+            liveliness_key: None,
+        };
+        let resp: pb::AcquireSessionResponse = query_one(
+            &self.session,
+            &format!("{prefix}/rpc/acquire_session"),
+            enc(&req),
+        )
+        .await
+        .ok_or_else(|| anyhow!("acquire 无回复"))?;
         if !resp.ok {
-            return Err(anyhow!("被占用:holder {} {:?}", resp.current_holder, resp.current_holder_name));
+            return Err(anyhow!(
+                "被占用:holder {} {:?}",
+                resp.current_holder,
+                resp.current_holder_name
+            ));
         }
-        self.ctrl.session_id.store(resp.session_id, Ordering::Relaxed);
+        self.ctrl
+            .session_id
+            .store(resp.session_id, Ordering::Relaxed);
         *self.ctrl.prefix.lock().unwrap() = Some(prefix.to_string());
         *self.ctrl.view_prefix.lock().unwrap() = Some(prefix.to_string()); // 取控隐含观察
-        let desc = query_one::<pb::EeDescription>(&self.session, &format!("{prefix}/ee/description"), vec![]).await;
+        let desc = query_one::<pb::EeDescription>(
+            &self.session,
+            &format!("{prefix}/ee/description"),
+            vec![],
+        )
+        .await;
         let mut st = self.ctrl.state.lock().unwrap();
-        st.controlling = true; st.prefix = prefix.into(); st.model = model.into(); st.mode = "DISABLED".into();
+        st.controlling = true;
+        st.prefix = prefix.into();
+        st.model = model.into();
+        st.mode = "DISABLED".into();
         if let Some(d) = desc {
-            st.pos_min = d.pos_min; st.pos_max = d.pos_max;
-            if let Some(m) = d.opening_map { st.opening_poly = m.poly; st.width_max = m.width_max; }
+            st.pos_min = d.pos_min;
+            st.pos_max = d.pos_max;
+            if let Some(m) = d.opening_map {
+                st.opening_poly = m.poly;
+                st.width_max = m.width_max;
+            }
         }
         Ok(())
     }
@@ -427,36 +600,76 @@ impl ZenohEeConn {
         *self.ctrl.view_prefix.lock().unwrap() = Some(prefix.to_string());
         {
             let mut st = self.ctrl.state.lock().unwrap();
-            st.fatal = false; st.holder = 0; st.robot_mode.clear(); st.grasp_state.clear();
-            st.q.clear(); st.dq.clear(); st.tau.clear();
-            st.pos_min.clear(); st.pos_max.clear(); st.opening_poly.clear(); st.width_max = 0.0;
+            st.fatal = false;
+            st.holder = 0;
+            st.robot_mode.clear();
+            st.grasp_state.clear();
+            st.q.clear();
+            st.dq.clear();
+            st.tau.clear();
+            st.pos_min.clear();
+            st.pos_max.clear();
+            st.opening_poly.clear();
+            st.width_max = 0.0;
             st.mode.clear();
         }
-        if let Some(d) = query_one::<pb::EeDescription>(&self.session, &format!("{prefix}/ee/description"), vec![]).await {
+        if let Some(d) = query_one::<pb::EeDescription>(
+            &self.session,
+            &format!("{prefix}/ee/description"),
+            vec![],
+        )
+        .await
+        {
             let mut st = self.ctrl.state.lock().unwrap();
-            st.pos_min = d.pos_min; st.pos_max = d.pos_max;
-            if let Some(m) = d.opening_map { st.opening_poly = m.poly; st.width_max = m.width_max; }
+            st.pos_min = d.pos_min;
+            st.pos_max = d.pos_max;
+            if let Some(m) = d.opening_map {
+                st.opening_poly = m.poly;
+                st.width_max = m.width_max;
+            }
         }
     }
 
     /// 开合到 q(进 ACTIVE + 50Hz 流)。kp=None → 控制器默认增益;Some(k) → 限力/柔顺抓取用小 kp。
     pub async fn goto(&self, q: f32, kp: Option<f32>) -> anyhow::Result<()> {
         let sid = self.ctrl.session_id.load(Ordering::Relaxed);
-        if sid == 0 { return Err(anyhow!("未持有控制权")); }
+        if sid == 0 {
+            return Err(anyhow!("未持有控制权"));
+        }
         *self.ctrl.kp.lock().unwrap() = kp;
         *self.ctrl.target.lock().unwrap() = Some(q);
-        let req = pb::SetModeRequest { session_id: sid, mode: 2 };
-        let _: Option<pb::GenericResponse> = query_one(&self.session, &format!("{}/rpc/set_mode", self.prefix()), enc(&req)).await;
+        let req = pb::SetModeRequest {
+            session_id: sid,
+            mode: 2,
+        };
+        let _: Option<pb::GenericResponse> = query_one(
+            &self.session,
+            &format!("{}/rpc/set_mode", self.prefix()),
+            enc(&req),
+        )
+        .await;
         self.ctrl.state.lock().unwrap().mode = "ACTIVE".into();
         Ok(())
     }
 
     pub async fn set_mode(&self, mode: i32) -> anyhow::Result<()> {
         let sid = self.ctrl.session_id.load(Ordering::Relaxed);
-        if sid == 0 { return Err(anyhow!("未持有控制权")); }
-        if mode != 2 { *self.ctrl.target.lock().unwrap() = None; }
-        let req = pb::SetModeRequest { session_id: sid, mode };
-        let _: Option<pb::GenericResponse> = query_one(&self.session, &format!("{}/rpc/set_mode", self.prefix()), enc(&req)).await;
+        if sid == 0 {
+            return Err(anyhow!("未持有控制权"));
+        }
+        if mode != 2 {
+            *self.ctrl.target.lock().unwrap() = None;
+        }
+        let req = pb::SetModeRequest {
+            session_id: sid,
+            mode,
+        };
+        let _: Option<pb::GenericResponse> = query_one(
+            &self.session,
+            &format!("{}/rpc/set_mode", self.prefix()),
+            enc(&req),
+        )
+        .await;
         self.ctrl.state.lock().unwrap().mode = op_mode_name(mode).into();
         Ok(())
     }
@@ -464,21 +677,51 @@ impl ZenohEeConn {
     /// estop 期间姿态(11 §10):1=HOLD_POSITION 2=RELEASE 3=KEEP_GRIP。
     pub async fn set_estop_behavior(&self, behavior: i32) -> anyhow::Result<()> {
         let sid = self.ctrl.session_id.load(Ordering::Relaxed);
-        if sid == 0 { return Err(anyhow!("未持有控制权")); }
-        let req = pb::SetEstopBehaviorRequest { session_id: sid, behavior };
-        let resp: pb::GenericResponse = query_one(&self.session, &format!("{}/ee/rpc/set_estop_behavior", self.prefix()), enc(&req))
-            .await.ok_or_else(|| anyhow!("set_estop_behavior 无回复"))?;
-        if resp.ok { Ok(()) } else { Err(anyhow!(resp.error.unwrap_or_else(|| "失败".into()))) }
+        if sid == 0 {
+            return Err(anyhow!("未持有控制权"));
+        }
+        let req = pb::SetEstopBehaviorRequest {
+            session_id: sid,
+            behavior,
+        };
+        let resp: pb::GenericResponse = query_one(
+            &self.session,
+            &format!("{}/ee/rpc/set_estop_behavior", self.prefix()),
+            enc(&req),
+        )
+        .await
+        .ok_or_else(|| anyhow!("set_estop_behavior 无回复"))?;
+        if resp.ok {
+            Ok(())
+        } else {
+            Err(anyhow!(resp.error.unwrap_or_else(|| "失败".into())))
+        }
     }
 
     pub async fn clear_fault(&self) -> anyhow::Result<()> {
         let sid = self.ctrl.session_id.load(Ordering::Relaxed);
-        if sid == 0 { return Err(anyhow!("未持有控制权(clear_fault 需先取控)")); }
+        if sid == 0 {
+            return Err(anyhow!("未持有控制权(clear_fault 需先取控)"));
+        }
         // EE 托管侧 clear_fault 复用 EnableRequest 形状(只看 session_id)。
-        let req = pb::EnableRequest { session_id: sid, on: false };
-        let resp: pb::GenericResponse = query_one(&self.session, &format!("{}/rpc/clear_fault", self.prefix()), enc(&req))
-            .await.ok_or_else(|| anyhow!("clear_fault 无回复"))?;
-        if resp.ok { Ok(()) } else { Err(anyhow!(resp.error.unwrap_or_else(|| "clear_fault 失败".into()))) }
+        let req = pb::EnableRequest {
+            session_id: sid,
+            on: false,
+        };
+        let resp: pb::GenericResponse = query_one(
+            &self.session,
+            &format!("{}/rpc/clear_fault", self.prefix()),
+            enc(&req),
+        )
+        .await
+        .ok_or_else(|| anyhow!("clear_fault 无回复"))?;
+        if resp.ok {
+            Ok(())
+        } else {
+            Err(anyhow!(resp
+                .error
+                .unwrap_or_else(|| "clear_fault 失败".into())))
+        }
     }
 
     pub fn state(&self) -> ZenohEeState {
@@ -491,11 +734,18 @@ impl ZenohEeConn {
         let prefix = self.ctrl.prefix.lock().unwrap().clone();
         if let (Some(prefix), true) = (prefix, sid != 0) {
             let req = pb::ReleaseSessionRequest { session_id: sid };
-            let _: Option<pb::GenericResponse> = query_one(&self.session, &format!("{prefix}/rpc/release_session"), enc(&req)).await;
+            let _: Option<pb::GenericResponse> = query_one(
+                &self.session,
+                &format!("{prefix}/rpc/release_session"),
+                enc(&req),
+            )
+            .await;
         }
         *self.ctrl.prefix.lock().unwrap() = None;
         let mut st = self.ctrl.state.lock().unwrap();
-        st.controlling = false; st.holder = 0; st.mode = "DISABLED".into();
+        st.controlling = false;
+        st.holder = 0;
+        st.mode = "DISABLED".into();
     }
 
     fn prefix(&self) -> String {
