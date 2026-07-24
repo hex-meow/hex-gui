@@ -20,6 +20,7 @@ mod state;
 mod zenoh_arm;
 mod zenoh_base;
 mod zenoh_config;
+mod zenoh_discovery;
 mod zenoh_ee;
 mod zenoh_hw;
 mod zenoh_wifi;

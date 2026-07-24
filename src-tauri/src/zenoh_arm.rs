@@ -13,6 +13,9 @@ use prost::Message;
 use serde::Serialize;
 
 use crate::diag;
+use crate::zenoh_discovery::{
+    robot_prefix_from_description_reply, ROBOT_DESCRIPTION_SELECTOR,
+};
 
 pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/robot_api.rs"));
@@ -275,13 +278,16 @@ impl ZenohArmConn {
 
     pub async fn discover(&self) -> Vec<ArmInfo> {
         let mut out = Vec::new();
-        if let Ok(replies) = self.session.get("hexmeow/**/description").await {
+        if let Ok(replies) = self.session.get(ROBOT_DESCRIPTION_SELECTOR).await {
             while let Ok(reply) = replies.recv_async().await {
                 if let Ok(sample) = reply.result() {
                     if let Ok(d) = pb::RobotDescription::decode(&*sample.payload().to_bytes()) {
                         if d.kind == pb::RobotKind::Arm as i32 {
                             let key = sample.key_expr().as_str();
-                            let prefix = key.strip_suffix("/description").unwrap_or(key).to_string();
+                            let Some(prefix) =
+                                robot_prefix_from_description_reply(key, &d.robot_index)
+                            else { continue };
+                            let prefix = prefix.to_string();
                             // EE:device_keys 里有 /ee 即视为装了 EE(目前没夹爪 → 多半 false)。
                             let has_ee = d.device_keys.iter().any(|k| k.ends_with("/ee"));
                             let dof = query_one::<pb::ArmDescription>(&self.session, &format!("{prefix}/arm/description"), vec![])

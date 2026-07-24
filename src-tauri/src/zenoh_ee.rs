@@ -12,6 +12,10 @@ use anyhow::anyhow;
 use prost::Message;
 use serde::Serialize;
 
+use crate::zenoh_discovery::{
+    robot_prefix_from_description_reply, ROBOT_DESCRIPTION_SELECTOR,
+};
+
 pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/robot_api.rs"));
 }
@@ -326,12 +330,15 @@ impl ZenohEeConn {
     /// 全量发现(机器人控制台设备树):一次 query 拿所有 kind 的 robot。
     pub async fn discover_all(&self) -> Vec<RobotNode> {
         let mut out = Vec::new();
-        if let Ok(replies) = self.session.get("hexmeow/**/description").await {
+        if let Ok(replies) = self.session.get(ROBOT_DESCRIPTION_SELECTOR).await {
             while let Ok(reply) = replies.recv_async().await {
                 if let Ok(sample) = reply.result() {
                     if let Ok(d) = pb::RobotDescription::decode(&*sample.payload().to_bytes()) {
                         let key = sample.key_expr().as_str();
-                        let prefix = key.strip_suffix("/description").unwrap_or(key).to_string();
+                        let Some(prefix) =
+                            robot_prefix_from_description_reply(key, &d.robot_index)
+                        else { continue };
+                        let prefix = prefix.to_string();
                         let parts: Vec<&str> = prefix.split('/').collect(); // hexmeow/<cid>/<idx>
                         let cid = parts.get(1).unwrap_or(&"").to_string();
                         out.push(RobotNode {

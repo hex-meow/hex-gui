@@ -12,6 +12,9 @@ use prost::Message;
 use serde::Serialize;
 
 use crate::diag;
+use crate::zenoh_discovery::{
+    robot_prefix_from_description_reply, ROBOT_DESCRIPTION_SELECTOR,
+};
 
 pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/robot_api.rs"));
@@ -59,6 +62,16 @@ fn to_event(ev: pb::Event) -> diag::RobotEvent {
 pub struct BaseInfo {
     pub prefix: String,
     pub model: String,
+}
+
+fn decode_base_info_reply(key: &str, payload: &[u8]) -> Option<BaseInfo> {
+    let description = pb::RobotDescription::decode(payload).ok()?;
+    if description.kind != pb::RobotKind::Base as i32 {
+        return None;
+    }
+    let prefix =
+        robot_prefix_from_description_reply(key, &description.robot_index)?;
+    Some(BaseInfo { prefix: prefix.to_string(), model: description.model })
 }
 
 /// 推给前端的状态快照。
@@ -211,15 +224,14 @@ impl ZenohConn {
 
     pub async fn discover(&self) -> Vec<BaseInfo> {
         let mut out = Vec::new();
-        if let Ok(replies) = self.session.get("hexmeow/**/description").await {
+        if let Ok(replies) = self.session.get(ROBOT_DESCRIPTION_SELECTOR).await {
             while let Ok(reply) = replies.recv_async().await {
                 if let Ok(sample) = reply.result() {
-                    if let Ok(d) = pb::RobotDescription::decode(&*sample.payload().to_bytes()) {
-                        if d.kind == pb::RobotKind::Base as i32 {
-                            let key = sample.key_expr().as_str();
-                            let prefix = key.strip_suffix("/description").unwrap_or(key).to_string();
-                            out.push(BaseInfo { prefix, model: d.model });
-                        }
+                    let payload = sample.payload().to_bytes();
+                    if let Some(info) =
+                        decode_base_info_reply(sample.key_expr().as_str(), &payload)
+                    {
+                        out.push(info);
                     }
                 }
             }
@@ -353,5 +365,45 @@ impl ZenohConn {
 
     fn prefix(&self) -> String {
         self.ctrl.prefix.lock().unwrap().clone().unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conway_device_description_cannot_be_discovered_as_a_second_base() {
+        let nested = pb::BaseDescription {
+            kinematics: "diff2".into(),
+            wheel_count: 2,
+            default_limits: Some(pb::BaseLimits::default()),
+        };
+        let mut payload = Vec::new();
+        nested.encode(&mut payload).unwrap();
+
+        assert!(decode_base_info_reply(
+            "hexmeow/controller-1/base0/base/description",
+            &payload
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn robot_description_decodes_to_the_expected_base() {
+        let robot = pb::RobotDescription {
+            robot_index: "base0".into(),
+            kind: pb::RobotKind::Base as i32,
+            model: "conway_a2".into(),
+            ..Default::default()
+        };
+        let mut payload = Vec::new();
+        robot.encode(&mut payload).unwrap();
+
+        let info =
+            decode_base_info_reply("hexmeow/controller-1/base0/description", &payload)
+                .expect("valid robot description");
+        assert_eq!(info.prefix, "hexmeow/controller-1/base0");
+        assert_eq!(info.model, "conway_a2");
     }
 }
