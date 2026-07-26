@@ -10,6 +10,9 @@ function defaultIface(): string {
   return /linux/i.test(navigator.userAgent) ? "can0" : "gs_usb0";
 }
 
+// Global CANopen allocation: the direct-CAN host is node 10 (`0x0A`).
+const DEFAULT_HOST_NID = "0x0A";
+
 export function ConnectBar({
   connected,
   onChange,
@@ -22,7 +25,7 @@ export function ConnectBar({
   const { message } = App.useApp();
   const { t } = useI18n();
   const [iface, setIface] = useState(defaultIface);
-  const [ourNid, setOurNid] = useState("0x10");
+  const [ourNid, setOurNid] = useState(DEFAULT_HOST_NID);
   const [busy, setBusy] = useState(false);
 
   const connect = async () => {
@@ -68,7 +71,7 @@ export function ConnectBar({
         value={ourNid}
         disabled={connected}
         onChange={(e) => setOurNid(e.target.value)}
-        placeholder="0x10"
+        placeholder={DEFAULT_HOST_NID}
       />
       {connected ? (
         <Button danger loading={busy} onClick={disconnect}>

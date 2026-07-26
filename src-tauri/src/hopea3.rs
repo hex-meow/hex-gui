@@ -38,8 +38,9 @@ use tokio::task::JoinHandle;
 
 // NOTE: the 4310/4342 motors report **and** accept velocity at the *output*
 // (post-gearbox) shaft — i.e. the wheel shaft — so the reduction ratio cancels
-// out of the kinematics entirely. `0x60FF` target velocity and the feedback
-// velocity are both wheel rev/s; no gear factor is applied anywhere below.
+// out of the kinematics entirely. The uncompressed-MIT velocity target
+// (`0x2003:02`) and feedback velocity are both wheel rev/s; no gear factor is
+// applied anywhere below.
 
 /// Wheel radius (m). Wheel diameter is 0.154 m.
 const WHEEL_RADIUS_M: f64 = 0.077;
@@ -48,9 +49,12 @@ const WHEEL_RADIUS_M: f64 = 0.077;
 /// The wheel-centre circle diameter is 0.648 m.
 const WHEEL_CENTER_DISTANCE_M: f64 = 0.324;
 
+/// Global CANopen host allocation: decimal 10 (`0x0A`).
+const HOST_NODE_ID: u8 = 10;
+
 /// The three motors' Node-IDs, indexed the same as [`CONTACTS_M`]:
 /// `[motor1 (top-left), motor2 (bottom), motor3 (top-right)]`.
-const NODE_IDS: [u8; 3] = [1, 2, 3];
+const NODE_IDS: [u8; 3] = [21, 22, 23];
 
 /// Wheel ground-contact points in the chassis frame (ROS convention: +X
 /// forward toward the "head" = the motor-1↔motor-3 edge, +Y left, +Z up),
@@ -84,10 +88,9 @@ const BODY_OFFSET_M: [f64; 2] = [0.0, 0.0];
 /// the other way on hardware.
 const WHEEL_SIGN: [f64; 3] = [1.0, 1.0, 1.0];
 
-/// Shared CAN-FD COB-ID that all three motors listen to as RPDO1. Chosen clear
-/// of every motor's TPDO (`0x180+nid`), heartbeat (`0x700+nid`) and SDO
-/// (`0x580/0x600+nid`). `0x200 + 0x10` (our master node).
-const SHARED_RPDO_COB_ID: u16 = 0x210;
+/// Shared CAN-FD COB-ID that all three motors listen to as RPDO1.
+/// Uses the global host-10 TPDO1 convention (`0x180 + 0x0A = 0x18A`).
+const SHARED_RPDO_COB_ID: u16 = 0x180 + HOST_NODE_ID as u16;
 
 /// Control / odometry loop rate.
 const CONTROL_HZ: u64 = 500;
@@ -770,7 +773,14 @@ fn wrap_pi(a: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{CONTACTS_M, WHEEL_RADIUS_M};
+    use super::{CONTACTS_M, HOST_NODE_ID, NODE_IDS, SHARED_RPDO_COB_ID, WHEEL_RADIUS_M};
+
+    #[test]
+    fn canopen_allocation_matches_global_contract() {
+        assert_eq!(HOST_NODE_ID, 10);
+        assert_eq!(NODE_IDS, [21, 22, 23]);
+        assert_eq!(SHARED_RPDO_COB_ID, 0x18A);
+    }
 
     #[test]
     fn wheel_diameter_is_154_mm() {

@@ -252,8 +252,8 @@ const STRINGS = {
   tagQuickStart: { en: "Quick start", zh: "快速上手" },
   toolHopeA3: { en: "HopeA3(Raw Motor)", zh: "HopeA3(原始电机)" },
   toolHopeA3Desc: {
-    en: "Triple-omni mobile base: 3 motors, 500 Hz max-torque PV control over one shared CAN-FD RPDO + live odometry.",
-    zh: "三全向轮移动底盘：3 电机，单帧共享 CAN-FD RPDO 的 500 Hz 带最大力矩速度（PV）控制 + 实时里程计。",
+    en: "Triple-omni mobile base: 3 motors, 500 Hz uncompressed-MIT velocity control over one shared CAN-FD RPDO + live odometry.",
+    zh: "三全向轮移动底盘：3 电机，单帧共享 CAN-FD RPDO 的 500 Hz 非压缩 MIT 速度控制 + 实时里程计。",
   },
   toolSmartKnob: { en: "SmartKnob", zh: "智能旋钮" },
   toolSmartKnobDesc: {

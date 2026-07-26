@@ -265,7 +265,7 @@ pub async fn stop_log(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
 
 // ───────────────────────── HopeA3 Robot Application ─────────────────────────
 
-/// Initialize the three HopeA3 motors and start the 500 Hz PV control loop.
+/// Initialize the three HopeA3 motors and start the 500 Hz uncompressed-MIT velocity loop.
 #[tauri::command]
 pub async fn hopea3_start(state: State<'_, AppState>) -> CmdResult<()> {
     let mgr = manager(&state).await?;

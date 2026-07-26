@@ -40,8 +40,9 @@ Source: `hex-motor` `KNOWN_DEVICES`.
 | `0x4859444C` | `0xAAAA0005` | — | CiA402 HEX-4360P |
 | `0x4859444C` | `* (wildcard)` | — | CiA402 HEX Motor (unknown model) |
 
-> SmartKnob and HopeA3 are **applications** that run *on* these motors — they are
-> not separate identities; the user picks which motor node to drive.
+> SmartKnob and HopeA3 are **applications** that run *on* these motors, not
+> separate identities. SmartKnob lets the user choose one motor; the raw
+> HopeA3 application uses the fixed base Node-IDs `21`, `22`, and `23`.
 
 ---
 
