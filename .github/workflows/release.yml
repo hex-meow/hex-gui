@@ -15,10 +15,8 @@
 #   1. hex-arm-dynamics — publish it to crates.io. Cargo.toml now uses
 #      `hex-arm-dynamics = "0.1.0"` (no longer a path dep).
 #   2. The shared proto — build.rs compiles `../../hex-robot-proto/proto` by
-#      default, a SIBLING repo NOT present in CI. Provide it one of:
-#        • vendor the .proto into this repo + point ROBOT_PROTO_DIR at it, OR
-#        • add a CI step that checks out hex-robot-proto + set ROBOT_PROTO_DIR, OR
-#        • fetch via buf (`buf export`) / depend on a published proto crate.
+#      default. CI checks out hex-robot-proto/master into `_proto` and points
+#      ROBOT_PROTO_DIR at it.
 #
 # ⚠️ Bundles here are UNSIGNED. macOS users hit Gatekeeper (right-click → Open);
 # Windows users hit SmartScreen. Add code signing later via tauri-action env.
@@ -56,17 +54,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Shared proto contract lives in a sibling repo; build.rs compiles it via
-      # ROBOT_PROTO_DIR. Check it out (pinned commit) so a fresh CI checkout resolves.
-      # Bump `ref` when the proto changes; switch to `main` if you prefer latest.
-      # Pinned to the commit that includes controller config, EE/lift, machine
-      # layout and URDF mount-link messages — no tag carries all of them yet.
+      # Shared proto contract lives in a sibling repo. CI consumes only the
+      # verified contract on master; build.rs compiles it via ROBOT_PROTO_DIR.
       - name: Check out shared proto (hex-robot-proto)
         uses: actions/checkout@v4
         with:
           repository: hex-meow/hex-robot-proto
-          # EstopState.engaged presence + PowerState/HwInfo used by RobotConsole hardware view.
-          ref: 3cb43f1ad3dd392ef9dc65f6904129f4cff16122
+          ref: master
           path: _proto
       - name: Verify shared proto inputs
         shell: bash

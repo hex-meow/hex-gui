@@ -208,10 +208,9 @@ release, delete the draft + its tag, then re-tag.
 > Windows users click through SmartScreen. Add signing later via `tauri-action`
 > env vars.
 >
-> **Green-build prerequisites** (see the header comment in the workflow): the
-> `hex-arm-dynamics` crate must be published to crates.io, and the shared proto
-> contract is checked out from `hex-meow/hex-robot-proto` (pinned tag, wired via
-> `ROBOT_PROTO_DIR`) — bump that `ref` when the proto changes.
+> **Green-build prerequisites** (see the header comment in the workflow):
+> `hex-arm-dynamics` must be available from crates.io. CI checks out the verified
+> shared contract from `hex-meow/hex-robot-proto/master` via `ROBOT_PROTO_DIR`.
 
 ## Usage
 
