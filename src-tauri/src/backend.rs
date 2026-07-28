@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+#[cfg(target_os = "linux")]
+use can_transport::CanControllerState;
 use can_transport::{
     CanBus, CanBusState, CanCapabilities, CanFilter, CanFrame, CanId, CanIoError, CanRx,
 };
@@ -147,6 +149,7 @@ pub async fn open_bus(spec: &str, hw_timestamp: bool) -> Result<(Arc<dyn CanBus>
         "socketcan" => {
             let bus = can_transport::socketcan::SocketCanBus::open(name)
                 .with_context(|| format!("opening SocketCAN interface '{name}'"))?;
+            ensure_socketcan_up(&bus, name).await?;
             // SocketCAN hardware timestamps would need SO_TIMESTAMPING,
             // which can-transport does not expose yet.
             Ok((with_exact_sdo_filter(Arc::new(bus)), false))
@@ -158,12 +161,54 @@ pub async fn open_bus(spec: &str, hw_timestamp: bool) -> Result<(Arc<dyn CanBus>
     }
 }
 
+/// SocketCAN sockets can be opened while their netdev is administratively
+/// down. Without this check the frontend reports a successful connection, but
+/// no traffic can flow and the user gets no clue that `ip link set ... up` was
+/// missed. State reporting is best-effort, so only a definite `Stopped`
+/// blocks the open; unsupported devices (notably vcan) and transient netlink
+/// query failures retain the previous behavior.
+#[cfg(target_os = "linux")]
+async fn ensure_socketcan_up(bus: &dyn CanBus, name: &str) -> Result<()> {
+    match bus.bus_state().await {
+        Ok(state) => match socketcan_down_hint(state, name) {
+            Some(hint) => bail!("{hint}"),
+            None => Ok(()),
+        },
+        Err(error) => {
+            log::warn!(
+                "could not query SocketCAN interface '{name}' state; \
+                 continuing without an up/down check: {error}"
+            );
+            Ok(())
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn socketcan_down_hint(state: Option<CanBusState>, name: &str) -> Option<String> {
+    matches!(
+        state,
+        Some(CanBusState {
+            state: Some(CanControllerState::Stopped),
+            ..
+        })
+    )
+    .then(|| {
+        format!(
+            "SocketCAN interface '{name}' is down; bring it up first with \
+             `sudo ip link set dev {name} up`, then try again"
+        )
+    })
+}
+
 /// Parse a gs_usb interface spec into a channel number, or `None` if `spec`
 /// is not a gs_usb spec. Accepts `gs_usb`, `gs_usb0`, `gs_usb1`, `gs_usb:1`,
 /// and the underscore-less `gsusb2` variants.
 fn gs_usb_channel(spec: &str) -> Option<u16> {
     let s = spec.trim().to_ascii_lowercase();
-    let rest = s.strip_prefix("gs_usb").or_else(|| s.strip_prefix("gsusb"))?;
+    let rest = s
+        .strip_prefix("gs_usb")
+        .or_else(|| s.strip_prefix("gsusb"))?;
     let rest = rest.strip_prefix(':').unwrap_or(rest);
     if rest.is_empty() {
         Some(0)
@@ -190,5 +235,25 @@ mod tests {
         assert!(exact_tsdo_filter(CanFilter::standard(0x180, 0x780)).is_none());
         assert!(exact_tsdo_filter(CanFilter::standard(0x580, 0x780)).is_none());
         assert!(exact_tsdo_filter(CanFilter::exact_standard(0x594)).is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stopped_socketcan_state_explains_how_to_bring_the_link_up() {
+        let stopped = CanBusState {
+            state: Some(CanControllerState::Stopped),
+            tx_errors: None,
+            rx_errors: None,
+        };
+        let hint = socketcan_down_hint(Some(stopped), "can0").expect("down hint");
+        assert!(hint.contains("SocketCAN interface 'can0' is down"));
+        assert!(hint.contains("sudo ip link set dev can0 up"));
+
+        let healthy = CanBusState {
+            state: Some(CanControllerState::ErrorActive),
+            ..Default::default()
+        };
+        assert_eq!(socketcan_down_hint(Some(healthy), "can0"), None);
+        assert_eq!(socketcan_down_hint(None, "vcan0"), None);
     }
 }

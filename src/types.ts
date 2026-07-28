@@ -163,6 +163,24 @@ export interface LiftCommissionView {
   dropped_pairs: number;
 }
 
+export interface LiftFactoryCalibrationView {
+  available: boolean;
+  abi: number;
+  state: number;
+  flags: number;
+  lower_count: number;
+  upper_count: number;
+}
+
+export interface LiftFactoryCalibrationResult {
+  lower_count: number;
+  upper_count: number;
+  travel_m: number;
+  counts_per_meter: number;
+  transmission_correction: number;
+  crc32: number;
+}
+
 // ── Lift raw-CAN application (mirrors lift::LiftState) ──
 export interface LiftState {
   running: boolean;
@@ -198,6 +216,7 @@ export interface LiftState {
   velocity_max_mps: number;
   velocity_min_mps: number;
   commissioning: LiftCommissionView;
+  factory_calibration: LiftFactoryCalibrationView;
   last_error: string | null;
 }
 

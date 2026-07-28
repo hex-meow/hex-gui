@@ -17,6 +17,7 @@ import { api, errMsg } from "../api";
 import { useI18n, type I18nKey } from "../i18n";
 import type { LiftState } from "../types";
 import { LiftCommissioningCard } from "./LiftCommissioningCard";
+import { LiftFactoryCalibrationCard } from "./LiftFactoryCalibrationCard";
 import "./LiftPanel.css";
 
 const POLL_MS = 100;
@@ -301,6 +302,11 @@ export function LiftPanel({ connected }: { connected: boolean }) {
       state.commissioning.abi,
       state.commissioning.available
     );
+  const factoryCalibrationAvailable =
+    state?.device_name === "hexmeow-lift-calibration" &&
+    state?.factory_calibration.available === true &&
+    state.factory_calibration.abi === 1;
+  const isolatedFactoryImage = commissionImage || factoryCalibrationAvailable;
 
   const canHome =
     connected &&
@@ -312,7 +318,7 @@ export function LiftPanel({ connected }: { connected: boolean }) {
     sensorHealthy &&
     operational &&
     configValid &&
-    !commissionImage &&
+    !isolatedFactoryImage &&
     !faulted;
   const canMove = canHome && homed;
 
@@ -625,6 +631,14 @@ export function LiftPanel({ connected }: { connected: boolean }) {
               connected={connected}
               attached={attached}
               globalBusy={commandBusy}
+            />
+          )}
+
+          {factoryCalibrationAvailable && state != null && (
+            <LiftFactoryCalibrationCard
+              state={state}
+              connected={connected}
+              attached={attached}
             />
           )}
 

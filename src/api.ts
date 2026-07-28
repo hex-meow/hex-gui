@@ -3,7 +3,7 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfo, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftState, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
+import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfo, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftFactoryCalibrationResult, LiftState, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
 
 export const api = {
   connect: (iface: string, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -70,6 +70,30 @@ export const api = {
   liftRenewVelocity: () => invoke<void>("lift_renew_velocity"),
   liftSetPosition: (positionM: number) =>
     invoke<void>("lift_set_position", { positionM }),
+  liftFactoryCalibrationArm: () =>
+    invoke<void>("lift_factory_calibration_arm"),
+  liftFactoryCalibrationSeekLower: () =>
+    invoke<void>("lift_factory_calibration_seek_lower"),
+  liftFactoryCalibrationSeekUpper: () =>
+    invoke<void>("lift_factory_calibration_seek_upper"),
+  liftFactoryCalibrationAbort: () =>
+    invoke<void>("lift_factory_calibration_abort"),
+  liftFactoryCalibrationClearFault: () =>
+    invoke<void>("lift_factory_calibration_clear_fault"),
+  liftFactoryCalibrationCommit: (
+    lowerReadingM: number,
+    upperReadingM: number,
+    manufactureDate: string,
+    calibrationDate: string,
+    stationId: number
+  ) =>
+    invoke<LiftFactoryCalibrationResult>("lift_factory_calibration_commit", {
+      lowerReadingM,
+      upperReadingM,
+      manufactureDate,
+      calibrationDate,
+      stationId,
+    }),
   liftCommissionArm: () => invoke<number>("lift_commission_arm"),
   liftCommissionClearFault: () =>
     invoke<void>("lift_commission_clear_fault"),

@@ -26,7 +26,31 @@ const TARGET_POSITION: u16 = 0x457A;
 const TARGET_VELOCITY: u16 = 0x45FF;
 const EFFECTIVE_PARAMS: u16 = 0x4600;
 const DIAGNOSTICS: u16 = 0x4601;
+const FACTORY_CALIBRATION: u16 = 0x4700;
 const SAMPLE_TIMESTAMP: u16 = 0x4713;
+
+const FACTORY_CALIBRATION_DEVICE_NAME: &str = "hexmeow-lift-calibration";
+const FACTORY_CALIBRATION_ABI: u16 = 1;
+const FACTORY_ARM_MAGIC: u32 = 0xA70C_A11B;
+const FACTORY_COMMAND_ABORT: u8 = 0;
+const FACTORY_COMMAND_SEEK_LOWER: u8 = 1;
+const FACTORY_COMMAND_SEEK_UPPER: u8 = 2;
+const FACTORY_COMMAND_CLEAR_FAULT: u8 = 0xFF;
+const FACTORY_STATE_DISARMED: u8 = 0;
+const FACTORY_STATE_ARMED: u8 = 1;
+const FACTORY_STATE_SEEKING_LOWER: u8 = 2;
+const FACTORY_STATE_LOWER_FOUND: u8 = 3;
+const FACTORY_STATE_SEEKING_UPPER: u8 = 4;
+const FACTORY_STATE_COMPLETE: u8 = 5;
+const FACTORY_STATE_FAULT: u8 = 0x80;
+const FACTORY_FLAG_LOWER_VALID: u8 = 1 << 1;
+const FACTORY_FLAG_UPPER_VALID: u8 = 1 << 2;
+const FACTORY_FLAG_OUTPUT_ACTIVE: u8 = 1 << 3;
+const LIFT_KIND: u8 = 3;
+const LIFT_A70_ASSEMBLY_HW_REV: u32 = 0x0001_0000;
+const LIFT_LAYOUT_V1: u32 = 0x0003_0001;
+const LIFT_LAYOUT_V1_USED: u8 = 21;
+const STORE_PARAMETERS_SIGNATURE: u32 = 0x6576_6173;
 
 const MODE_DISABLED: u8 = 0;
 const MODE_POSITION: u8 = 1;
@@ -59,9 +83,29 @@ const VELOCITY_LEASE_TIMEOUT: Duration = Duration::from_millis(250);
 // retry. `canopen-sdo` names this parameter `retries`, but it is total attempts.
 const SDO_MIN_TIMEOUT: Duration = Duration::from_millis(500);
 const SDO_ATTEMPTS: u8 = 2;
-// The firmware velocity watchdog (0.4 lift_70) is 200 ms and is no longer read
+// The firmware velocity watchdog (v0.4 lift_a70) is 200 ms and is no longer read
 // from the OD, so the host streams RPDO1 at a fixed safe margin under it.
 const VELOCITY_STREAM_PERIOD_MS: u64 = 40;
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct FactoryCalibrationView {
+    pub available: bool,
+    pub abi: u16,
+    pub state: u8,
+    pub flags: u8,
+    pub lower_count: i32,
+    pub upper_count: i32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FactoryCalibrationResult {
+    pub lower_count: i32,
+    pub upper_count: i32,
+    pub travel_m: f32,
+    pub counts_per_meter: f32,
+    pub transmission_correction: f32,
+    pub crc32: u32,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LiftState {
@@ -103,6 +147,7 @@ pub struct LiftState {
     pub velocity_min_mps: f32,
 
     pub commissioning: CommissionView,
+    pub factory_calibration: FactoryCalibrationView,
 
     pub last_error: Option<String>,
 }
@@ -142,6 +187,7 @@ impl Default for LiftState {
             velocity_max_mps: 0.0,
             velocity_min_mps: 0.0,
             commissioning: CommissionView::default(),
+            factory_calibration: FactoryCalibrationView::default(),
             last_error: None,
         }
     }
@@ -453,6 +499,491 @@ impl LiftSession {
         .map_err(|e| anyhow::anyhow!("clear lift fault: {e}"))?;
         self.clear_error();
         Ok(())
+    }
+
+    pub async fn factory_calibration_arm(&self) -> anyhow::Result<()> {
+        self.cancel_velocity();
+        let _guard = self.sdo_gate.lock().await;
+        self.require_accepting_commands()?;
+        self.refresh_live_locked().await?;
+        self.require_factory_calibration_gate(FACTORY_STATE_DISARMED)?;
+        sdo::download_u32(
+            &*self.bus,
+            self.node_id,
+            FACTORY_CALIBRATION,
+            2,
+            FACTORY_ARM_MAGIC,
+            self.sdo_timeout,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("arm factory calibration: {e}"))?;
+        self.wait_for_factory_state(FACTORY_STATE_ARMED, Duration::from_millis(500))
+            .await?;
+        self.clear_error();
+        Ok(())
+    }
+
+    pub async fn factory_calibration_seek_lower(&self) -> anyhow::Result<()> {
+        let _guard = self.sdo_gate.lock().await;
+        self.require_accepting_commands()?;
+        self.refresh_live_locked().await?;
+        self.require_factory_calibration_gate(FACTORY_STATE_ARMED)?;
+        sdo::download_u8(
+            &*self.bus,
+            self.node_id,
+            FACTORY_CALIBRATION,
+            3,
+            FACTORY_COMMAND_SEEK_LOWER,
+            self.sdo_timeout,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("start lower hard-stop seek: {e}"))?;
+        self.wait_for_factory_state(FACTORY_STATE_SEEKING_LOWER, Duration::from_millis(500))
+            .await?;
+        self.clear_error();
+        Ok(())
+    }
+
+    pub async fn factory_calibration_seek_upper(&self) -> anyhow::Result<()> {
+        let _guard = self.sdo_gate.lock().await;
+        self.require_accepting_commands()?;
+        self.refresh_live_locked().await?;
+        self.require_factory_calibration_gate(FACTORY_STATE_LOWER_FOUND)?;
+        sdo::download_u8(
+            &*self.bus,
+            self.node_id,
+            FACTORY_CALIBRATION,
+            3,
+            FACTORY_COMMAND_SEEK_UPPER,
+            self.sdo_timeout,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("start upper hard-stop seek: {e}"))?;
+        self.wait_for_factory_state(FACTORY_STATE_SEEKING_UPPER, Duration::from_millis(500))
+            .await?;
+        self.clear_error();
+        Ok(())
+    }
+
+    /// Best-effort SDO abort with a directed NMT Stop fallback. This is not a
+    /// safety-rated E-stop; physical power removal remains the safety boundary.
+    pub async fn factory_calibration_abort(&self) -> anyhow::Result<()> {
+        self.cancel_velocity();
+        let _guard = self.sdo_gate.lock().await;
+        self.require_accepting_commands()?;
+        let result = sdo::download_u8(
+            &*self.bus,
+            self.node_id,
+            FACTORY_CALIBRATION,
+            3,
+            FACTORY_COMMAND_ABORT,
+            self.sdo_timeout,
+        )
+        .await;
+        if let Err(error) = result {
+            let _ = send_nmt(&self.bus, 0x02, self.node_id).await;
+            anyhow::bail!("factory Abort SDO failed; directed NMT Stop sent: {error}");
+        }
+        self.wait_for_factory_inactive(Duration::from_millis(500))
+            .await?;
+        self.clear_error();
+        Ok(())
+    }
+
+    pub async fn factory_calibration_clear_fault(&self) -> anyhow::Result<()> {
+        let _guard = self.sdo_gate.lock().await;
+        self.require_accepting_commands()?;
+        self.refresh_live_locked().await?;
+        {
+            let state = self.state.lock().unwrap();
+            if !state.factory_calibration.available
+                || state.factory_calibration.state != FACTORY_STATE_FAULT
+            {
+                anyhow::bail!("factory calibration has no latched fault");
+            }
+            if state.nmt_state != NMT_OPERATIONAL {
+                anyhow::bail!("NMT must be Operational before clearing a factory fault");
+            }
+            if !sensor_snapshot_healthy(state.sensor_status) {
+                anyhow::bail!(
+                    "sensor sample is unhealthy (0x{:02X})",
+                    state.sensor_status
+                );
+            }
+        }
+        sdo::download_u8(
+            &*self.bus,
+            self.node_id,
+            FACTORY_CALIBRATION,
+            3,
+            FACTORY_COMMAND_CLEAR_FAULT,
+            self.sdo_timeout,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("clear factory calibration fault: {e}"))?;
+        self.wait_for_factory_state(FACTORY_STATE_DISARMED, Duration::from_millis(500))
+            .await?;
+        self.clear_error();
+        Ok(())
+    }
+
+    /// Calculate the lift v1 payload, commit the complete nameplate, reboot,
+    /// and verify the persisted result. Ruler readings are absolute physical
+    /// readings; their difference becomes the lift's 0..travel coordinate.
+    pub async fn factory_calibration_commit(
+        &self,
+        lower_reading_m: f32,
+        upper_reading_m: f32,
+        manufacture_date: &str,
+        calibration_date: &str,
+        station_id: u32,
+    ) -> anyhow::Result<FactoryCalibrationResult> {
+        if !lower_reading_m.is_finite() || !upper_reading_m.is_finite() {
+            anyhow::bail!("ruler readings must be finite");
+        }
+        let travel_m = (upper_reading_m - lower_reading_m).abs();
+        if !(0.0 < travel_m && travel_m <= 0.70) {
+            anyhow::bail!("lift_a70 measured travel must be within (0, 0.70] m");
+        }
+        let mfg_date = parse_bcd_date(manufacture_date)?;
+        let cal_date = parse_bcd_date(calibration_date)?;
+
+        let _guard = self.sdo_gate.lock().await;
+        self.require_accepting_commands()?;
+        self.refresh_live_locked().await?;
+        let (lower_count, upper_count) = {
+            let state = self.state.lock().unwrap();
+            let factory = &state.factory_calibration;
+            if !factory.available || factory.state != FACTORY_STATE_COMPLETE {
+                anyhow::bail!("both factory hard-stop seeks must complete before committing");
+            }
+            if factory.flags & (FACTORY_FLAG_LOWER_VALID | FACTORY_FLAG_UPPER_VALID)
+                != (FACTORY_FLAG_LOWER_VALID | FACTORY_FLAG_UPPER_VALID)
+            {
+                anyhow::bail!("factory endpoint snapshots are incomplete");
+            }
+            if factory.flags & FACTORY_FLAG_OUTPUT_ACTIVE != 0
+                || state.duty_command_permille != 0
+                || state.mode_display != MODE_DISABLED
+            {
+                anyhow::bail!("motor output is not confirmed off");
+            }
+            (factory.lower_count, factory.upper_count)
+        };
+
+        let count_delta = (i64::from(upper_count) - i64::from(lower_count)).abs();
+        if count_delta == 0 {
+            anyhow::bail!("encoder endpoint delta is zero");
+        }
+        let counts_per_meter = count_delta as f32 / travel_m;
+        let transmission_correction = counts_per_meter / (10_000.0 / 0.70);
+        if !transmission_correction.is_finite()
+            || !(0.5..=1.5).contains(&transmission_correction)
+        {
+            anyhow::bail!(
+                "calculated transmission correction {transmission_correction} is outside 0.5..1.5"
+            );
+        }
+
+        // Snapshot the complete transaction before the first write: every live
+        // nameplate change intentionally resets the firmware's volatile
+        // factory session.
+        let mut payload = [0u32; 64];
+        payload[0] = 0.0f32.to_bits();
+        payload[1] = transmission_correction.to_bits();
+        payload[2] = 0.0f32.to_bits();
+        payload[3] = travel_m.to_bits();
+        payload[20] = 1;
+        let crc32 = lift_nameplate_crc(LIFT_LAYOUT_V1, LIFT_LAYOUT_V1_USED, &payload);
+
+        // Payload first, commit/header CRC last. A power cut during the write
+        // leaves an invalid CRC and the standard image fails closed.
+        for packed_index in 0..11 {
+            let packed = u64::from(payload[packed_index * 2])
+                | (u64::from(payload[packed_index * 2 + 1]) << 32);
+            write_bytes(
+                &*self.bus,
+                self.node_id,
+                0x5F03,
+                (packed_index + 1) as u8,
+                &packed.to_le_bytes(),
+                self.sdo_timeout,
+            )
+            .await?;
+        }
+
+        let mut model = [0u8; 32];
+        model[..8].copy_from_slice(b"lift_a70");
+        for chunk in 0..4 {
+            write_bytes(
+                &*self.bus,
+                self.node_id,
+                0x5F01,
+                (chunk + 1) as u8,
+                &model[chunk * 8..chunk * 8 + 8],
+                self.sdo_timeout,
+            )
+            .await?;
+        }
+        write_bytes(
+            &*self.bus,
+            self.node_id,
+            0x5F00,
+            1,
+            &[LIFT_KIND],
+            self.sdo_timeout,
+        )
+        .await?;
+        write_bytes(
+            &*self.bus,
+            self.node_id,
+            0x5F00,
+            2,
+            &LIFT_A70_ASSEMBLY_HW_REV.to_le_bytes(),
+            self.sdo_timeout,
+        )
+        .await?;
+        write_bytes(
+            &*self.bus,
+            self.node_id,
+            0x5F00,
+            3,
+            &mfg_date.to_le_bytes(),
+            self.sdo_timeout,
+        )
+        .await?;
+        write_bytes(
+            &*self.bus,
+            self.node_id,
+            0x5F02,
+            1,
+            &LIFT_LAYOUT_V1.to_le_bytes(),
+            self.sdo_timeout,
+        )
+        .await?;
+        write_bytes(
+            &*self.bus,
+            self.node_id,
+            0x5F02,
+            2,
+            &[LIFT_LAYOUT_V1_USED],
+            self.sdo_timeout,
+        )
+        .await?;
+        write_bytes(
+            &*self.bus,
+            self.node_id,
+            0x5F02,
+            4,
+            &cal_date.to_le_bytes(),
+            self.sdo_timeout,
+        )
+        .await?;
+        write_bytes(
+            &*self.bus,
+            self.node_id,
+            0x5F02,
+            5,
+            &station_id.to_le_bytes(),
+            self.sdo_timeout,
+        )
+        .await?;
+        write_bytes(
+            &*self.bus,
+            self.node_id,
+            0x5F02,
+            3,
+            &crc32.to_le_bytes(),
+            self.sdo_timeout,
+        )
+        .await?;
+        write_bytes(
+            &*self.bus,
+            self.node_id,
+            0x1010,
+            1,
+            &STORE_PARAMETERS_SIGNATURE.to_le_bytes(),
+            self.sdo_timeout,
+        )
+        .await?;
+
+        // 0x1010 queues the flash flush. Let it finish before resetting, then
+        // cross the bootloader's 3 s claim window and verify persisted NVS.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        send_nmt(&self.bus, 0x81, self.node_id).await?;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        self.refresh_static_locked().await?;
+        self.refresh_live_locked().await?;
+        let persisted_assembly_rev =
+            read_u32(&*self.bus, self.node_id, 0x5F00, 2, self.sdo_timeout).await?;
+        let persisted_mfg_date =
+            read_u32(&*self.bus, self.node_id, 0x5F00, 3, self.sdo_timeout).await?;
+        let persisted_cal_date =
+            read_u32(&*self.bus, self.node_id, 0x5F02, 4, self.sdo_timeout).await?;
+        let persisted_station_id =
+            read_u32(&*self.bus, self.node_id, 0x5F02, 5, self.sdo_timeout).await?;
+        {
+            let state = self.state.lock().unwrap();
+            if state.nameplate_kind != LIFT_KIND
+                || state.model != "lift_a70"
+                || state.layout_id != LIFT_LAYOUT_V1
+                || state.nameplate_used != LIFT_LAYOUT_V1_USED
+                || state.nameplate_crc32 != crc32
+                || !state.nameplate_crc_ok
+                || persisted_assembly_rev != LIFT_A70_ASSEMBLY_HW_REV
+                || persisted_mfg_date != mfg_date
+                || persisted_cal_date != cal_date
+                || persisted_station_id != station_id
+            {
+                anyhow::bail!("nameplate reboot/read-back verification failed");
+            }
+        }
+
+        self.clear_error();
+        Ok(FactoryCalibrationResult {
+            lower_count,
+            upper_count,
+            travel_m,
+            counts_per_meter,
+            transmission_correction,
+            crc32,
+        })
+    }
+
+    fn require_factory_calibration_gate(&self, expected_state: u8) -> anyhow::Result<()> {
+        self.sync_freshness();
+        let state = self.state.lock().unwrap();
+        let factory = &state.factory_calibration;
+        if !factory.available {
+            anyhow::bail!("attached image is not the factory calibration OTA");
+        }
+        let state_matches = factory.state == expected_state
+            || expected_state == FACTORY_STATE_DISARMED
+                && factory.state == FACTORY_STATE_COMPLETE;
+        if !state_matches {
+            anyhow::bail!(
+                "factory calibration state is {}, expected {}",
+                factory.state,
+                expected_state
+            );
+        }
+        if !state.online {
+            anyhow::bail!("lift heartbeat is stale");
+        }
+        if !state.tpdo1_fresh || !state.tpdo2_fresh {
+            anyhow::bail!("lift TPDO telemetry is stale");
+        }
+        if state.nmt_state != NMT_OPERATIONAL {
+            anyhow::bail!("lift is not NMT Operational");
+        }
+        if !sensor_snapshot_healthy(state.sensor_status) {
+            anyhow::bail!(
+                "lift sensor sample is unhealthy (0x{:02X})",
+                state.sensor_status
+            );
+        }
+        if state.status_word & STATUS_CONFIG_VALID == 0 {
+            anyhow::bail!("factory model profile is invalid");
+        }
+        if state.status_word & STATUS_FAULT != 0 || state.detailed_fault != 0 {
+            anyhow::bail!("lift has fault 0x{:04X}", state.detailed_fault);
+        }
+        if factory.flags & FACTORY_FLAG_OUTPUT_ACTIVE != 0
+            || state.duty_command_permille != 0
+            || state.mode_display != MODE_DISABLED
+        {
+            anyhow::bail!("factory output is not confirmed off");
+        }
+        Ok(())
+    }
+
+    async fn wait_for_factory_state(
+        &self,
+        expected: u8,
+        timeout: Duration,
+    ) -> anyhow::Result<()> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let state = read_u8(
+                &*self.bus,
+                self.node_id,
+                FACTORY_CALIBRATION,
+                4,
+                self.sdo_timeout,
+            )
+            .await?;
+            let flags = read_u8(
+                &*self.bus,
+                self.node_id,
+                FACTORY_CALIBRATION,
+                5,
+                self.sdo_timeout,
+            )
+            .await?;
+            {
+                let mut view = self.state.lock().unwrap();
+                view.factory_calibration.state = state;
+                view.factory_calibration.flags = flags;
+            }
+            if state == expected {
+                return Ok(());
+            }
+            if state == FACTORY_STATE_FAULT {
+                let detail = read_u16(
+                    &*self.bus,
+                    self.node_id,
+                    DETAILED_FAULT,
+                    0,
+                    self.sdo_timeout,
+                )
+                .await?;
+                anyhow::bail!("factory calibration faulted: 0x{detail:04X}");
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!(
+                    "factory calibration did not enter state {expected}; current state {state}"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    async fn wait_for_factory_inactive(&self, timeout: Duration) -> anyhow::Result<()> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let state = read_u8(
+                &*self.bus,
+                self.node_id,
+                FACTORY_CALIBRATION,
+                4,
+                self.sdo_timeout,
+            )
+            .await?;
+            let flags = read_u8(
+                &*self.bus,
+                self.node_id,
+                FACTORY_CALIBRATION,
+                5,
+                self.sdo_timeout,
+            )
+            .await?;
+            {
+                let mut view = self.state.lock().unwrap();
+                view.factory_calibration.state = state;
+                view.factory_calibration.flags = flags;
+            }
+            if matches!(state, FACTORY_STATE_DISARMED | FACTORY_STATE_FAULT)
+                && flags & FACTORY_FLAG_OUTPUT_ACTIVE == 0
+            {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!(
+                    "factory calibration did not become inactive; state={state}, flags=0x{flags:02X}"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 
     pub async fn set_position(&self, position_m: f32) -> anyhow::Result<()> {
@@ -845,6 +1376,23 @@ impl LiftSession {
         let device_name = read_string(bus, nid, 0x1008, 0, timeout).await?;
         let firmware_version = read_string(bus, nid, 0x100A, 0, timeout).await?;
         self.commissioning.probe_identity(&device_name).await?;
+        let factory_calibration = if device_name == FACTORY_CALIBRATION_DEVICE_NAME {
+            let highest = read_u8(bus, nid, FACTORY_CALIBRATION, 0, timeout).await?;
+            let abi = read_u16(bus, nid, FACTORY_CALIBRATION, 1, timeout).await?;
+            if highest < 7 || abi != FACTORY_CALIBRATION_ABI {
+                anyhow::bail!(
+                    "factory calibration identity has incompatible 0x4700 ABI \
+                     (highest={highest}, abi={abi})"
+                );
+            }
+            FactoryCalibrationView {
+                available: true,
+                abi,
+                ..Default::default()
+            }
+        } else {
+            FactoryCalibrationView::default()
+        };
         let nameplate_kind = read_u8(bus, nid, 0x5F00, 1, timeout).await?;
         let mut model_raw = Vec::with_capacity(32);
         for sub in 1..=4 {
@@ -890,6 +1438,7 @@ impl LiftSession {
             state.nameplate_used = nameplate_used;
             state.nameplate_crc32 = nameplate_crc32;
             state.nameplate_crc_ok = nameplate_crc_ok;
+            state.factory_calibration = factory_calibration;
         }
 
         self.refresh_effective_locked().await
@@ -938,6 +1487,19 @@ impl LiftSession {
         let encoder_count = read_i32(bus, nid, DIAGNOSTICS, 3, timeout).await?;
         let duty_command_permille = read_i16(bus, nid, DIAGNOSTICS, 4, timeout).await?;
         let sensor_status = read_u8(bus, nid, DIAGNOSTICS, 5, timeout).await?;
+        let factory_available = self.state.lock().unwrap().factory_calibration.available;
+        let factory_live = if factory_available {
+            Some(FactoryCalibrationView {
+                available: true,
+                abi: FACTORY_CALIBRATION_ABI,
+                state: read_u8(bus, nid, FACTORY_CALIBRATION, 4, timeout).await?,
+                flags: read_u8(bus, nid, FACTORY_CALIBRATION, 5, timeout).await?,
+                lower_count: read_i32(bus, nid, FACTORY_CALIBRATION, 6, timeout).await?,
+                upper_count: read_i32(bus, nid, FACTORY_CALIBRATION, 7, timeout).await?,
+            })
+        } else {
+            None
+        };
 
         {
             let mut state = self.state.lock().unwrap();
@@ -953,6 +1515,9 @@ impl LiftSession {
             state.encoder_count = encoder_count;
             state.duty_command_permille = duty_command_permille;
             state.sensor_status = sensor_status;
+            if let Some(factory_live) = factory_live {
+                state.factory_calibration = factory_live;
+            }
         }
         self.commissioning.refresh_locked().await?;
         Ok(())
@@ -1463,6 +2028,67 @@ async fn read_i16(
     Ok(i16::from_le_bytes(raw[..2].try_into().unwrap()))
 }
 
+async fn write_bytes(
+    bus: &(impl CanBus + ?Sized),
+    nid: u8,
+    index: u16,
+    sub: u8,
+    data: &[u8],
+    timeout: Option<Duration>,
+) -> anyhow::Result<()> {
+    canopen_sdo::asynch::download_bytes_retry(
+        bus,
+        nid,
+        index,
+        sub,
+        data,
+        timeout,
+        SDO_ATTEMPTS,
+    )
+    .await
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "SDO write 0x{index:04X}:{sub:02X} failed after {SDO_ATTEMPTS} attempts: {error}"
+        )
+    })
+}
+
+fn parse_bcd_date(value: &str) -> anyhow::Result<u32> {
+    let mut fields = value.split('-');
+    let year = fields
+        .next()
+        .and_then(|field| field.parse::<u16>().ok())
+        .ok_or_else(|| anyhow::anyhow!("date must use YYYY-MM-DD"))?;
+    let month = fields
+        .next()
+        .and_then(|field| field.parse::<u8>().ok())
+        .ok_or_else(|| anyhow::anyhow!("date must use YYYY-MM-DD"))?;
+    let day = fields
+        .next()
+        .and_then(|field| field.parse::<u8>().ok())
+        .ok_or_else(|| anyhow::anyhow!("date must use YYYY-MM-DD"))?;
+    if fields.next().is_some() || value.len() != 10 {
+        anyhow::bail!("date must use YYYY-MM-DD");
+    }
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => 0,
+    };
+    if !(2026..=9999).contains(&year) || day == 0 || day > days {
+        anyhow::bail!("invalid calendar date {value}");
+    }
+    let digits = value.bytes().filter(|byte| byte.is_ascii_digit());
+    let mut encoded = 0u32;
+    for digit in digits {
+        encoded = (encoded << 4) | u32::from(digit - b'0');
+    }
+    Ok(encoded)
+}
+
 fn parse_tpdo1(data: &[u8]) -> Option<(f32, u16, u8, u8)> {
     if data.len() != 8 {
         return None;
@@ -1528,7 +2154,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn crc_matches_the_provisioned_lift_70_nameplate() {
+    fn crc_matches_the_provisioned_lift_a70_nameplate() {
         let mut payload = [0u32; 64];
         payload[0] = 0.0f32.to_bits();
         payload[1] = 1.0597f32.to_bits();
@@ -1536,6 +2162,14 @@ mod tests {
         payload[3] = 0.7f32.to_bits();
         payload[20] = 1;
         assert_eq!(lift_nameplate_crc(0x0003_0001, 21, &payload), 0x486E_E73A);
+    }
+
+    #[test]
+    fn bcd_date_parser_validates_calendar_dates() {
+        assert_eq!(parse_bcd_date("2026-07-28").unwrap(), 0x2026_0728);
+        assert_eq!(parse_bcd_date("2028-02-29").unwrap(), 0x2028_0229);
+        assert!(parse_bcd_date("2027-02-29").is_err());
+        assert!(parse_bcd_date("20260728").is_err());
     }
 
     #[test]

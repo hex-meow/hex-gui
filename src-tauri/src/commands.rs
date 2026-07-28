@@ -1520,6 +1520,57 @@ pub async fn lift_set_position(state: State<'_, AppState>, position_m: f32) -> C
 }
 
 #[tauri::command]
+pub async fn lift_factory_calibration_arm(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.factory_calibration_arm().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_factory_calibration_seek_lower(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.factory_calibration_seek_lower().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_factory_calibration_seek_upper(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.factory_calibration_seek_upper().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_factory_calibration_abort(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.factory_calibration_abort().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_factory_calibration_clear_fault(state: State<'_, AppState>) -> CmdResult<()> {
+    let app = lift_session(&state).await?;
+    app.factory_calibration_clear_fault().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn lift_factory_calibration_commit(
+    state: State<'_, AppState>,
+    lower_reading_m: f32,
+    upper_reading_m: f32,
+    manufacture_date: String,
+    calibration_date: String,
+    station_id: u32,
+) -> CmdResult<crate::lift::FactoryCalibrationResult> {
+    let app = lift_session(&state).await?;
+    app.factory_calibration_commit(
+        lower_reading_m,
+        upper_reading_m,
+        &manufacture_date,
+        &calibration_date,
+        station_id,
+    )
+    .await
+    .map_err(err)
+}
+
+#[tauri::command]
 pub async fn lift_commission_arm(state: State<'_, AppState>) -> CmdResult<u32> {
     let app = lift_session(&state).await?;
     app.commission_arm().await.map_err(err)
