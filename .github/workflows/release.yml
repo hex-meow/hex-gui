@@ -35,7 +35,84 @@ permissions:
   contents: write
 
 jobs:
+  version:
+    runs-on: ubuntu-22.04
+    outputs:
+      app_version: ${{ steps.read.outputs.app_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Read and validate the single application version
+        id: read
+        shell: bash
+        run: |
+          app_version="$(
+            cargo metadata \
+              --manifest-path src-tauri/Cargo.toml \
+              --format-version 1 \
+              --no-deps \
+              --locked |
+            jq -r '.packages[] |
+              select(.name == "hex-motor-gui") |
+              .version'
+          )"
+
+          test -n "$app_version"
+          test "$app_version" != "null"
+          jq -e 'has("version") | not' package.json >/dev/null
+          jq -e \
+            '(has("version") | not) and
+             (.packages[""] | has("version") | not)' \
+            package-lock.json >/dev/null
+          jq -e 'has("version") | not' \
+            src-tauri/tauri.conf.json >/dev/null
+
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]] &&
+             [[ "$GITHUB_REF_NAME" != "v$app_version" ]]; then
+            echo "tag $GITHUB_REF_NAME != v$app_version" >&2
+            exit 1
+          fi
+
+          echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: version
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out shared proto (hex-robot-proto)
+        uses: actions/checkout@v4
+        with:
+          repository: hex-meow/hex-robot-proto
+          ref: master
+          path: _proto
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            build-essential pkg-config libssl-dev \
+            libfuse2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npx tsc --noEmit --incremental false
+      - run: npm run build
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --workspace --locked
+        env:
+          ROBOT_PROTO_DIR: ../_proto/proto
+
   build:
+    needs: [version, verify]
     strategy:
       fail-fast: false
       matrix:
@@ -123,7 +200,7 @@ jobs:
         with:
           args: ${{ matrix.args }}
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          releaseName: "hex-motor-gui ${{ github.ref_name }}"
+          releaseName: "hex-motor-gui v${{ needs.version.outputs.app_version }}"
           releaseDraft: true
           releaseBody: |
             Unsigned builds for Linux / Windows / macOS.
@@ -137,7 +214,7 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
         with:
-          name: hex-motor-gui-${{ matrix.platform }}
+          name: hex-motor-gui-v${{ needs.version.outputs.app_version }}-${{ matrix.platform }}
           path: |
             src-tauri/target/release/bundle/**/*
             src-tauri/target/*/release/bundle/**/*

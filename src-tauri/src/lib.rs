@@ -10,6 +10,7 @@ mod device_registry;
 mod diag;
 mod dto;
 mod hopea3;
+mod hpm_dfu;
 mod imu;
 mod lift;
 mod lift_commission;
@@ -29,7 +30,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use state::AppState;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Time budget for the best-effort safe stop on window close. Long enough for a
 /// clean confirmed detach on a healthy bus, short enough that a dead bus doesn't
@@ -46,6 +47,12 @@ const LIFT_CLOSE_STOP_BUDGET: Duration = Duration::from_millis(1_500);
 /// then exit unconditionally whether or not it was acknowledged.
 fn request_safe_close(window: tauri::Window) {
     let handle = window.app_handle().clone();
+    let dfu = handle.state::<hpm_dfu::DfuState>();
+    if dfu.is_active() {
+        log::warn!("window close blocked while an HPM DFU command is active");
+        let _ = window.emit("hpm-dfu-close-blocked", ());
+        return;
+    }
     let state = handle.state::<AppState>();
     if state.lift_close_in_progress.swap(true, Ordering::SeqCst) {
         return;
@@ -76,6 +83,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(AppState::default())
+        .manage(hpm_dfu::DfuState::default())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
@@ -217,6 +225,11 @@ pub fn run() {
             commands::config_validate,
             commands::config_set,
             commands::config_restart,
+            hpm_dfu::hpm_dfu_probe,
+            hpm_dfu::hpm_dfu_prepare,
+            hpm_dfu::hpm_dfu_start,
+            hpm_dfu::hpm_dfu_cancel,
+            hpm_dfu::hpm_dfu_leave,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

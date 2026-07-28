@@ -17,6 +17,10 @@ const STRINGS = {
   connectFailed: { en: "Connect failed", zh: "连接失败" },
   disconnectedMsg: { en: "Disconnected", zh: "已断开" },
   disconnectFailed: { en: "Disconnect failed", zh: "断开失败" },
+  dfuBusyLeave: {
+    en: "Wait for the current firmware command, then cancel safely before leaving.",
+    zh: "请等待当前固件命令完成并安全取消后再离开。",
+  },
 
   // Sidebar
   motors: { en: "Motors", zh: "电机" },
@@ -52,6 +56,11 @@ const STRINGS = {
   // CAN Analyzer
   toolCanalyzer: { en: "CAN Analyzer", zh: "CAN 分析仪" },
   toolCanalyzerDesc: { en: "Sniff bus traffic, filter/decode CANopen, send frames manually.", zh: "抓取总线报文、过滤/解析 CANopen、手动发帧。" },
+  toolDfu: { en: "Firmware Update", zh: "固件升级" },
+  toolDfuDesc: {
+    en: "Identify supported devices, validate firmware and run recoverable updates.",
+    zh: "识别受支持设备、严格校验固件并执行可恢复升级。",
+  },
   canBus: { en: "Bus", zh: "总线" },
   canConnectHint: { en: "e.g. can0 / socketcan:vcan0 / gs_usb", zh: "例如 can0 / socketcan:vcan0 / gs_usb" },
   canConnectFailed: { en: "Capture failed", zh: "抓包失败" },
@@ -249,6 +258,7 @@ const STRINGS = {
   tagFactorySetup: { en: "Factory setup", zh: "工厂配置" },
   tagCalibration: { en: "Calibration", zh: "标定" },
   tagDebug: { en: "Debug", zh: "调试" },
+  tagFirmware: { en: "DFU", zh: "DFU" },
   tagQuickStart: { en: "Quick start", zh: "快速上手" },
   toolHopeA3: { en: "HopeA3(Raw Motor)", zh: "HopeA3(原始电机)" },
   toolHopeA3Desc: {

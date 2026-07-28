@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "hex-motor-gui",
-  "version": "1.0.1",
   "identifier": "com.hexmecha.hex-motor-gui",
   "build": {
     "frontendDist": "../dist",

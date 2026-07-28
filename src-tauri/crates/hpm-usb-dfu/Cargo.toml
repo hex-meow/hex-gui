@@ -1,0 +1,14 @@
+[package]
+name = "hpm-usb-dfu"
+version = "0.1.0"
+edition = "2021"
+description = "Strict, public host-side runtime for the current HPM USB bootloader"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+crc32fast = "1.5"
+nusb = "=0.2.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "=2.0.18"

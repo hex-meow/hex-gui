@@ -16,11 +16,25 @@ import { ZenohPanel } from "./components/ZenohPanel";
 import { ArmPanel } from "./components/ArmPanel";
 import { ControllerConfigPanel } from "./components/ControllerConfigPanel";
 import { CanAnalyzerPanel } from "./components/CanAnalyzerPanel";
+import { DfuPanel } from "./components/DfuPanel";
 import { TutorialModal, TUTORIALS } from "./components/Tutorial";
+import { hpmDfuApi } from "./dfuApi";
 import type { MotorInfo } from "./types";
 import "./App.css";
 
-type Tool = "control" | "changeId" | "zero" | "hopea3" | "lift" | "smartknob" | "zenoh" | "arm" | "config" | "canalyzer" | "console";
+type Tool =
+  | "control"
+  | "changeId"
+  | "zero"
+  | "hopea3"
+  | "lift"
+  | "smartknob"
+  | "zenoh"
+  | "arm"
+  | "config"
+  | "canalyzer"
+  | "dfu"
+  | "console";
 
 const DEVICE_POLL_MS = 700;
 
@@ -36,6 +50,9 @@ export default function App() {
   const [logging, setLogging] = useState<Record<number, string>>({});
   // Per-app "how to use this tool" modal (its slides live in TUTORIALS[tool]).
   const [tutorialOpen, setTutorialOpen] = useState(false);
+  // The DFU backend also enforces this lock. The frontend copy disables Back
+  // immediately so a user cannot accidentally unmount a running job.
+  const [dfuBusy, setDfuBusy] = useState(false);
 
   // Poll the device list while connected.
   useEffect(() => {
@@ -76,8 +93,16 @@ export default function App() {
   }, []);
 
   const switchTool = useCallback(async () => {
+    if (tool === "dfu" && dfuBusy) {
+      message.warning(t("dfuBusyLeave"));
+      return;
+    }
     try {
-      await api.disconnect();
+      if (tool === "dfu") {
+        await hpmDfuApi.leave();
+      } else {
+        await api.disconnect();
+      }
     } catch (e) {
       message.error(`${t("disconnectFailed")}: ${errMsg(e)}`);
       return;
@@ -88,7 +113,7 @@ export default function App() {
     setDevices([]);
     setTutorialOpen(false);
     setTool(null);
-  }, [message, t]);
+  }, [dfuBusy, message, t, tool]);
 
   const onToggleLog = useCallback(
     async (nid: number, on: boolean) => {
@@ -127,6 +152,7 @@ export default function App() {
     arm: { title: t("toolArmZenoh"), desc: t("toolArmZenohDesc") },
     config: { title: t("toolConfig"), desc: t("toolConfigDesc") },
     canalyzer: { title: t("toolCanalyzer"), desc: t("toolCanalyzerDesc") },
+    dfu: { title: t("toolDfu"), desc: t("toolDfuDesc") },
     console: { title: t("toolConsole"), desc: t("toolConsoleDesc") },
   } satisfies Record<Tool, { title: string; desc: string }>;
   const { title: toolTitle, desc: toolDesc } = toolMeta[tool];
@@ -141,14 +167,26 @@ export default function App() {
     tool !== "zenoh" &&
     tool !== "arm" &&
     tool !== "config" &&
-    tool !== "canalyzer";
-  const showConnectBar = tool !== "console" && tool !== "zenoh" && tool !== "arm" && tool !== "config" && tool !== "canalyzer";
+    tool !== "canalyzer" &&
+    tool !== "dfu";
+  const showConnectBar =
+    tool !== "console" &&
+    tool !== "zenoh" &&
+    tool !== "arm" &&
+    tool !== "config" &&
+    tool !== "canalyzer" &&
+    tool !== "dfu";
 
   return (
     <Layout className={`app-shell app-shell--${tool}`}>
       <div className="app-chrome">
         <header className="app-chrome__header">
-          <Button className="app-chrome__back" size="small" onClick={switchTool}>
+          <Button
+            className="app-chrome__back"
+            size="small"
+            disabled={tool === "dfu" && dfuBusy}
+            onClick={switchTool}
+          >
             ← {t("backToTools")}
           </Button>
           <div className="app-chrome__identity">
@@ -207,6 +245,8 @@ export default function App() {
             <ControllerConfigPanel />
           ) : tool === "canalyzer" ? (
             <CanAnalyzerPanel />
+          ) : tool === "dfu" ? (
+            <DfuPanel onBusyChange={setDfuBusy} />
           ) : tool === "changeId" ? (
             <ChangeIdTool devices={devices} selectedNid={selectedNid} connected={connected} />
           ) : tool === "zero" ? (
@@ -341,6 +381,13 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
             tag={t("tagDebug")}
             accent="cyan"
             onClick={() => onPick("canalyzer")}
+          />
+          <ToolCard
+            title={t("toolDfu")}
+            desc={t("toolDfuDesc")}
+            tag={t("tagFirmware")}
+            accent="orange"
+            onClick={() => onPick("dfu")}
           />
         </ToolSection>
       </div>

@@ -88,6 +88,23 @@ Three options, selected by the **interface** string in the Connect bar:
   ```
   On macOS no setup is needed (no sudo, no driver install).
 
+### 4. HPM USB Bootloader access (Firmware Update tool)
+
+The Firmware Update app currently enables the hardware-tested HPM USB v2
+transport for the exact legacy `gs_can` Bootloader profile. On Linux, install
+a udev rule for `34b7:beef` so the GUI can claim interface 0 without root:
+
+```bash
+sudo install -m 0644 /dev/stdin /etc/udev/rules.d/99-hpm-bl.rules <<'EOF'
+SUBSYSTEM=="usb", ATTR{idVendor}=="34b7", ATTR{idProduct}=="beef", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+EOF
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+Windows uses the Bootloader's WinUSB descriptor; macOS needs no driver setup.
+For the initial MVP, connect exactly one matching Bootloader at a time.
+
 ## Run
 
 ### Dev (hot-reload, recommended)
@@ -182,10 +199,13 @@ Outputs land in `src-tauri/target/release/bundle/{deb,appimage}/`.
 The workflow runs on pushes to `main`, PRs, `v*` tags, and manual dispatch. What
 it does depends on the trigger:
 
+- Every run first reads the application version from
+  `src-tauri/Cargo.toml`, verifies the lock file and runs the frontend/Rust
+  test gate. Tag builds additionally require an exact `v<app-version>` match.
 - **push / PR / manual** — build every platform and upload the bundles as
   **run artifacts** (Actions → the run → Artifacts). Nothing is released.
 - **`v*` tag** — build every platform and create a **draft GitHub Release**
-  named `hex-motor-gui <tag>` with every bundle attached.
+  named from the verified Cargo application version, with every bundle attached.
 
 #### Cutting a draft release
 
@@ -194,15 +214,17 @@ The draft Release is driven entirely by pushing a tag that matches `v*`
 `releaseDraft: true`). There is no button to click — just tag and push:
 
 ```bash
-# bump the version in package.json + src-tauri/tauri.conf.json first, then:
-git tag v0.1.0
-git push origin v0.1.0
+# src-tauri/Cargo.toml is the only manually maintained application version.
+# Bump it, refresh src-tauri/Cargo.lock with cargo metadata, commit, then:
+git tag v1.2.0
+git push origin v1.2.0
 ```
 
 Each platform's job appends its bundles to the same Release. When all three
 finish, open **Releases** on GitHub — the draft is waiting there. Review it, then
-**Publish** manually (drafts are never public until you publish). To redo a
-release, delete the draft + its tag, then re-tag.
+**Publish** manually (drafts are never public until you publish). Do not move or
+reuse a published tag. If a draft and tag have never become an external release,
+a maintainer may explicitly delete and recreate both.
 
 > Bundles are **unsigned**: macOS users right-click → Open past Gatekeeper,
 > Windows users click through SmartScreen. Add signing later via `tauri-action`
@@ -251,6 +273,14 @@ bus with the right settings:
 
 - **Motor Control** — everything above. Broadcasts our heartbeat (the motor's
   `0x1016` consumer needs it).
+- **Firmware Update** — an independent DFU workspace with a CAN/USB selector.
+  The current USB path recognizes only exact Bootloader version `0x0100`,
+  mapped locally to product code `0x6763616E` (ASCII `gcan`). Protected devices
+  accept only strict `.hpmota` v2; development devices accept only structural
+  plaintext APP0 `.bin`. Local selection does not bypass validation. HPM CAN is
+  visible but disabled until hardware validation exists. A matching JUMP ACK
+  means transfer completion, not confirmed application health; check the
+  device's actual function after upgrading.
 - **Lift (Raw CAN)** — direct CANopen commissioning for one `lift-driver`
   node (default `0x14`) on the already-open bus. Attach is observation-only:
   it reads identity, nameplate/CRC, effective limits, heartbeat, TPDOs and SDO

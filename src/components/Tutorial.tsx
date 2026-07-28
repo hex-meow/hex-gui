@@ -193,6 +193,30 @@ const ZERO_SLIDES: Slide[] = [
   },
 ];
 
+const DFU_SLIDES: Slide[] = [
+  {
+    title: { en: "1 · Enter Bootloader", zh: "1 · 进入 Bootloader" },
+    body: {
+      en: "Connect the supported device in USB Bootloader mode, select USB, then scan. Unknown Bootloader versions are never offered an upgrade.",
+      zh: "连接受支持设备并进入 USB Bootloader，选择 USB 后扫描。未知 Bootloader 版本不会获得升级入口。",
+    },
+  },
+  {
+    title: { en: "2 · Validate firmware", zh: "2 · 校验固件" },
+    body: {
+      en: "Choose the local artifact. Manual selection still goes through exact format, size, SHA-256, geometry and key-fingerprint checks before erase.",
+      zh: "选择本地升级文件。手动选择仍须在擦除前通过格式、大小、SHA-256、Flash 布局和密钥指纹检查。",
+    },
+  },
+  {
+    title: { en: "3 · Upgrade and check", zh: "3 · 升级并检查" },
+    body: {
+      en: "Confirm the destructive step and keep power connected. After JUMP, USB cannot prove application health, so check the device's actual function.",
+      zh: "确认擦除步骤并保持供电。JUMP 后 USB 无法证明 APP 健康，因此还需实际检查设备功能。",
+    },
+  },
+];
+
 const SMARTKNOB_SLIDES: Slide[] = [
   {
     media: { type: "image", src: "/tutorial/smartknob/01.png" },
@@ -293,6 +317,7 @@ export const TUTORIALS: Record<string, Slide[]> = {
   arm: placeholderSlides("arm"),
   config: placeholderSlides("config"),
   canalyzer: CANALYZER_SLIDES,
+  dfu: DFU_SLIDES,
 };
 
 // Renders the slide's image/video, falling back to the placeholder caption if
