@@ -10,7 +10,13 @@ name = "hex_motor_gui_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [workspace]
-members = ["crates/hpm-usb-dfu"]
+members = [
+    "crates/hexmeow-stm32-can-dfu",
+    "crates/hpm-usb-dfu",
+    "crates/image-container",
+    "crates/mcu-series",
+    "crates/od-consts",
+]
 resolver = "2"
 
 [build-dependencies]
@@ -25,6 +31,7 @@ serde = { version = "1", features = ["derive"] }
 async-trait = "0.1"
 serde_json = "1"
 hex = "0.4"
+sha2 = "0.10"
 tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time"] }
 log = "0.4"
 env_logger = "0.11"
@@ -40,6 +47,7 @@ hex-motor = "0.1.1"
 # strict legacy profile/package parser and flash state machine; the Tauri
 # module is only an IPC adapter.
 hpm-usb-dfu = { path = "crates/hpm-usb-dfu" }
+hexmeow-stm32-can-dfu = { path = "crates/hexmeow-stm32-can-dfu" }
 
 # CAN Analyzer 的 SDO tab:纯 SDO 客户端(读/写对象字典),与 comeow CLI 同一引擎,
 # 跑在分析仪已持有的 Arc<dyn CanBus> 上。值编解码逻辑移植自 comeow(见 sdo_client.rs)。

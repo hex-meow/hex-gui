@@ -1,0 +1,8 @@
+[package]
+name = "od-consts"
+version = "0.1.0"
+edition = "2021"
+description = "Shared hexmeow OD indices + protocol magics (canopen-cob-id-and-node-id.md §4, dfu-over-canopen.md). no_std, zero deps."
+
+[dependencies]
+# none — this is the fleet-wide constants sheet; it must build everywhere.

@@ -18,7 +18,7 @@ import { ControllerConfigPanel } from "./components/ControllerConfigPanel";
 import { CanAnalyzerPanel } from "./components/CanAnalyzerPanel";
 import { DfuPanel } from "./components/DfuPanel";
 import { TutorialModal, TUTORIALS } from "./components/Tutorial";
-import { hpmDfuApi } from "./dfuApi";
+import { canDfuApi, hpmDfuApi } from "./dfuApi";
 import type { MotorInfo } from "./types";
 import "./App.css";
 
@@ -99,7 +99,7 @@ export default function App() {
     }
     try {
       if (tool === "dfu") {
-        await hpmDfuApi.leave();
+        await Promise.all([hpmDfuApi.leave(), canDfuApi.leave()]);
       } else {
         await api.disconnect();
       }

@@ -7,6 +7,7 @@ mod analyzer;
 mod backend;
 mod commands;
 mod device_registry;
+mod dfu_gate;
 mod diag;
 mod dto;
 mod hopea3;
@@ -18,6 +19,7 @@ mod logging;
 mod sdo_client;
 mod smartknob;
 mod state;
+mod stm32_can_dfu;
 mod zenoh_arm;
 mod zenoh_base;
 mod zenoh_config;
@@ -47,10 +49,12 @@ const LIFT_CLOSE_STOP_BUDGET: Duration = Duration::from_millis(1_500);
 /// then exit unconditionally whether or not it was acknowledged.
 fn request_safe_close(window: tauri::Window) {
     let handle = window.app_handle().clone();
-    let dfu = handle.state::<hpm_dfu::DfuState>();
-    if dfu.is_active() {
-        log::warn!("window close blocked while an HPM DFU command is active");
-        let _ = window.emit("hpm-dfu-close-blocked", ());
+    let mutation_gate = handle.state::<dfu_gate::DfuMutationGate>();
+    let hpm_dfu = handle.state::<hpm_dfu::DfuState>();
+    let can_dfu = handle.state::<stm32_can_dfu::CanDfuState>();
+    if mutation_gate.is_active() || hpm_dfu.is_active() || can_dfu.is_active() {
+        log::warn!("window close blocked while a DFU command is active");
+        let _ = window.emit("dfu-close-blocked", ());
         return;
     }
     let state = handle.state::<AppState>();
@@ -60,11 +64,14 @@ fn request_safe_close(window: tauri::Window) {
 
     tauri::async_runtime::spawn(async move {
         let state = handle.state::<AppState>();
-        match tokio::time::timeout(LIFT_CLOSE_STOP_BUDGET, commands::stop_lift_session(&state)).await
+        match tokio::time::timeout(LIFT_CLOSE_STOP_BUDGET, commands::stop_lift_session(&state))
+            .await
         {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
-                log::warn!("lift stop on close reported {error}; exiting anyway (firmware fails safe)")
+                log::warn!(
+                    "lift stop on close reported {error}; exiting anyway (firmware fails safe)"
+                )
             }
             Err(_) => log::warn!(
                 "lift stop on close timed out after {} ms; exiting anyway (firmware fails safe)",
@@ -83,7 +90,9 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(AppState::default())
+        .manage(dfu_gate::DfuMutationGate::default())
         .manage(hpm_dfu::DfuState::default())
+        .manage(stm32_can_dfu::CanDfuState::default())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
@@ -230,6 +239,12 @@ pub fn run() {
             hpm_dfu::hpm_dfu_start,
             hpm_dfu::hpm_dfu_cancel,
             hpm_dfu::hpm_dfu_leave,
+            stm32_can_dfu::stm32_can_dfu_discover,
+            stm32_can_dfu::stm32_can_dfu_select,
+            stm32_can_dfu::stm32_can_dfu_prepare,
+            stm32_can_dfu::stm32_can_dfu_start,
+            stm32_can_dfu::stm32_can_dfu_cancel,
+            stm32_can_dfu::stm32_can_dfu_leave,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

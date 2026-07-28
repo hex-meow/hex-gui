@@ -280,7 +280,13 @@ bus with the right settings:
   plaintext APP0 `.bin`. Local selection does not bypass validation. HPM CAN is
   visible but disabled until hardware validation exists. A matching JUMP ACK
   means transfer completion, not confirmed application health; check the
-  device's actual function after upgrading.
+  device's actual function after upgrading. The STM32 CAN page is currently a
+  read-only safety preview: it passively discovers valid CANopen heartbeat
+  nodes and strictly reads/classifies complete `0x1018` identities. Every known
+  product profile remains disabled, so no proprietary object or CAN update
+  write is sent. The common streaming engine is present behind the final
+  same-transport identity gate, ready for a separately qualified product
+  profile without duplicating the CLI protocol logic.
 - **Lift (Raw CAN)** — direct CANopen commissioning for one `lift-driver`
   node (default `0x14`) on the already-open bus. Attach is observation-only:
   it reads identity, nameplate/CRC, effective limits, heartbeat, TPDOs and SDO

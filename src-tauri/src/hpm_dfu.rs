@@ -14,6 +14,8 @@ use serde::Serialize;
 use tauri::ipc::{Channel, InvokeBody, Request};
 use tauri::State;
 
+use crate::dfu_gate::{DfuBackend, DfuMutationGate};
+
 type CmdResult<T> = Result<T, String>;
 
 #[derive(Default)]
@@ -271,9 +273,13 @@ impl Drop for ActiveReset<'_> {
 #[tauri::command]
 pub async fn hpm_dfu_start(
     state: State<'_, DfuState>,
+    mutation_gate: State<'_, DfuMutationGate>,
     token: String,
     on_event: Channel<ProgressDto>,
 ) -> CmdResult<OutcomeDto> {
+    let _mutation_permit = mutation_gate
+        .try_acquire(DfuBackend::HpmUsb)
+        .map_err(str::to_owned)?;
     // Cancellation takes the same short lock, so a cancel that observes
     // `active=true` cannot be lost behind the per-run flag reset.
     let (prepared, _active_reset) = {

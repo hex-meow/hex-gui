@@ -1,0 +1,20 @@
+[package]
+name = "mcu-series"
+version = "0.1.0"
+edition = "2021"
+description = "Per-MCU-series flash/RAM/NVS/OTP map constants + memory.x generator (specs/mcu-series.md, specs/otp-map.md). Pure consts, zero deps, no_std; also usable as a [build-dependency] (enable `std`)."
+
+[features]
+default = []
+# Exactly one series feature must be enabled for firmware use (enforced with
+# compile_error!). Build scripts / host tools enable `std` instead and select a
+# series at runtime via `series::STM32G431` / `series::STM32G474`.
+stm32g431 = []
+stm32g474 = []
+# stm32g0b1 (STM32G0B1CBT6, Cortex-M0+), 42 KiB secure boot profile.
+stm32g0b1 = []
+std = []
+
+[dependencies]
+# none — deliberately. This crate is the single source of truth every firmware,
+# bootloader and build script imports; it must be buildable everywhere.

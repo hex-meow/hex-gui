@@ -195,24 +195,24 @@ const ZERO_SLIDES: Slide[] = [
 
 const DFU_SLIDES: Slide[] = [
   {
-    title: { en: "1 · Enter Bootloader", zh: "1 · 进入 Bootloader" },
+    title: { en: "1 · Choose transport", zh: "1 · 选择传输方式" },
     body: {
-      en: "Connect the supported device in USB Bootloader mode, select USB, then scan. Unknown Bootloader versions are never offered an upgrade.",
-      zh: "连接受支持设备并进入 USB Bootloader，选择 USB 后扫描。未知 Bootloader 版本不会获得升级入口。",
+      en: "For the current HPM product, enter USB Bootloader mode and select USB. The STM32 CAN page currently provides read-only Classic-CAN discovery; all known product profiles remain write-locked.",
+      zh: "当前 HPM 产品请进入 USB Bootloader 并选择 USB。STM32 CAN 页面目前只提供 Classic CAN 只读发现；所有已知产品 profile 仍保持写锁定。",
     },
   },
   {
     title: { en: "2 · Validate firmware", zh: "2 · 校验固件" },
     body: {
-      en: "Choose the local artifact. Manual selection still goes through exact format, size, SHA-256, geometry and key-fingerprint checks before erase.",
-      zh: "选择本地升级文件。手动选择仍须在擦除前通过格式、大小、SHA-256、Flash 布局和密钥指纹检查。",
+      en: "USB accepts a local artifact after strict validation. STM32 .meowpkg selection appears only after an exact product profile is qualified; manual selection never bypasses validation.",
+      zh: "USB 可在严格校验后选择本地制品。STM32 只有在精确产品 profile 完成资格确认后才开放 .meowpkg；手动选择不会绕过校验。",
     },
   },
   {
     title: { en: "3 · Upgrade and check", zh: "3 · 升级并检查" },
     body: {
-      en: "Confirm the destructive step and keep power connected. After JUMP, USB cannot prove application health, so check the device's actual function.",
-      zh: "确认擦除步骤并保持供电。JUMP 后 USB 无法证明 APP 健康，因此还需实际检查设备功能。",
+      en: "Keep power connected during USB update. USB cannot prove application health, so check the HPM device's actual function afterward. This build does not start an STM32 CAN write.",
+      zh: "USB 升级期间请保持供电。USB 无法证明 APP 健康，因此结束后还需检查 HPM 设备的实际功能。此构建不会启动 STM32 CAN 写入。",
     },
   },
 ];

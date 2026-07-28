@@ -1,0 +1,14 @@
+[package]
+name = "image-container"
+version = "0.1.0"
+edition = "2021"
+description = "The single 256-byte STM32 image-container header definition (stm32-bl/docs/image-container.md), shared by the bootloader and the host tool. no_std by default; `std` for host use."
+
+[features]
+default = []
+std = []
+
+[dependencies]
+crc = "3.2.1"
+od-consts = { path = "../od-consts", version = "0.1.0" }
+sha2 = { version = "0.10.9", default-features = false, features = ["force-soft-compact"] }

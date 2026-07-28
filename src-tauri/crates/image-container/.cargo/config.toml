@@ -1,0 +1,7 @@
+# Host-test config for standalone `cargo test` runs of this crate. The fw/
+# workspace .cargo/config.toml forces thumbv7em + build-std=["core","alloc"];
+# config arrays merge, so adding "std" here makes host runs build the whole
+# core/alloc/std tree from source (single `core`, no duplicate-lang-item clash).
+# Run: cargo test --target $(rustc -vV | sed -n 's/^host: //p')
+[unstable]
+build-std = ["std"]

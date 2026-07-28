@@ -644,6 +644,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5eb8a2a1cd12ab0d987a5d5e825195d372001a4094a0376319d5a0ad71c1ba0d"
+dependencies = [
+ "crc-catalog",
+]
+
+[[package]]
+name = "crc-catalog"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
+
+[[package]]
 name = "crc32fast"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1140,6 +1155,16 @@ checksum = "38e2275cc4e4fc009b0669731a1e5ab7ebf11f469eaede2bab9309a5b4d6057f"
 dependencies = [
  "memoffset",
  "rustc_version",
+]
+
+[[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]
@@ -1743,6 +1768,7 @@ dependencies = [
  "hex",
  "hex-arm-dynamics",
  "hex-motor",
+ "hexmeow-stm32-can-dfu",
  "hpm-usb-dfu",
  "log",
  "prost",
@@ -1750,10 +1776,29 @@ dependencies = [
  "protoc-bin-vendored",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tokio",
  "zenoh",
+]
+
+[[package]]
+name = "hexmeow-stm32-can-dfu"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "can-transport",
+ "canopen-sdo",
+ "image-container",
+ "mcu-series",
+ "od-consts",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
@@ -2031,6 +2076,15 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
+]
+
+[[package]]
+name = "image-container"
+version = "0.1.0"
+dependencies = [
+ "crc",
+ "od-consts",
+ "sha2",
 ]
 
 [[package]]
@@ -2468,6 +2522,10 @@ checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
 ]
+
+[[package]]
+name = "mcu-series"
+version = "0.1.0"
 
 [[package]]
 name = "memchr"
@@ -2969,6 +3027,10 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation",
 ]
+
+[[package]]
+name = "od-consts"
+version = "0.1.0"
 
 [[package]]
 name = "oid-registry"
@@ -4755,6 +4817,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
 ]
 
 [[package]]
@@ -6587,6 +6660,16 @@ dependencies = [
  "rusticata-macros",
  "thiserror 2.0.18",
  "time",
+]
+
+[[package]]
+name = "xattr"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
+dependencies = [
+ "libc",
+ "rustix",
 ]
 
 [[package]]

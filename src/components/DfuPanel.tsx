@@ -14,6 +14,7 @@ import {
 } from "antd";
 import { listen } from "@tauri-apps/api/event";
 import {
+  canDfuApi,
   dfuError,
   hpmDfuApi,
   type HpmDfuDevice,
@@ -23,6 +24,7 @@ import {
   type HpmDfuStage,
 } from "../dfuApi";
 import { useI18n } from "../i18n";
+import { CanDfuFlow } from "./CanDfuFlow";
 import "./DfuPanel.css";
 
 type Transport = "can" | "usb";
@@ -44,19 +46,20 @@ export function DfuPanel({
   const [prepared, setPrepared] = useState<HpmDfuPrepared | null>(null);
   const [fileName, setFileName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [canBusy, setCanBusy] = useState(false);
   const [cancelRequested, setCancelRequested] = useState(false);
   const [progress, setProgress] = useState<HpmDfuProgress | null>(null);
   const [outcome, setOutcome] = useState<HpmDfuOutcome | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    onBusyChange(busy);
+    onBusyChange(busy || canBusy);
     return () => onBusyChange(false);
-  }, [busy, onBusyChange]);
+  }, [busy, canBusy, onBusyChange]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    void listen("hpm-dfu-close-blocked", () => {
+    void listen("dfu-close-blocked", () => {
       message.warning(copy.closeBlocked);
     }).then((dispose) => {
       unlisten = dispose;
@@ -70,6 +73,24 @@ export function DfuPanel({
     setProgress(null);
     setOutcome(null);
     if (inputRef.current) inputRef.current.value = "";
+  };
+
+  const changeTransport = async (next: Transport) => {
+    if (next === transport || busy || canBusy || probing) return;
+    setError(null);
+    setOutcome(null);
+    try {
+      if (transport === "usb") {
+        await hpmDfuApi.leave();
+        setDevice(null);
+        resetArtifact();
+      } else {
+        await canDfuApi.leave();
+      }
+      setTransport(next);
+    } catch (caught) {
+      setError(dfuError(caught));
+    }
   };
 
   const probe = async () => {
@@ -183,28 +204,17 @@ export function DfuPanel({
         </div>
         <Segmented
           value={transport}
-          disabled={busy || probing}
+          disabled={busy || canBusy || probing}
           options={[
-            { label: "CAN", value: "can" },
+            { label: copy.canTransportLabel, value: "can" },
             { label: "USB", value: "usb" },
           ]}
-          onChange={(value) => {
-            setTransport(value as Transport);
-            setError(null);
-            setOutcome(null);
-          }}
+          onChange={(value) => void changeTransport(value as Transport)}
         />
       </section>
 
       {transport === "can" ? (
-        <Card className="dfu-card">
-          <Alert
-            type="warning"
-            showIcon
-            message={copy.canUnavailable}
-            description={copy.canUnavailableDetail}
-          />
-        </Card>
+        <CanDfuFlow onBusyChange={setCanBusy} />
       ) : (
         <div className="dfu-panel__grid">
           <Card className="dfu-card" title={copy.deviceStep}>
@@ -488,11 +498,10 @@ function textFor(lang: "en" | "zh") {
     return {
       eyebrow: "固件维护",
       title: "设备升级",
-      lead: "当前启用已真机验证的 HPM USB v2 流程。身份、包和指纹全部校验通过后才会擦除。",
+      lead:
+        "HPM 使用已真机验证的 USB v2 流程；STM32 CAN 当前只开放安全发现与身份分类，所有写入等待首个产品 profile 完成资格确认。",
+      canTransportLabel: "CAN · 只读",
       closeBlocked: "升级命令正在执行。请先等待当前命令结束并取消升级，再关闭窗口。",
-      canUnavailable: "CAN 升级当前禁用",
-      canUnavailableDetail:
-        "HPM CAN 仍停留在协议设计阶段，尚无真机证据。此入口不会发现设备，也不会发送任何升级写命令。",
       deviceStep: "1 · 识别设备",
       bootloaderHint: "请先让设备进入 USB Bootloader",
       probe: "扫描 USB Bootloader",
@@ -566,12 +575,10 @@ function textFor(lang: "en" | "zh") {
     eyebrow: "Firmware maintenance",
     title: "Device Firmware Update",
     lead:
-      "The currently hardware-tested HPM USB v2 path is enabled. Erase remains locked until identity, package and fingerprints all pass.",
+      "HPM uses the hardware-tested USB v2 flow. STM32 CAN currently exposes safe discovery and identity classification only; all writes await the first qualified product profile.",
+    canTransportLabel: "CAN · read-only",
     closeBlocked:
       "A firmware command is in progress. Wait for it, cancel safely, then close the window.",
-    canUnavailable: "CAN update is disabled",
-    canUnavailableDetail:
-      "HPM CAN remains a design without hardware evidence. This entry neither discovers devices nor sends update writes.",
     deviceStep: "1 · Identify device",
     bootloaderHint: "Put the device in USB Bootloader mode first",
     probe: "Scan USB Bootloader",

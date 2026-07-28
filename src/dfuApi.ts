@@ -66,6 +66,86 @@ export interface HpmDfuOutcome {
   recoverable_bootloader_expected: boolean;
 }
 
+export type CanDfuAuthorization =
+  | "enabled"
+  | "known_disabled"
+  | "unsupported";
+
+export interface CanDfuDevice {
+  node_id: number;
+  node_id_hex: string;
+  device_name: string | null;
+  vendor_id: number;
+  vendor_id_hex: string;
+  product_code: number;
+  product_code_hex: string;
+  software_revision: number;
+  software_revision_hex: string;
+  serial_number: number;
+  serial_number_hex: string;
+  hardware_version: number | null;
+  hardware_version_hex: string | null;
+  authorization: CanDfuAuthorization;
+  profile_id: string | null;
+  display_name: string | null;
+  reason: string;
+}
+
+export interface CanDfuDiscoveryIssue {
+  node_id: number;
+  node_id_hex: string;
+  reason: string;
+}
+
+export interface CanDfuDiscovery {
+  devices: CanDfuDevice[];
+  issues: CanDfuDiscoveryIssue[];
+}
+
+export interface CanDfuPrepared {
+  token: string;
+  device: CanDfuDevice;
+  artifact_sha256: string;
+  artifact_size: number;
+  mcu: "stm32g431" | "stm32g474" | "stm32g0b1";
+  format_version: number;
+  encrypted: boolean;
+  firmware_id: number;
+  firmware_id_hex: string;
+  firmware_version: number;
+  firmware_version_hex: string;
+  plaintext_size: number;
+  wire_size: number;
+  version_warning: "unknown" | "none" | "reinstall" | "downgrade";
+}
+
+export type CanDfuStage =
+  | "revalidating"
+  | "entering_bootloader"
+  | "writing_header"
+  | "clearing"
+  | "writing"
+  | "verifying_and_starting"
+  | "confirming_application";
+
+export interface CanDfuProgress {
+  stage: CanDfuStage;
+  completed: number;
+  total: number;
+  cancellable: boolean;
+}
+
+export type CanDfuOutcomeStatus =
+  | "application_verified"
+  | "cancelled_before_write"
+  | "cancelled_recoverable";
+
+export interface CanDfuOutcome {
+  status: CanDfuOutcomeStatus;
+  startup_confirmed: boolean;
+  recoverable_bootloader_expected: boolean;
+}
+
 export const hpmDfuApi = {
   probe: () => invoke<HpmDfuDevice>("hpm_dfu_probe"),
 
@@ -84,6 +164,31 @@ export const hpmDfuApi = {
 
   cancel: () => invoke<boolean>("hpm_dfu_cancel"),
   leave: () => invoke<void>("hpm_dfu_leave"),
+};
+
+export const canDfuApi = {
+  discover: (spec: string) =>
+    invoke<CanDfuDiscovery>("stm32_can_dfu_discover", { spec }),
+
+  select: (nodeId: number) =>
+    invoke<void>("stm32_can_dfu_select", { nodeId }),
+
+  // As with HPM, firmware bytes use Tauri's raw IPC body. The selected,
+  // authorized identity is held in the Rust session and cannot be supplied by
+  // WebView JSON.
+  prepare: (bytes: Uint8Array) =>
+    invoke<CanDfuPrepared>("stm32_can_dfu_prepare", bytes),
+
+  start: (
+    token: string,
+    onProgress: (progress: CanDfuProgress) => void
+  ) => {
+    const onEvent = new Channel<CanDfuProgress>(onProgress);
+    return invoke<CanDfuOutcome>("stm32_can_dfu_start", { token, onEvent });
+  },
+
+  cancel: () => invoke<boolean>("stm32_can_dfu_cancel"),
+  leave: () => invoke<void>("stm32_can_dfu_leave"),
 };
 
 export function dfuError(error: unknown): string {
