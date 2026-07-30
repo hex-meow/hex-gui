@@ -2241,7 +2241,11 @@ mod tests {
             .ok()
             .and_then(|value| value.parse::<u8>().ok())
             .unwrap_or(20);
-        let (bus, _) = crate::backend::open_bus(&iface, false).await?;
+        let gate = crate::can_lease::CanTransportGate::default();
+        let lease = gate
+            .try_acquire(crate::can_lease::CanOwner::Manager)
+            .map_err(anyhow::Error::msg)?;
+        let (bus, _) = crate::backend::open_bus(&iface, 5_000_000, false, lease).await?;
         let manager = Arc::new(Cia402Manager::new(
             bus,
             hex_motor::cia402::Cia402ManagerOptions {

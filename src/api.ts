@@ -3,11 +3,11 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfo, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftFactoryCalibrationResult, LiftState, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
+import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ConnectionInfo, ControllerInfo, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftFactoryCalibrationResult, LiftState, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
 
 export const api = {
-  connect: (iface: string, ourNid: number, broadcastHeartbeat: boolean) =>
-    invoke<void>("connect", { iface, ourNid, broadcastHeartbeat }),
+  connect: (iface: string, dataBitrate: number, ourNid: number, broadcastHeartbeat: boolean) =>
+    invoke<ConnectionInfo>("connect", { iface, dataBitrate, ourNid, broadcastHeartbeat }),
   disconnect: () => invoke<void>("disconnect"),
   isConnected: () => invoke<boolean>("is_connected"),
 
@@ -162,8 +162,8 @@ export const api = {
   imuYawReset: () => invoke<void>("imu_yaw_reset"),
 
   // CAN Analyzer
-  analyzerStart: (spec: string, hwTs: boolean) =>
-    invoke<void>("analyzer_start", { spec, hwTs }),
+  analyzerStart: (spec: string, dataBitrate: number | null, hwTs: boolean) =>
+    invoke<void>("analyzer_start", { spec, dataBitrate, hwTs }),
   analyzerStop: () => invoke<void>("analyzer_stop"),
   analyzerBusState: () => invoke<CanBusHealth>("analyzer_bus_state"),
   analyzerGetTrace: (afterSeq: number, max: number, filter: CanFilterSpec) =>

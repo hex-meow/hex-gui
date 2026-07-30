@@ -5,6 +5,7 @@
 
 mod analyzer;
 mod backend;
+mod can_lease;
 mod commands;
 mod device_registry;
 mod dfu_gate;
@@ -20,6 +21,7 @@ mod sdo_client;
 mod smartknob;
 mod state;
 mod stm32_can_dfu;
+mod stm32_can_profiles;
 mod zenoh_arm;
 mod zenoh_base;
 mod zenoh_config;
@@ -90,6 +92,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(AppState::default())
+        .manage(can_lease::CanTransportGate::default())
         .manage(dfu_gate::DfuMutationGate::default())
         .manage(hpm_dfu::DfuState::default())
         .manage(stm32_can_dfu::CanDfuState::default())

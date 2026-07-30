@@ -1,10 +1,10 @@
 //! Non-motor device registry (CANopen `0x1018` identity → host device kind).
 //!
 //! Motor discovery + identity reading already lives in `hex-motor`
-//! (`KNOWN_DEVICES`), and motors are this GUI's *default* device kind. This
-//! table is the GUI-owned companion: it lists the **non-motor** hex-meow
-//! devices the GUI knows how to display, so a node discovered on the bus can be
-//! routed to the right panel purely from its `0x1018` identity.
+//! (`KNOWN_DEVICES`). This table is the GUI-owned companion: it lists the
+//! **non-motor** hex-meow devices the GUI knows how to display. Classification
+//! always uses the exact `(vendor_id, product_code)` tuple; a vendor-wide
+//! wildcard must never make an unknown product safe to control as a motor.
 //!
 //! A device kind shares **one** frontend panel across all its product codes —
 //! add a row here for every new IMU (or other non-motor) product code and they
@@ -12,40 +12,47 @@
 
 use serde::Serialize;
 
-/// HEXFELLOW vendor id — ASCII "hex" (`0x00 'h' 'e' 'x'`), i.e. `0x00686578`.
-/// Used by HEXFELLOW devices (CiA402 motors, GELLO, …).
-pub const VENDOR_HEX: u32 = 0x0068_6578;
-
 /// hex-meow vendor id — ASCII "hexm" (`'h' 'e' 'x' 'm'`), i.e. `0x6865786D`.
 pub const VENDOR_HEXM: u32 = 0x6865_786D;
 
-/// Generic-IMU product code — ASCII "IMU" (`0x00 'I' 'M' 'U'`).
-pub const PRODUCT_IMU: u32 = 0x0049_4D55;
+pub const PRODUCT_IMU_G4: u32 = 0x0069_6D75;
+pub const PRODUCT_ARM_IMU: u32 = 0x6169_6D75;
+pub const PRODUCT_LIFT: u32 = 0x006C_6674;
 
-/// Which panel a discovered device opens. `Motor` is the implicit default for
-/// anything not listed in [`NON_MOTOR_DEVICES`].
+/// Exact identities that are safe to route to CiA402 controls.
+const MOTOR_IDENTITIES: &[(u32, u32)] = &[
+    (0x4859_444C, 0xAAAA_0001),
+    (0x4859_444C, 0xAAAA_0002),
+    (0x4859_444C, 0xAAAA_0005),
+];
+
+/// Which panel a discovered device opens. Unknown exact tuples remain
+/// `Unknown`; `Motor` is never an implicit vendor-level default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DeviceKind {
+    Unknown,
     Motor,
     Imu,
+    Lift,
 }
 
 impl DeviceKind {
     /// Lowercase tag the frontend matches on (`"motor"`, `"imu"`).
     pub fn as_str(self) -> &'static str {
         match self {
+            DeviceKind::Unknown => "unknown",
             DeviceKind::Motor => "motor",
             DeviceKind::Imu => "imu",
+            DeviceKind::Lift => "lift",
         }
     }
 }
 
-/// One non-motor device family. `product_code == None` is a vendor-wide
-/// wildcard (matches any product code under `vendor_id`).
+/// One exact non-motor device identity.
 pub struct KnownDevice {
     pub vendor_id: u32,
-    pub product_code: Option<u32>,
+    pub product_code: u32,
     pub kind: DeviceKind,
     pub name: &'static str,
 }
@@ -55,22 +62,69 @@ pub struct KnownDevice {
 pub const NON_MOTOR_DEVICES: &[KnownDevice] = &[
     KnownDevice {
         vendor_id: VENDOR_HEXM,
-        product_code: Some(PRODUCT_IMU),
+        product_code: PRODUCT_IMU_G4,
         kind: DeviceKind::Imu,
-        name: "hex-meow IMU",
+        name: "hex-meow IMU G4",
     },
-    // Future IMU product codes (all share the IMU panel), e.g.:
-    // KnownDevice { vendor_id: VENDOR_HEXM, product_code: Some(0x...), kind: DeviceKind::Imu, name: "..." },
+    KnownDevice {
+        vendor_id: VENDOR_HEXM,
+        product_code: PRODUCT_ARM_IMU,
+        kind: DeviceKind::Imu,
+        name: "hex-meow arm IMU",
+    },
+    KnownDevice {
+        vendor_id: VENDOR_HEXM,
+        product_code: PRODUCT_LIFT,
+        kind: DeviceKind::Lift,
+        name: "hex-meow lift controller",
+    },
 ];
 
-/// Classify a node from its `0x1018` identity. Anything not registered as a
-/// non-motor device is treated as a [`DeviceKind::Motor`] (the GUI default).
+/// Classify a node from its exact `0x1018` identity.
+///
+/// Only an exact motor entry is safe to route to CiA402 controls.
 pub fn classify(vendor_id: u32, product_code: u32) -> DeviceKind {
+    if let Some(device) = NON_MOTOR_DEVICES
+        .iter()
+        .find(|d| d.vendor_id == vendor_id && d.product_code == product_code)
+    {
+        return device.kind;
+    }
+
+    if MOTOR_IDENTITIES.contains(&(vendor_id, product_code)) {
+        DeviceKind::Motor
+    } else {
+        DeviceKind::Unknown
+    }
+}
+
+pub fn display_name(vendor_id: u32, product_code: u32) -> Option<&'static str> {
     NON_MOTOR_DEVICES
         .iter()
-        .find(|d| {
-            d.vendor_id == vendor_id && d.product_code.map_or(true, |pc| pc == product_code)
-        })
-        .map(|d| d.kind)
-        .unwrap_or(DeviceKind::Motor)
+        .find(|device| device.vendor_id == vendor_id && device.product_code == product_code)
+        .map(|device| device.name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_motor_products_require_exact_tuples() {
+        assert_eq!(classify(VENDOR_HEXM, PRODUCT_IMU_G4), DeviceKind::Imu);
+        assert_eq!(classify(VENDOR_HEXM, PRODUCT_ARM_IMU), DeviceKind::Imu);
+        assert_eq!(classify(VENDOR_HEXM, PRODUCT_LIFT), DeviceKind::Lift);
+        assert_eq!(classify(VENDOR_HEXM, 0xDEAD_BEEF), DeviceKind::Unknown);
+    }
+
+    #[test]
+    fn vendor_wildcards_do_not_classify_unknown_products_as_motors() {
+        assert_eq!(classify(0x0068_6578, 0xDEAD_BEEF), DeviceKind::Unknown);
+        assert_eq!(classify(0x4859_444C, 0xDEAD_BEEF), DeviceKind::Unknown);
+    }
+
+    #[test]
+    fn exact_motor_products_still_route_to_motor_controls() {
+        assert_eq!(classify(0x4859_444C, 0xAAAA_0001), DeviceKind::Motor);
+    }
 }

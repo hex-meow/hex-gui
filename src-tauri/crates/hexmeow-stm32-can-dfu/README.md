@@ -12,8 +12,31 @@ The API is intentionally fail-closed:
   access and no SDO download;
 - hardware versions, MCU names, and firmware IDs are finite exact sets—there
   is no wildcard, force, or mismatch override;
+- every firmware ID lists one or more exact application `0x1008` names, and
+  post-START confirmation requires both an allowed name and the expected
+  software revision;
 - `.meowpkg` input is parsed from bytes with archive/member/count limits before
   allocating member buffers.
+
+Two explicit artifact policies are available:
+
+- `UnprotectedV1` accepts only baseline plaintext-v1 packages;
+- `EncryptedV2` accepts only signed + AES-256-GCM-record v2 packages and binds
+  the product profile to a raw 64-byte P-256 public key (`x || y`).
+
+For encrypted v2, each product profile explicitly pins its signing-key ID,
+encryption-key ID, and security epoch. `PreparedUpgrade::bind` requires exact
+header matches, checks `manifest.pubkey_fingerprint` against the profile key,
+and verifies the canonical low-S ECDSA-P256 prehash signature over the
+container header. Signed-only v2 is deliberately refused.
+
+The host never receives an AES key and never decrypts `image.bin`. Archive
+SHA-256/CRC protects local/download transport before mutation; the signed
+header authenticates product/hardware/firmware metadata and the plaintext
+digest. Ciphertext authenticity is enforced at the final boundary by the
+Bootloader, which verifies each AES-GCM record before programming it. A
+corrupted opaque record can therefore fail the update and leave the device in
+the recoverable Bootloader, but cannot make the host disclose plaintext.
 
 `PreparedUpgrade` is cloneable and may be retained while the GUI closes the CAN
 adapter. `revalidate_prepared` must run on the freshly opened classic-CAN bus;
@@ -35,10 +58,13 @@ Its write order is:
 6. re-claim the confirmed Bootloader;
 7. write and, after an ambiguous result, read back the container header;
 8. CLEAR/arm the download;
-9. stream aligned chunks, resolving every ambiguous chunk through the device's
-   authoritative byte counter before retrying;
+9. stream v1 in aligned chunks, or encrypted v2 as exact
+   `ciphertext || 16-byte tag` records with no extra tail padding; resolve
+   every ambiguous result through the device's authoritative byte counter
+   before retrying;
 10. require the final byte counter, START, then confirm the same physical board
-   as an application with the header's expected software revision.
+   as an explicitly allowed application name with the header's expected
+   software revision.
 
 Explicit SDO server aborts are definitive rejections and are never treated as
 lost acknowledgements. Only timeout/I/O-style ambiguous results may use
@@ -54,12 +80,12 @@ instead of returning an ambiguous cancellation result.
 No production product mapping is built in. Applications must provide a
 `TargetRegistry`; targets whose MCU/hardware/firmware mapping has not been
 qualified should be registered with `RegisteredTarget::disabled`.
+Each enabled target uses `FirmwarePolicy` to bind every allowed firmware ID to
+its exact application name(s), plus an `ArtifactPolicy` appropriate to the
+device's protection state.
 `observe_identity` returns the full read-only snapshot for the UI, and
 `TargetRegistry::classify` distinguishes enabled, known-disabled, unknown, and
 sentinel identities without another bus operation.
 
 The legacy CLI still uses its original engine and can be migrated to this API
-in a later compatibility change. Secure v2 packages are structurally and
-transport-integrity checked, but cannot become `ReadyToFlash` until
-signed-catalog descriptor verification is implemented. Only unprotected v1
-packages currently pass the final artifact gate.
+in a later compatibility change.

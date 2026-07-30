@@ -1,20 +1,21 @@
 //! Tauri adapter for the fail-closed STM32 CANopen DFU core.
 //!
-//! The GUI exposes read-only heartbeat discovery, exact local target
-//! classification, and bounded `.meowpkg` preflight. The common streaming
-//! engine is wired behind the core's opaque `ReadyToFlash` gate, but no product
-//! is enabled until its hardware→MCU and firmware-id mapping is frozen.
-//! Therefore no current discovery session can reach an SDO download.
+//! The GUI exposes heartbeat discovery, exact local target classification,
+//! bounded `.meowpkg` preflight, and the common streaming engine behind the
+//! core's opaque `ReadyToFlash` gate. Only the explicitly registered Lift and
+//! Arm IMU test profiles can reach an SDO download; every unknown, incomplete,
+//! disabled, or mismatched identity remains read-only.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use async_trait::async_trait;
 use can_transport::{
-    CanBus, CanBusState, CanCapabilities, CanFilter, CanFrame, CanId, CanIoError, CanRx,
+    CanBus, CanBusState, CanCapabilities, CanFilter, CanFrame, CanId, CanIoError, CanLinkConfig,
+    CanRx,
 };
 use hexmeow_stm32_can_dfu::{
     authorize, flash, observe_identity, read_package_bytes, revalidate_prepared, AuthorizedTarget,
@@ -27,13 +28,14 @@ use sha2::{Digest, Sha256};
 use tauri::ipc::{Channel, InvokeBody, Request};
 use tauri::State;
 
+use crate::can_lease::{CanOwner, CanTransportGate};
 use crate::dfu_gate::{DfuBackend, DfuMutationGate};
+use crate::stm32_can_profiles::{display_name_for_profile, target_registry};
 
 type CmdResult<T> = std::result::Result<T, String>;
 
 const DISCOVERY_WINDOW: Duration = Duration::from_millis(2_500);
 const IDENTITY_TIMEOUT: Duration = Duration::from_millis(750);
-const VENDOR_ID: u32 = 0x6865_786D;
 const HEARTBEAT_BASE: u16 = 0x700;
 const HEARTBEAT_MASK: u16 = 0x780;
 const MAX_DISCOVERY_NODES: usize = 32;
@@ -64,6 +66,7 @@ pub struct CanDfuState {
     inner: Mutex<CanDfuInner>,
     session_lock: tokio::sync::Mutex<()>,
     active: AtomicBool,
+    cancellable: AtomicBool,
     cancellation: Mutex<Option<CancellationToken>>,
 }
 
@@ -73,6 +76,7 @@ impl Default for CanDfuState {
             inner: Mutex::new(CanDfuInner::default()),
             session_lock: tokio::sync::Mutex::new(()),
             active: AtomicBool::new(false),
+            cancellable: AtomicBool::new(false),
             cancellation: Mutex::new(None),
         }
     }
@@ -81,6 +85,18 @@ impl Default for CanDfuState {
 impl CanDfuState {
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::SeqCst)
+    }
+
+    fn request_cancel(&self) -> bool {
+        if !self.is_active() || !self.cancellable.load(Ordering::SeqCst) {
+            return false;
+        }
+        let cancellation = self.cancellation.lock().unwrap();
+        let Some(cancellation) = cancellation.as_ref() else {
+            return false;
+        };
+        cancellation.cancel();
+        true
     }
 }
 
@@ -155,6 +171,7 @@ pub struct OutcomeDto {
 #[tauri::command]
 pub async fn stm32_can_dfu_discover(
     state: State<'_, CanDfuState>,
+    can_gate: State<'_, CanTransportGate>,
     spec: String,
 ) -> CmdResult<DiscoveryDto> {
     let _session = state.session_lock.lock().await;
@@ -165,11 +182,12 @@ pub async fn stm32_can_dfu_discover(
     if spec.is_empty() {
         return Err("CAN interface must not be empty".into());
     }
+    let can_lease = can_gate.try_acquire(CanOwner::Stm32Discovery)?;
     *state.inner.lock().unwrap() = CanDfuInner::default();
-
-    let bus = open_classic_bus(&spec)
+    let bus = crate::backend::open_classic_1m_bus(&spec, can_lease)
         .await
         .map_err(|error| error.to_string())?;
+    let bus = with_exact_sdo_filter(bus);
     let nodes = observe_heartbeat_nodes(bus.as_ref(), DISCOVERY_WINDOW)
         .await
         .map_err(|error| error.to_string())?;
@@ -288,14 +306,10 @@ pub async fn stm32_can_dfu_prepare(
         .and_then(|format| format.stm32_header_version)
         .ok_or_else(|| "validated STM32 package has no header version".to_owned())?;
     let encrypted = matches!(summary.image_mode(), Stm32ImageMode::EncryptedV2);
-    // PreparedUpgrade currently admits plaintext v1 only. When secure v2
-    // catalog authorization lands, its descriptor must expose the authenticated
-    // plaintext length rather than reusing the encrypted wire length here.
-    debug_assert!(matches!(summary.image_mode(), Stm32ImageMode::PlaintextV1));
-    let plaintext_size = summary.image().len();
-    // 0x1018:03 belongs to the currently responding endpoint. Until an
-    // enabled profile classifies 0x1008 as APP versus Bootloader, do not label
-    // the package as an upgrade/reinstall/downgrade.
+    let plaintext_size = summary.plaintext_size();
+    // Discovery intentionally does not read 0x1008, and 0x1018:03 belongs to
+    // whichever endpoint currently responds (APP or Bootloader). Do not label
+    // the package as an upgrade/reinstall/downgrade from that ambiguous value.
     let version_warning = "unknown";
     let token = format!(
         "{:016x}",
@@ -314,7 +328,7 @@ pub async fn stm32_can_dfu_prepare(
         firmware_version: manifest.firmware_version,
         firmware_version_hex: format!("0x{:08X}", manifest.firmware_version),
         plaintext_size,
-        wire_size: aligned_wire_size(summary.image().len()),
+        wire_size: summary.wire_size(),
         version_warning,
     };
     state.inner.lock().unwrap().staged = Some(StagedArtifact { token, prepared });
@@ -323,29 +337,29 @@ pub async fn stm32_can_dfu_prepare(
 
 struct ActiveReset<'a> {
     active: &'a AtomicBool,
+    cancellable: &'a AtomicBool,
     cancellation: &'a Mutex<Option<CancellationToken>>,
 }
 
 impl Drop for ActiveReset<'_> {
     fn drop(&mut self) {
         *self.cancellation.lock().unwrap() = None;
+        self.cancellable.store(false, Ordering::SeqCst);
         self.active.store(false, Ordering::SeqCst);
     }
 }
 
-/// Mutation entry point shared by future qualified STM32 products.
+/// Mutation entry point for locally registered STM32 test profiles.
 ///
-/// The current registry contains no enabled profile, so neither the GUI nor a
-/// direct IPC caller can create `PreparedUpgrade` and reach this command with a
-/// valid token. Keeping the complete path wired lets qualification focus on
-/// the finite product/hardware/MCU/firmware mapping instead of copying the old
-/// CLI state machine. Before enabling a profile, this command must also join
-/// the application's global CAN transport lease so Analyzer/general sessions
-/// cannot own the same physical adapter concurrently.
+/// A valid token can only be created after exact device authorization and
+/// product-pinned secure-v2 package validation. The process-wide CAN lease
+/// excludes Analyzer and normal manager sessions for the complete revalidation
+/// and flash operation.
 #[tauri::command]
 pub async fn stm32_can_dfu_start(
     state: State<'_, CanDfuState>,
     mutation_gate: State<'_, DfuMutationGate>,
+    can_gate: State<'_, CanTransportGate>,
     token: String,
     on_event: Channel<ProgressDto>,
 ) -> CmdResult<OutcomeDto> {
@@ -372,6 +386,7 @@ pub async fn stm32_can_dfu_start(
     let _mutation_permit = mutation_gate
         .try_acquire(DfuBackend::Stm32Can)
         .map_err(str::to_owned)?;
+    let can_lease = can_gate.try_acquire(CanOwner::Stm32Dfu)?;
     let cancellation = CancellationToken::new();
     *state.cancellation.lock().unwrap() = Some(cancellation.clone());
     if state
@@ -382,8 +397,10 @@ pub async fn stm32_can_dfu_start(
         *state.cancellation.lock().unwrap() = None;
         return Err("an upgrade is already running".to_owned());
     }
+    state.cancellable.store(true, Ordering::SeqCst);
     let _active_reset = ActiveReset {
         active: &state.active,
+        cancellable: &state.cancellable,
         cancellation: &state.cancellation,
     };
 
@@ -400,22 +417,25 @@ pub async fn stm32_can_dfu_start(
             cancellable: true,
         },
     );
-    let bus = open_classic_bus(&spec)
+    let bus = crate::backend::open_classic_1m_bus(&spec, can_lease)
         .await
         .map_err(|error| error.to_string())?;
+    let bus = with_exact_sdo_filter(bus);
     let registry = target_registry().map_err(|error| error.to_string())?;
     let sdo = CanBusSdo::new(bus.as_ref());
     let ready = revalidate_prepared(&sdo, &prepared, &registry, IDENTITY_TIMEOUT)
         .await
         .map_err(|error| error.to_string())?;
-    let wire_total = aligned_wire_size(ready.package().image().len());
+    let wire_total = ready.package().wire_size();
 
     let result = flash(
         &sdo,
         ready,
         &FlashOptions::default(),
         &cancellation,
-        |event| send_flash_progress(&on_event, event, wire_total),
+        |event| {
+            send_flash_progress(&on_event, event, wire_total, &state.cancellable);
+        },
     )
     .await;
 
@@ -438,20 +458,14 @@ pub async fn stm32_can_dfu_start(
             recoverable_bootloader_expected: true,
         }),
         Err(error) => Err(format!(
-            "{error}. If STOP/CLEAR/data had started, keep the device powered in Bootloader and run one complete upgrade again"
+            "{error}. If update writes had started, keep the device powered. It may be recoverable in Bootloader, or an application may have started but failed host confirmation; inspect its identity and run one complete qualified upgrade again if needed"
         )),
     }
 }
 
 #[tauri::command]
 pub fn stm32_can_dfu_cancel(state: State<'_, CanDfuState>) -> bool {
-    let active = state.is_active();
-    if active {
-        if let Some(cancellation) = state.cancellation.lock().unwrap().as_ref() {
-            cancellation.cancel();
-        }
-    }
-    active
+    state.request_cancel()
 }
 
 #[tauri::command]
@@ -465,22 +479,31 @@ pub async fn stm32_can_dfu_leave(state: State<'_, CanDfuState>) -> CmdResult<()>
     Ok(())
 }
 
-fn aligned_wire_size(size: usize) -> usize {
-    let remainder = size % 8;
-    if remainder == 0 {
-        size
-    } else {
-        size + 8 - remainder
-    }
-}
-
 fn send_progress(channel: &Channel<ProgressDto>, progress: ProgressDto) {
     // Losing the WebView/channel must not interrupt an erase or leave START in
     // an ambiguous state. The backend continues to a protocol terminal state.
     let _ = channel.send(progress);
 }
 
-fn send_flash_progress(channel: &Channel<ProgressDto>, event: FlashEvent, total: usize) {
+fn send_flash_progress(
+    channel: &Channel<ProgressDto>,
+    event: FlashEvent,
+    total: usize,
+    cancellable: &AtomicBool,
+) {
+    if matches!(
+        &event,
+        FlashEvent::Stage(
+            FlashStage::VerifyingAndStarting
+                | FlashStage::WaitingForApplication
+                | FlashStage::ApplicationConfirmed
+        )
+    ) {
+        // The engine deliberately has no cancellation point after this stage
+        // notification: START may be in flight and only application
+        // confirmation can disambiguate the terminal state.
+        cancellable.store(false, Ordering::SeqCst);
+    }
     let total = total as u64;
     let progress = match event {
         FlashEvent::Stage(stage) => {
@@ -638,38 +661,6 @@ fn device_dto(
     }
 }
 
-fn display_name_for_profile(profile_id: &str) -> Option<&'static str> {
-    match profile_id {
-        "imu-g4-bench" => Some("IMU bench / demo"),
-        "arm-imu" => Some("Arm IMU"),
-        "lift-g0b1" => Some("Lift controller"),
-        _ => None,
-    }
-}
-
-fn target_registry() -> Result<TargetRegistry> {
-    Ok(TargetRegistry::new(vec![
-        RegisteredTarget::disabled(
-            "imu-g4-bench",
-            VENDOR_ID,
-            0x0069_6D75,
-            "Provisioned bench product, but hardware_version → G431/G474 and firmware_id mappings are not frozen",
-        )?,
-        RegisteredTarget::disabled(
-            "arm-imu",
-            VENDOR_ID,
-            0x6169_6D75,
-            "Product code is allocated but not yet provisioned or update-qualified",
-        )?,
-        RegisteredTarget::disabled(
-            "lift-g0b1",
-            VENDOR_ID,
-            0x006C_6674,
-            "Product code is allocated but not yet provisioned; production security and release policy are not qualified",
-        )?,
-    ])?)
-}
-
 fn hex_sha256(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -723,68 +714,6 @@ fn heartbeat_node_id(frame: &CanFrame) -> Option<u8> {
         .then_some((id - HEARTBEAT_BASE) as u8)
 }
 
-async fn open_classic_bus(spec: &str) -> Result<Arc<dyn CanBus>> {
-    if let Some(channel) = gs_usb_channel(spec) {
-        use can_transport::gs_usb::{GsUsbBus, GsUsbConfig};
-        let bus = GsUsbBus::open(GsUsbConfig::classic_1m().with_channel(channel))
-            .await
-            .with_context(|| format!("opening gs_usb / candleLight channel {channel}"))?;
-        log::info!(
-            "STM32 DFU opened gs_usb ch{channel} in classic 1 Mbit mode: {:?}",
-            bus.capabilities()
-        );
-        return Ok(with_exact_sdo_filter(Arc::new(bus)));
-    }
-
-    let (kind, name) = match spec.split_once(':') {
-        Some((kind, name)) => (kind, name),
-        None => ("socketcan", spec),
-    };
-    match kind {
-        #[cfg(target_os = "linux")]
-        "socketcan" => {
-            let bus = can_transport::socketcan::SocketCanBus::open(name)
-                .with_context(|| format!("opening SocketCAN interface {name:?}"))?;
-            ensure_socketcan_up(&bus, name).await?;
-            Ok(with_exact_sdo_filter(Arc::new(bus)))
-        }
-        other => bail!(
-            "backend {other:?} is unavailable for STM32 DFU (use socketcan on Linux or gs_usb<channel>)"
-        ),
-    }
-}
-
-#[cfg(target_os = "linux")]
-async fn ensure_socketcan_up(bus: &dyn CanBus, name: &str) -> Result<()> {
-    use can_transport::CanControllerState;
-    match bus.bus_state().await {
-        Ok(Some(CanBusState {
-            state: Some(CanControllerState::Stopped),
-            ..
-        })) => bail!(
-            "SocketCAN interface {name:?} is down; run `sudo ip link set dev {name} up` first"
-        ),
-        Ok(_) => Ok(()),
-        Err(error) => {
-            log::warn!("could not query SocketCAN interface {name:?} state; continuing: {error}");
-            Ok(())
-        }
-    }
-}
-
-fn gs_usb_channel(spec: &str) -> Option<u16> {
-    let spec = spec.trim().to_ascii_lowercase();
-    let rest = spec
-        .strip_prefix("gs_usb")
-        .or_else(|| spec.strip_prefix("gsusb"))?;
-    let rest = rest.strip_prefix(':').unwrap_or(rest);
-    if rest.is_empty() {
-        Some(0)
-    } else {
-        rest.parse().ok()
-    }
-}
-
 fn exact_tsdo_filter(filter: CanFilter) -> Option<(CanFilter, u16)> {
     if filter.extended || filter.mask != TSDO_FAMILY_MASK {
         return None;
@@ -823,6 +752,10 @@ impl CanBus for ExactSdoBus {
 
     async fn bus_state(&self) -> std::result::Result<Option<CanBusState>, CanIoError> {
         self.inner.bus_state().await
+    }
+
+    async fn link_config(&self) -> std::result::Result<Option<CanLinkConfig>, CanIoError> {
+        self.inner.link_config().await
     }
 }
 
@@ -879,21 +812,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_contains_only_exact_disabled_product_rows() {
-        let registry = target_registry().expect("valid static registry");
-        assert_eq!(registry.targets().len(), 3);
-        assert!(registry.targets().iter().all(|target| {
-            target.vendor_id() == VENDOR_ID
-                && matches!(target.support(), SupportPolicy::Disabled { .. })
-        }));
-    }
+    fn cancellation_is_accepted_only_before_the_start_boundary() {
+        let state = CanDfuState::default();
+        state.active.store(true, Ordering::SeqCst);
+        state.cancellable.store(true, Ordering::SeqCst);
+        assert!(!state.request_cancel());
 
-    #[test]
-    fn parser_accepts_only_explicit_gs_usb_spellings() {
-        assert_eq!(gs_usb_channel("gs_usb"), Some(0));
-        assert_eq!(gs_usb_channel("gs_usb1"), Some(1));
-        assert_eq!(gs_usb_channel("gsusb:2"), Some(2));
-        assert_eq!(gs_usb_channel("can0"), None);
+        let token = CancellationToken::new();
+        *state.cancellation.lock().unwrap() = Some(token.clone());
+        assert!(state.request_cancel());
+        assert!(token.is_cancelled());
+
+        state.cancellable.store(false, Ordering::SeqCst);
+        assert!(!state.request_cancel());
     }
 
     #[test]

@@ -16,10 +16,12 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use can_transport::gs_usb::GsUsbDataRate;
 #[cfg(target_os = "linux")]
 use can_transport::CanControllerState;
 use can_transport::{
-    CanBus, CanBusState, CanCapabilities, CanFilter, CanFrame, CanId, CanIoError, CanRx,
+    CanBus, CanBusState, CanCapabilities, CanFilter, CanFrame, CanId, CanIoError, CanLinkConfig,
+    CanRx,
 };
 
 const TSDO_BASE: u32 = 0x580;
@@ -72,6 +74,10 @@ impl CanBus for ExactSdoBus {
     async fn bus_state(&self) -> std::result::Result<Option<CanBusState>, CanIoError> {
         self.inner.bus_state().await
     }
+
+    async fn link_config(&self) -> std::result::Result<Option<CanLinkConfig>, CanIoError> {
+        self.inner.link_config().await
+    }
 }
 
 struct ValidatedSdoRx {
@@ -120,24 +126,105 @@ fn with_exact_sdo_filter(bus: Arc<dyn CanBus>) -> Arc<dyn CanBus> {
 /// Open a bus. `hw_timestamp` asks the backend to stamp received frames with
 /// its hardware clock (gs_usb only, needs firmware support); the returned bool
 /// reports whether that actually engaged.
-pub async fn open_bus(spec: &str, hw_timestamp: bool) -> Result<(Arc<dyn CanBus>, bool)> {
+pub async fn open_bus(
+    spec: &str,
+    data_bitrate: u32,
+    hw_timestamp: bool,
+    can_lease: crate::can_lease::CanLease,
+) -> Result<(Arc<dyn CanBus>, bool)> {
+    open_with_profile(
+        spec,
+        LinkProfile::Fd1M {
+            data_bitrate,
+            hw_timestamp,
+        },
+        can_lease,
+        true,
+    )
+    .await
+}
+
+/// Open an Analyzer-owned link.
+///
+/// SocketCAN timing is always left untouched and `data_bitrate` is ignored
+/// there. For gs_usb, `None` selects Classic CAN 1 Mbit/s and `Some` selects
+/// one of the exact standard CAN-FD profiles.
+pub async fn open_analyzer_bus(
+    spec: &str,
+    data_bitrate: Option<u32>,
+    hw_timestamp: bool,
+    can_lease: crate::can_lease::CanLease,
+) -> Result<(Arc<dyn CanBus>, bool)> {
+    let profile = match data_bitrate {
+        Some(data_bitrate) => LinkProfile::Fd1M {
+            data_bitrate,
+            hw_timestamp,
+        },
+        None => LinkProfile::Classic1M { hw_timestamp },
+    };
+    open_with_profile(spec, profile, can_lease, false).await
+}
+
+/// Open the Classic CAN 1 Mbit/s link used by STM32 DFU.
+///
+/// SocketCAN timing remains system-managed; this function selects the exact
+/// Classic profile when it owns a gs_usb adapter.
+pub async fn open_classic_1m_bus(
+    spec: &str,
+    can_lease: crate::can_lease::CanLease,
+) -> Result<Arc<dyn CanBus>> {
+    let (bus, _) = open_with_profile(
+        spec,
+        LinkProfile::Classic1M {
+            hw_timestamp: false,
+        },
+        can_lease,
+        true,
+    )
+    .await?;
+    Ok(bus)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LinkProfile {
+    Fd1M {
+        data_bitrate: u32,
+        hw_timestamp: bool,
+    },
+    Classic1M { hw_timestamp: bool },
+}
+
+async fn open_with_profile(
+    spec: &str,
+    profile: LinkProfile,
+    can_lease: crate::can_lease::CanLease,
+    require_socketcan_up: bool,
+) -> Result<(Arc<dyn CanBus>, bool)> {
     // gs_usb is cross-platform and selected by a `gs_usb<channel>` spec.
     if let Some(channel) = gs_usb_channel(spec) {
         use can_transport::gs_usb::{GsUsbBus, GsUsbConfig};
-        // CAN-FD, 1 Mbit nominal / 5 Mbit data (80 MHz device clock).
-        let bus = GsUsbBus::open(
-            GsUsbConfig::fd_1m_5m()
+        let config = match profile {
+            LinkProfile::Fd1M {
+                data_bitrate,
+                hw_timestamp,
+            } => GsUsbConfig::fd_1m(gs_usb_data_rate(data_bitrate)?)
                 .with_channel(channel)
                 .with_hw_timestamp(hw_timestamp),
-        )
-        .await
-        .with_context(|| format!("opening gs_usb / candleLight channel {channel}"))?;
+            LinkProfile::Classic1M { hw_timestamp } => GsUsbConfig::classic_1m()
+                .with_channel(channel)
+                .with_hw_timestamp(hw_timestamp),
+        };
+        let bus = GsUsbBus::open(config)
+            .await
+            .with_context(|| format!("opening gs_usb / candleLight channel {channel}"))?;
         let hw_ts = bus.hw_timestamps_active();
         log::info!(
-            "gs_usb ch{channel} opened: {:?}, hw_ts={hw_ts}",
+            "gs_usb ch{channel} opened with {profile:?}: {:?}, hw_ts={hw_ts}",
             bus.capabilities()
         );
-        return Ok((with_exact_sdo_filter(Arc::new(bus)), hw_ts));
+        let bus = with_exact_sdo_filter(Arc::new(bus));
+        let bus = crate::can_lease::hold_open_bus(bus, can_lease).map_err(anyhow::Error::msg)?;
+        return Ok((bus, hw_ts));
     }
 
     let (kind, name) = match spec.split_once(':') {
@@ -149,15 +236,42 @@ pub async fn open_bus(spec: &str, hw_timestamp: bool) -> Result<(Arc<dyn CanBus>
         "socketcan" => {
             let bus = can_transport::socketcan::SocketCanBus::open(name)
                 .with_context(|| format!("opening SocketCAN interface '{name}'"))?;
-            ensure_socketcan_up(&bus, name).await?;
+            if require_socketcan_up {
+                ensure_socketcan_up(&bus, name).await?;
+            }
             // SocketCAN hardware timestamps would need SO_TIMESTAMPING,
             // which can-transport does not expose yet.
-            Ok((with_exact_sdo_filter(Arc::new(bus)), false))
+            let bus = with_exact_sdo_filter(Arc::new(bus));
+            let bus =
+                crate::can_lease::hold_open_bus(bus, can_lease).map_err(anyhow::Error::msg)?;
+            Ok((bus, false))
         }
         other => bail!(
             "backend '{other}' is not available on this build \
              (known: 'socketcan' on Linux, 'gs_usb<channel>' everywhere)"
         ),
+    }
+}
+
+fn gs_usb_data_rate(bitrate: u32) -> Result<GsUsbDataRate> {
+    match bitrate {
+        1_000_000 => Ok(GsUsbDataRate::Mbps1),
+        2_000_000 => Ok(GsUsbDataRate::Mbps2),
+        4_000_000 => Ok(GsUsbDataRate::Mbps4),
+        5_000_000 => Ok(GsUsbDataRate::Mbps5),
+        other => bail!(
+            "unsupported gs_usb data bitrate {other}; choose 1000000, 2000000, 4000000, or 5000000 bit/s"
+        ),
+    }
+}
+
+/// Backend label returned to the frontend. It describes ownership/config
+/// semantics, not the device driver that may sit underneath SocketCAN.
+pub fn backend_name(spec: &str) -> &'static str {
+    if gs_usb_channel(spec).is_some() {
+        "gs_usb"
+    } else {
+        "socketcan"
     }
 }
 
@@ -235,6 +349,23 @@ mod tests {
         assert!(exact_tsdo_filter(CanFilter::standard(0x180, 0x780)).is_none());
         assert!(exact_tsdo_filter(CanFilter::standard(0x580, 0x780)).is_none());
         assert!(exact_tsdo_filter(CanFilter::exact_standard(0x594)).is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_backend_open_releases_the_process_wide_lease() {
+        let gate = crate::can_lease::CanTransportGate::default();
+        let lease = gate
+            .try_acquire(crate::can_lease::CanOwner::Manager)
+            .unwrap();
+        let error = match open_bus("unsupported:test", 5_000_000, false, lease).await {
+            Ok(_) => panic!("an unsupported backend must not open"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("backend 'unsupported'"));
+
+        let _next = gate
+            .try_acquire(crate::can_lease::CanOwner::Analyzer)
+            .expect("failed open must release its lease");
     }
 
     #[cfg(target_os = "linux")]

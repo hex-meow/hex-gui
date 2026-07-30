@@ -8,7 +8,9 @@
 //! 3. only for an enabled exact match, read `0x2102` and require an explicitly
 //!    listed hardware version;
 //! 4. parse a bounded `.meowpkg` from memory and bind it to that authorized
-//!    target.
+//!    target, including the profile P-256 key for encrypted v2;
+//! 5. after START, require the exact application name bound to the package's
+//!    firmware ID as well as its expected software revision.
 //!
 //! Unknown, disabled, malformed, or sentinel identities never cause an SDO
 //! download and never access a proprietary object. [`flash`] is the only DFU
@@ -34,8 +36,9 @@ pub use package::{
     MCU_STM32G474,
 };
 pub use profile::{
-    revalidate_prepared, ArtifactPolicy, PreparedUpgrade, ProfileError, ReadyError, ReadyToFlash,
-    RegisteredTarget, SupportPolicy, TargetClassification, TargetRegistry, UpgradePolicy,
+    revalidate_prepared, ArtifactPolicy, FirmwarePolicy, PreparedUpgrade, ProfileError, ReadyError,
+    ReadyToFlash, RegisteredTarget, SupportPolicy, TargetClassification, TargetRegistry,
+    UpgradePolicy,
 };
 pub use transport::{ObjectAddress, SdoTransport, TransportError};
 

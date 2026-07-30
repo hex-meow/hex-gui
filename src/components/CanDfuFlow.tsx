@@ -223,8 +223,8 @@ export function CanDfuFlow({
           <Alert
             type="warning"
             showIcon
-            message={copy.writeLocked}
-            description={copy.writeLockedDetail}
+            message={copy.profileStatus}
+            description={copy.profileStatusDetail}
           />
           <Alert
             type="info"
@@ -538,9 +538,9 @@ function textFor(lang: Lang) {
         "gs_usb 会配置为 Classic CAN 1 Mbit/s；SocketCAN 接口需由系统预先配置为 1 Mbit/s",
       discoverySafety:
         "只被动收集心跳节点，再严格读取完整 0x1018。未知产品不会读取升级私有对象，也不会收到任何 SDO 写入。",
-      writeLocked: "此版本尚未启用 STM32 CAN 写入",
-      writeLockedDetail:
-        "当前只提供被动发现、严格身份校验和本地 profile 分类。三个已知产品均保持锁定，因此不会读取 0x2102，也不会发送升级写命令。",
+      profileStatus: "已启用两个 STM32 CAN 测试 profile",
+      profileStatusDetail:
+        "Lift controller HW 1.1 与 Arm IMU HW 2.0 可进行测试，但尚未完成正式发布所需的真机与断电恢复矩阵。未知设备、IMU bench、Lift factory firmware-ID 及任何不精确匹配仍保持锁定。",
       discover: "发现设备",
       discovering: "监听心跳…",
       noHeartbeat: "监听窗口内没有发现 CANopen 心跳节点。",
@@ -549,16 +549,16 @@ function textFor(lang: Lang) {
       hpmCanDisabledDetail:
         "HPM 当前只有 USB 升级经过真机验证；CAN 设计不会被此 STM32 后端推断或复用。",
       artifactStep: "2 · 校验 .meowpkg",
-      remoteUnavailable: "制品校验等待首个合格产品 profile",
+      remoteUnavailable: "在线 R2 制品源尚未接入",
       localStillValidated:
-        "产品的硬件版本、MCU 和 firmware ID 映射冻结后才会开放本地 .meowpkg；手动选择也不会跳过任何合法性检查。",
+        "当前请手动选择 .meowpkg。手动选择不会跳过校验：包必须匹配设备、MCU、firmware-ID、固定 P-256 公钥、key ID 与 security epoch，并且必须是 encrypted-v2。",
       selectFirst: "请先选择一个已授权的设备。",
       chooseFile: "选择 .meowpkg",
       fileTooLarge: "文件超过 2 MiB 的硬上限。",
       validationPassed: "全部前置校验已通过",
       upgradeStep: "3 · 写入与启动确认",
       destructiveHint:
-        "公共写入引擎已接入安全门，但此构建没有任何合格产品 profile，因此不会发送 0x1F51。只有精确身份重新核对且制品通过校验后，状态机才可能解锁。",
+        "开始前会重新核对同一设备的完整身份；上位机验证产品固定的 P-256 header 签名，Bootloader 再逐条认证 AES-GCM record。任何未知或不精确匹配都无法解锁写入。",
       confirmTitle: "确认通过 CAN 升级？",
       confirmBody:
         "后端会重新监听同一节点并核对 vendor/product/serial/SW/HW，然后进入 Bootloader、写 header、清除、传输并启动。最终必须读回同一身份和目标 SW revision。",
@@ -615,9 +615,9 @@ function textFor(lang: Lang) {
       "gs_usb is configured for Classic CAN at 1 Mbit/s; SocketCAN must already be configured by the system at 1 Mbit/s",
     discoverySafety:
       "The updater passively collects heartbeat nodes, then reads the complete 0x1018 identity strictly. An unknown product receives no proprietary-update reads and no SDO write.",
-    writeLocked: "STM32 CAN writes are not enabled in this build",
-    writeLockedDetail:
-      "This milestone provides passive discovery, strict identity checks and local profile classification only. All three known products remain locked, so 0x2102 is not read and no update write is sent.",
+    profileStatus: "Two STM32 CAN test profiles are enabled",
+    profileStatusDetail:
+      "Lift controller HW 1.1 and Arm IMU HW 2.0 are available for testing, but their hardware and power-loss recovery matrices are not yet release-qualified. Unknown devices, the IMU bench profile, Lift factory firmware-ID, and every inexact match remain locked.",
     discover: "Discover devices",
     discovering: "Listening for heartbeats…",
     noHeartbeat: "No CANopen heartbeat node appeared during the discovery window.",
@@ -626,16 +626,16 @@ function textFor(lang: Lang) {
     hpmCanDisabledDetail:
       "Only HPM USB has hardware evidence. This STM32 backend never infers or reuses the untested HPM CAN design.",
     artifactStep: "2 · Validate .meowpkg",
-    remoteUnavailable: "Artifact validation awaits the first qualified product profile",
+    remoteUnavailable: "The online R2 artifact source is not connected yet",
     localStillValidated:
-      "Local .meowpkg selection unlocks only after the product's hardware, MCU and firmware-ID mapping is frozen. Manual selection will not bypass validation.",
+      "Choose a local .meowpkg for now. Manual selection does not bypass validation: the package must match the device, MCU, firmware-ID, pinned P-256 key, key IDs and security epoch, and it must use encrypted-v2.",
     selectFirst: "Select an authorized device first.",
     chooseFile: "Choose .meowpkg",
     fileTooLarge: "The file exceeds the 2 MiB hard limit.",
     validationPassed: "All preflight checks passed",
     upgradeStep: "3 · Write and confirm startup",
     destructiveHint:
-      "The common write engine is wired behind the safety gate, but this build has no qualified product profile and therefore never sends 0x1F51. Fresh exact identity and artifact authorization are still mandatory before it can unlock.",
+      "The backend revalidates the same full device identity before writing. The host verifies the product-pinned P-256 header signature, then the Bootloader authenticates every AES-GCM record. Unknown or inexact matches cannot unlock writes.",
     confirmTitle: "Update over CAN?",
     confirmBody:
       "The backend will observe the same node again, bind vendor/product/serial/SW/HW, enter the Bootloader, write the header, clear, transfer and start. Success requires the same identity and target SW revision to answer afterward.",

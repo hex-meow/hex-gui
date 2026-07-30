@@ -13,8 +13,9 @@ use hex_motor::types::MotorMode;
 use tauri::State;
 
 use crate::backend;
+use crate::can_lease::{CanOwner, CanTransportGate};
 use crate::diag::{EventsSnapshot, LogLine};
-use crate::dto::{LiveStateDto, MotorInfoDto, MotorModeDto, MotorTargetDto};
+use crate::dto::{ConnectionInfoDto, LiveStateDto, MotorInfoDto, MotorModeDto, MotorTargetDto};
 use crate::state::AppState;
 use crate::zenoh_arm::{ArmInfo, ArmUrdf, ZenohArmConn, ZenohArmState};
 use crate::zenoh_base::{BaseInfo, ZenohBaseState, ZenohConn};
@@ -74,16 +75,26 @@ pub(crate) async fn stop_lift_session(state: &AppState) -> CmdResult<()> {
 #[tauri::command]
 pub async fn connect(
     state: State<'_, AppState>,
+    can_gate: State<'_, CanTransportGate>,
     iface: String,
+    data_bitrate: u32,
     our_nid: u8,
     broadcast_heartbeat: bool,
-) -> CmdResult<()> {
+) -> CmdResult<ConnectionInfoDto> {
     let mut guard = state.manager.lock().await;
     if guard.is_some() {
         return Err("already connected; call disconnect() first".into());
     }
 
-    let (bus, _hw_ts) = backend::open_bus(&iface, false).await.map_err(err)?;
+    let can_lease = can_gate.try_acquire(CanOwner::Manager)?;
+    let (bus, _hw_ts) = backend::open_bus(&iface, data_bitrate, false, can_lease)
+        .await
+        .map_err(err)?;
+    let backend_name = backend::backend_name(&iface);
+    let (link_config, inspection_error) = match bus.link_config().await {
+        Ok(config) => (config, None),
+        Err(error) => (None, Some(error.to_string())),
+    };
     let opts = Cia402ManagerOptions {
         heartbeat_node_id: our_nid,
         broadcast_heartbeat,
@@ -95,7 +106,11 @@ pub async fn connect(
     let mgr = Cia402Manager::new(bus, opts).map_err(err)?;
     log::info!("connected to {iface} as nid 0x{our_nid:02X}");
     *guard = Some(Arc::new(mgr));
-    Ok(())
+    Ok(ConnectionInfoDto::new(
+        backend_name,
+        link_config,
+        inspection_error,
+    ))
 }
 
 #[tauri::command]
@@ -156,7 +171,20 @@ pub async fn initialize(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
 #[tauri::command]
 pub async fn initialize_all(state: State<'_, AppState>) -> CmdResult<Vec<(u8, Option<String>)>> {
     let mgr = manager(&state).await?;
-    let results = mgr.initialize_all().await;
+    let motor_nodes = mgr
+        .list()
+        .into_iter()
+        .filter_map(|device| {
+            let identity = device.identity.as_ref()?;
+            (crate::device_registry::classify(identity.vendor_id, identity.product_code)
+                == crate::device_registry::DeviceKind::Motor)
+                .then_some(device.node_id)
+        })
+        .collect::<Vec<_>>();
+    let mut results = Vec::with_capacity(motor_nodes.len());
+    for nid in motor_nodes {
+        results.push((nid, mgr.initialize(nid).await));
+    }
     Ok(results
         .into_iter()
         .map(|(nid, r)| (nid, r.err().map(|e| e.to_string())))
@@ -614,17 +642,22 @@ pub async fn imu_yaw_reset(state: State<'_, AppState>) -> CmdResult<()> {
 /// all traffic. Independent of the motor `connect()` — the analyzer owns its
 /// bus. `hw_ts` requests device hardware timestamps (gs_usb, firmware-gated;
 /// silently degrades to host timestamps — see the status `hw_ts` flag).
+/// `data_bitrate=None` selects Classic CAN for gs_usb; SocketCAN ignores this
+/// setting and preserves whatever arbitrary timing the user configured.
 #[tauri::command]
 pub async fn analyzer_start(
     state: State<'_, AppState>,
+    can_gate: State<'_, CanTransportGate>,
     spec: String,
+    data_bitrate: Option<u32>,
     hw_ts: bool,
 ) -> CmdResult<()> {
     let mut guard = state.analyzer.lock().await;
     if guard.is_some() {
         return Err("analyzer already running; stop it first".into());
     }
-    let app = crate::analyzer::CanAnalyzer::start(&spec, hw_ts)
+    let can_lease = can_gate.try_acquire(CanOwner::Analyzer)?;
+    let app = crate::analyzer::CanAnalyzer::start(&spec, data_bitrate, hw_ts, can_lease)
         .await
         .map_err(err)?;
     *guard = Some(app);

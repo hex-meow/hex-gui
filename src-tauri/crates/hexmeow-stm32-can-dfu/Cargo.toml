@@ -15,6 +15,7 @@ async-trait = "0.1"
 image-container = { path = "../image-container", version = "0.1.0", features = ["std"] }
 mcu-series = { path = "../mcu-series", version = "0.1.0", features = ["std"] }
 od-consts = { path = "../od-consts", version = "0.1.0" }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

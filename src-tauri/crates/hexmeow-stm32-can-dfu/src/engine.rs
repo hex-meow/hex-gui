@@ -14,6 +14,7 @@ use thiserror::Error;
 use crate::identity::{
     confirm_same_device_across_firmware, revalidate, AuthorizationError, IdentitySnapshot,
 };
+use crate::package::Stm32ImageMode;
 use crate::profile::{ReadyToFlash, TargetRegistry};
 use crate::transport::{ObjectAddress, SdoTransport, TransportError};
 
@@ -61,6 +62,8 @@ impl CancellationToken {
 
 #[derive(Debug, Clone)]
 pub struct FlashOptions {
+    /// Plaintext-v1 chunk size. Encrypted v2 always uses the authenticated
+    /// record boundaries declared by the validated header.
     pub chunk_size: usize,
     /// Total number of data resynchronizations permitted during one stream.
     pub max_retries: u32,
@@ -180,7 +183,7 @@ pub struct FlashOutcome {
     pub start_acknowledged: bool,
 }
 
-/// Flash a prepared STM32 v1 artifact.
+/// Flash a prepared STM32 v1 or authenticated encrypted-v2 artifact.
 ///
 /// This function owns every DFU SDO download in the public core and cannot be
 /// called with an unknown identity: `ReadyToFlash` has private fields and is
@@ -299,18 +302,43 @@ pub async fn flash(
     )
     .await?;
 
-    let mut wire = ready.package().image().to_vec();
-    let remainder = wire.len() % WRITE_GRANULARITY;
-    if remainder != 0 {
-        wire.resize(wire.len() + WRITE_GRANULARITY - remainder, 0xFF);
-    }
-
     progress(FlashEvent::Stage(FlashStage::Streaming));
-    progress(FlashEvent::Progress {
-        written: 0,
-        total: wire.len(),
-    });
-    stream_v1(sdo, node_id, &wire, options, cancellation, &mut progress).await?;
+    let streamed_bytes = match ready.package().image_mode() {
+        Stm32ImageMode::PlaintextV1 => {
+            let mut wire = ready.package().image().to_vec();
+            let remainder = wire.len() % WRITE_GRANULARITY;
+            if remainder != 0 {
+                wire.resize(wire.len() + WRITE_GRANULARITY - remainder, 0xFF);
+            }
+            progress(FlashEvent::Progress {
+                written: 0,
+                total: wire.len(),
+            });
+            stream_v1(sdo, node_id, &wire, options, cancellation, &mut progress).await?;
+            wire.len()
+        }
+        Stm32ImageMode::EncryptedV2 => {
+            let header = image_container::Header::parse(ready.package().header())
+                .map_err(|_| FlashError::InvalidReadyTarget)?;
+            let wire = ready.package().image();
+            progress(FlashEvent::Progress {
+                written: 0,
+                total: wire.len(),
+            });
+            stream_encrypted_v2(
+                sdo,
+                node_id,
+                &header,
+                wire,
+                options,
+                cancellation,
+                &mut progress,
+            )
+            .await?;
+            wire.len()
+        }
+        Stm32ImageMode::SignedV2 => return Err(FlashError::InvalidReadyTarget),
+    };
 
     check_cancel(cancellation, FlashStage::VerifyingAndStarting)?;
     progress(FlashEvent::Stage(FlashStage::VerifyingAndStarting));
@@ -347,7 +375,7 @@ pub async fn flash(
     Ok(FlashOutcome {
         application_identity,
         hardware_version: ready.target().hardware_version(),
-        streamed_bytes: wire.len(),
+        streamed_bytes,
         start_acknowledged,
     })
 }
@@ -529,6 +557,159 @@ async fn stream_v1(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EncryptedRecord {
+    wire_offset: usize,
+    wire_len: usize,
+}
+
+fn encrypted_record_layout(
+    header: &image_container::Header,
+    wire_len: usize,
+) -> Result<Vec<EncryptedRecord>, FlashError> {
+    if header.format_version() != image_container::FORMAT_VERSION_V2
+        || !header.flag_encrypted()
+        || header.record_plain_size() != image_container::V2_RECORD_PLAIN_SIZE
+        || header.record_tag_size() != image_container::V2_RECORD_TAG_SIZE
+        || header.wire_size() as usize != wire_len
+    {
+        return Err(FlashError::InvalidEncryptedGeometry);
+    }
+    let padded_plaintext = image_container::padded_plain_size(header.image_size())
+        .ok_or(FlashError::InvalidEncryptedGeometry)? as usize;
+    if padded_plaintext == 0 {
+        return Err(FlashError::InvalidEncryptedGeometry);
+    }
+
+    let max_plain = usize::from(image_container::V2_RECORD_PLAIN_SIZE);
+    let tag_len = usize::from(image_container::V2_RECORD_TAG_SIZE);
+    let mut plain_offset = 0usize;
+    let mut wire_offset = 0usize;
+    let mut records = Vec::new();
+    while plain_offset < padded_plaintext {
+        let plain_len = (padded_plaintext - plain_offset).min(max_plain);
+        let wire_len = plain_len
+            .checked_add(tag_len)
+            .ok_or(FlashError::InvalidEncryptedGeometry)?;
+        let next_wire = wire_offset
+            .checked_add(wire_len)
+            .ok_or(FlashError::InvalidEncryptedGeometry)?;
+        records.push(EncryptedRecord {
+            wire_offset,
+            wire_len,
+        });
+        plain_offset += plain_len;
+        wire_offset = next_wire;
+    }
+    if wire_offset != header.wire_size() as usize {
+        return Err(FlashError::InvalidEncryptedGeometry);
+    }
+    Ok(records)
+}
+
+/// Stream opaque secure-v2 bytes as complete `ciphertext || tag` records.
+///
+/// The host never decrypts a record. Exact record framing is nevertheless a
+/// protocol requirement because the Bootloader authenticates and commits one
+/// record per SDO download. After an ambiguous result, only the attempted
+/// record's start or end is a valid authoritative wire offset.
+async fn stream_encrypted_v2(
+    sdo: &(impl SdoTransport + ?Sized),
+    node_id: u8,
+    header: &image_container::Header,
+    wire: &[u8],
+    options: &FlashOptions,
+    cancellation: &CancellationToken,
+    progress: &mut impl FnMut(FlashEvent),
+) -> Result<(), FlashError> {
+    let records = encrypted_record_layout(header, wire.len())?;
+    let mut record_pos = 0usize;
+    let mut retries_left = options.max_retries;
+
+    while record_pos < records.len() {
+        check_cancel(cancellation, FlashStage::Streaming)?;
+        let record = records[record_pos];
+        let end = record.wire_offset + record.wire_len;
+        let data = &wire[record.wire_offset..end];
+        match sdo
+            .download(node_id, OD_FW_DATA, data, options.chunk_timeout)
+            .await
+        {
+            Ok(()) => {
+                record_pos += 1;
+                progress(FlashEvent::Progress {
+                    written: end,
+                    total: wire.len(),
+                });
+            }
+            Err(source) if source.is_definitive_rejection() => {
+                return Err(FlashError::Transport {
+                    operation: "streaming encrypted firmware record",
+                    source,
+                })
+            }
+            Err(source) => {
+                check_cancel(cancellation, FlashStage::Streaming)?;
+                let authoritative =
+                    read_exact_u32(sdo, node_id, OD_FW_BYTES, options.operation_timeout)
+                        .await
+                        .map_err(|progress_error| FlashError::AmbiguousChunk {
+                            offset: record.wire_offset,
+                            write_error: source.to_string(),
+                            progress_error: progress_error.to_string(),
+                        })? as usize;
+                if authoritative == end {
+                    // The whole authenticated record committed; only its SDO
+                    // acknowledgement was lost.
+                    record_pos += 1;
+                    progress(FlashEvent::Progress {
+                        written: end,
+                        total: wire.len(),
+                    });
+                    continue;
+                }
+                if authoritative != record.wire_offset {
+                    return Err(FlashError::InvalidEncryptedAuthoritativeOffset {
+                        offset: authoritative,
+                        attempted_start: record.wire_offset,
+                        attempted_end: end,
+                    });
+                }
+                if retries_left == 0 {
+                    return Err(FlashError::RetriesExhausted {
+                        offset: record.wire_offset,
+                        authoritative_offset: authoritative,
+                    });
+                }
+                retries_left -= 1;
+                // Secure Bootloaders accept only this idempotent echo of the
+                // counter they just reported; rewinding/skipping is forbidden.
+                write_offset_verified(sdo, node_id, authoritative, options.operation_timeout)
+                    .await?;
+                progress(FlashEvent::Resynchronized {
+                    attempted_offset: record.wire_offset,
+                    authoritative_offset: authoritative,
+                    retries_left,
+                });
+            }
+        }
+    }
+
+    let final_offset = read_exact_u32(sdo, node_id, OD_FW_BYTES, options.operation_timeout)
+        .await
+        .map_err(|source| FlashError::Transport {
+            operation: "reading final encrypted-wire byte count",
+            source,
+        })? as usize;
+    if final_offset != wire.len() {
+        return Err(FlashError::FinalOffsetMismatch {
+            expected: wire.len(),
+            actual: final_offset,
+        });
+    }
+    Ok(())
+}
+
 async fn write_offset_verified(
     sdo: &(impl SdoTransport + ?Sized),
     node_id: u8,
@@ -608,6 +789,14 @@ async fn wait_for_application(
     ready: &ReadyToFlash,
     options: &FlashOptions,
 ) -> Result<IdentitySnapshot, FlashError> {
+    let policy = match ready.target().target().support() {
+        crate::SupportPolicy::Enabled(policy) => policy,
+        crate::SupportPolicy::Disabled { .. } => return Err(FlashError::InvalidReadyTarget),
+    };
+    let expected_names = policy
+        .firmware_policy(ready.package().manifest().firmware_id)
+        .ok_or(FlashError::InvalidReadyTarget)?
+        .application_names();
     let deadline = Instant::now()
         .checked_add(options.application_timeout)
         .ok_or_else(|| {
@@ -635,23 +824,34 @@ async fn wait_for_application(
                     Some(status),
                 )
             }
-            Ok(_) => match confirm_same_device_across_firmware(
-                sdo,
-                ready.target(),
-                options.operation_timeout,
-            )
-            .await
-            {
-                Ok(identity) => {
-                    let expected = ready.package().manifest().firmware_version;
-                    let actual = identity.revision_number();
-                    if actual != expected {
-                        return Err(FlashError::ApplicationRevisionMismatch { expected, actual });
-                    }
-                    return Ok(identity);
+            Ok(name) => {
+                if !expected_names.iter().any(|expected| expected == &name) {
+                    return Err(FlashError::ApplicationNameMismatch {
+                        expected: expected_names.to_vec(),
+                        actual: name,
+                    });
                 }
-                Err(error) => (error.to_string(), None),
-            },
+                match confirm_same_device_across_firmware(
+                    sdo,
+                    ready.target(),
+                    options.operation_timeout,
+                )
+                .await
+                {
+                    Ok(identity) => {
+                        let expected = ready.package().manifest().firmware_version;
+                        let actual = identity.revision_number();
+                        if actual != expected {
+                            return Err(FlashError::ApplicationRevisionMismatch {
+                                expected,
+                                actual,
+                            });
+                        }
+                        return Ok(identity);
+                    }
+                    Err(error) => (error.to_string(), None),
+                }
+            }
             Err(error) => (error.to_string(), None),
         };
         if Instant::now() >= deadline {
@@ -757,6 +957,8 @@ pub enum FlashError {
     InvalidDeviceName,
     #[error("container header could not be confirmed by readback: {last_error}")]
     HeaderNotAccepted { last_error: String },
+    #[error("secure-v2 package has invalid encrypted record geometry")]
+    InvalidEncryptedGeometry,
     #[error(
         "data write at offset {offset} was ambiguous ({write_error}); authoritative progress read also failed ({progress_error}); refusing blind retry"
     )]
@@ -771,6 +973,14 @@ pub enum FlashError {
     InvalidAuthoritativeOffset {
         offset: usize,
         total: usize,
+        attempted_end: usize,
+    },
+    #[error(
+        "device reported encrypted-wire offset {offset}, but only attempted record boundaries {attempted_start} or {attempted_end} are valid"
+    )]
+    InvalidEncryptedAuthoritativeOffset {
+        offset: usize,
+        attempted_start: usize,
         attempted_end: usize,
     },
     #[error("data retries exhausted at offset {offset}; device reports {authoritative_offset}")]
@@ -800,6 +1010,11 @@ pub enum FlashError {
         "application revision mismatch after start: expected 0x{expected:08X}, got 0x{actual:08X}"
     )]
     ApplicationRevisionMismatch { expected: u32, actual: u32 },
+    #[error("application name mismatch after start: expected one of {expected:?}, got {actual:?}")]
+    ApplicationNameMismatch {
+        expected: Vec<String>,
+        actual: String,
+    },
 }
 
 #[cfg(test)]
@@ -808,14 +1023,18 @@ mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use image_container::{HeaderBuilder, FORMAT_VERSION_V1, VENDOR_ID};
+    use image_container::{
+        HeaderBuilder, HeaderV2Builder, FORMAT_VERSION_V1, FORMAT_VERSION_V2, TARGET_MCU_G0B1,
+        V2_ENCRYPTION_KEY_ID, V2_SIGNING_KEY_ID, VENDOR_ID,
+    };
+    use p256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey, VerifyingKey};
     use sha2::{Digest, Sha256};
 
     use super::*;
     use crate::{
-        authorize, read_package_bytes, revalidate_prepared, ArtifactPolicy, ImageMeta, Manifest,
-        MemberRef, PackageLimits, PayloadFormat, PreparedUpgrade, RegisteredTarget, TargetRegistry,
-        UpgradePolicy,
+        authorize, read_package_bytes, revalidate_prepared, ArtifactPolicy, FirmwarePolicy,
+        ImageMeta, Manifest, MemberRef, PackageLimits, PayloadFormat, PreparedUpgrade,
+        RegisteredTarget, TargetRegistry, UpgradePolicy,
     };
 
     const PRODUCT: u32 = 0x1234_5678;
@@ -833,7 +1052,9 @@ mod tests {
     enum DataFailure {
         None,
         CommitThenLoseAck,
+        RejectWithoutCommit,
         RejectAndLoseProgress,
+        ReportWrongOffset(usize),
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -858,6 +1079,7 @@ mod tests {
         lose_start_ack: bool,
         swap_serial_on_claim: bool,
         bootloader_name: String,
+        application_name: String,
         installed_revision: u32,
         reject_header: bool,
         reject_start: bool,
@@ -886,6 +1108,7 @@ mod tests {
                     lose_start_ack: false,
                     swap_serial_on_claim: false,
                     bootloader_name: BL_NAME_STM32G4.to_owned(),
+                    application_name: "test-application".to_owned(),
                     installed_revision: 0x0001_0001,
                     reject_header: false,
                     reject_start: false,
@@ -915,6 +1138,10 @@ mod tests {
 
         fn set_bootloader_name(&self, name: &str) {
             self.state.lock().unwrap().bootloader_name = name.to_owned();
+        }
+
+        fn set_application_name(&self, name: &str) {
+            self.state.lock().unwrap().application_name = name.to_owned();
         }
 
         fn set_installed_revision(&self, revision: u32) {
@@ -989,7 +1216,7 @@ mod tests {
                     subindex: 0,
                 } => HARDWARE.to_le_bytes().to_vec(),
                 OD_DEVICE_NAME => match state.firmware {
-                    Firmware::Application => b"test-application".to_vec(),
+                    Firmware::Application => state.application_name.as_bytes().to_vec(),
                     Firmware::Bootloader => state.bootloader_name.as_bytes().to_vec(),
                 },
                 OD_FW_HEADER => state.header.clone(),
@@ -1063,6 +1290,13 @@ mod tests {
                     if failure == DataFailure::RejectAndLoseProgress {
                         state.fail_next_progress_read = true;
                         return Err(TransportError::new("data result ambiguous"));
+                    }
+                    if failure == DataFailure::RejectWithoutCommit {
+                        return Err(TransportError::new("record was not committed"));
+                    }
+                    if let DataFailure::ReportWrongOffset(offset) = failure {
+                        state.offset = offset;
+                        return Err(TransportError::new("device reported a wrong offset"));
                     }
                     let start = state.offset;
                     let end = start + data.len();
@@ -1165,6 +1399,154 @@ mod tests {
         bytes
     }
 
+    fn signing_key(fill: u8) -> SigningKey {
+        SigningKey::from_slice(&[fill; 32]).unwrap()
+    }
+
+    fn raw_verifying_key(signing_key: &SigningKey) -> [u8; 64] {
+        let encoded = VerifyingKey::from(signing_key).to_encoded_point(false);
+        let bytes = encoded.as_bytes();
+        assert_eq!(bytes[0], 0x04);
+        let mut raw = [0u8; 64];
+        raw.copy_from_slice(&bytes[1..]);
+        raw
+    }
+
+    fn secure_plaintext() -> Vec<u8> {
+        (0..481)
+            .map(|index| (index as u8).wrapping_mul(17).wrapping_add(3))
+            .collect()
+    }
+
+    fn secure_unsigned_header(
+        encrypted: bool,
+        signing_key_id: u32,
+        encryption_key_id: u32,
+    ) -> image_container::Header {
+        let plaintext = secure_plaintext();
+        let builder = if encrypted {
+            HeaderV2Builder::encrypted([0xA5; 12]).encryption_key_id(encryption_key_id)
+        } else {
+            HeaderV2Builder::signed_only()
+        };
+        builder
+            .product_code(PRODUCT)
+            .min_hardware_rev(0x0002_0000)
+            .firmware_id(FIRMWARE_ID)
+            .firmware_version(0x0001_0001)
+            .load_address(0x0800_AA00)
+            .target_mcu(TARGET_MCU_G0B1)
+            .security_epoch(0)
+            .signing_key_id(signing_key_id)
+            .plaintext(&plaintext)
+            .finish()
+            .unwrap()
+    }
+
+    fn signature_raw(unsigned: &image_container::Header, signing_key: &SigningKey) -> [u8; 64] {
+        let digest = unsigned.signature_digest().unwrap();
+        let signature: Signature = signing_key.sign_prehash(&digest).unwrap();
+        let signature = signature.normalize_s().unwrap_or(signature);
+        let mut raw = [0u8; 64];
+        raw.copy_from_slice(&signature.to_bytes());
+        raw
+    }
+
+    fn sign_header(
+        unsigned: image_container::Header,
+        signing_key: &SigningKey,
+    ) -> image_container::Header {
+        let signature = signature_raw(&unsigned, signing_key);
+        unsigned.with_signature(signature).unwrap()
+    }
+
+    fn high_s_equivalent(mut signature: [u8; 64]) -> [u8; 64] {
+        const P256_ORDER: [u8; 32] = [
+            0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xBC, 0xE6, 0xFA, 0xAD, 0xA7, 0x17, 0x9E, 0x84, 0xF3, 0xB9, 0xCA, 0xC2,
+            0xFC, 0x63, 0x25, 0x51,
+        ];
+        let mut high_s = [0u8; 32];
+        let mut borrow = 0i16;
+        for index in (0..32).rev() {
+            let difference =
+                i16::from(P256_ORDER[index]) - i16::from(signature[32 + index]) - borrow;
+            if difference < 0 {
+                high_s[index] = (difference + 256) as u8;
+                borrow = 1;
+            } else {
+                high_s[index] = difference as u8;
+                borrow = 0;
+            }
+        }
+        assert_eq!(borrow, 0);
+        signature[32..].copy_from_slice(&high_s);
+        signature
+    }
+
+    fn secure_package_bytes(
+        signing_key: &SigningKey,
+        manifest_key: &[u8; 64],
+        encrypted: bool,
+        signature_override: Option<[u8; 64]>,
+        signing_key_id: u32,
+        encryption_key_id: u32,
+    ) -> (Vec<u8>, Vec<u8>) {
+        let plaintext = secure_plaintext();
+        let unsigned = secure_unsigned_header(encrypted, signing_key_id, encryption_key_id);
+        let header = match signature_override {
+            Some(signature) => unsigned.with_signature(signature).unwrap(),
+            None => sign_header(unsigned, signing_key),
+        };
+        let wire = if encrypted {
+            (0..header.wire_size() as usize)
+                .map(|index| (index as u8).wrapping_mul(29).wrapping_add(0x51))
+                .collect::<Vec<_>>()
+        } else {
+            let mut wire = plaintext;
+            wire.resize(header.wire_size() as usize, 0xFF);
+            wire
+        };
+        let manifest = Manifest {
+            format: crate::FORMAT.to_owned(),
+            mcu: crate::MCU_STM32G0B1.to_owned(),
+            vendor_id: VENDOR_ID,
+            product_code: PRODUCT,
+            min_hardware_rev: 0x0002_0000,
+            firmware_id: FIRMWARE_ID,
+            firmware_version: 0x0001_0001,
+            image: ImageMeta {
+                member: "image.bin".to_owned(),
+                size: wire.len() as u64,
+                sha256: sha256_hex(&wire),
+                crc32: Some(image_container::image_crc32_of(&wire)),
+            },
+            header: Some(MemberRef {
+                member: "header.bin".to_owned(),
+            }),
+            envelope: None,
+            key_fingerprint: None,
+            pubkey_fingerprint: Some(sha256_hex(manifest_key)),
+            app_arv: None,
+            payload_format: Some(PayloadFormat {
+                stm32_header_version: Some(FORMAT_VERSION_V2),
+                hpm_kn_version: None,
+            }),
+            tool_version: "core-secure-engine-test".to_owned(),
+            built_at: None,
+        };
+        let manifest = serde_json::to_vec(&manifest).unwrap();
+        let mut bytes = Vec::new();
+        {
+            let mut archive = tar::Builder::new(&mut bytes);
+            append(&mut archive, "manifest.json", &manifest);
+            append(&mut archive, "image.bin", &wire);
+            append(&mut archive, "header.bin", header.as_bytes());
+            archive.finish().unwrap();
+        }
+        (bytes, wire)
+    }
+
     fn append<W: Write>(archive: &mut tar::Builder<W>, name: &str, data: &[u8]) {
         let mut header = tar::Header::new_ustar();
         header.set_size(data.len() as u64);
@@ -1177,7 +1559,7 @@ mod tests {
         let policy = UpgradePolicy::new(
             crate::MCU_STM32G431,
             vec![HARDWARE],
-            vec![FIRMWARE_ID],
+            vec![FirmwarePolicy::new(FIRMWARE_ID, vec!["test-application".to_owned()]).unwrap()],
             ArtifactPolicy::UnprotectedV1,
         )
         .unwrap();
@@ -1191,6 +1573,38 @@ mod tests {
         .unwrap()
     }
 
+    fn secure_registry_with_ids(
+        verifying_key: [u8; 64],
+        signing_key_id: u32,
+        encryption_key_id: u32,
+        security_epoch: u32,
+    ) -> TargetRegistry {
+        let policy = UpgradePolicy::new(
+            crate::MCU_STM32G0B1,
+            vec![HARDWARE],
+            vec![FirmwarePolicy::new(FIRMWARE_ID, vec!["test-application".to_owned()]).unwrap()],
+            ArtifactPolicy::encrypted_v2(
+                verifying_key,
+                signing_key_id,
+                encryption_key_id,
+                security_epoch,
+            ),
+        )
+        .unwrap();
+        TargetRegistry::new(vec![RegisteredTarget::enabled(
+            "secure-engine-test",
+            VENDOR_ID,
+            PRODUCT,
+            policy,
+        )
+        .unwrap()])
+        .unwrap()
+    }
+
+    fn secure_registry(verifying_key: [u8; 64]) -> TargetRegistry {
+        secure_registry_with_ids(verifying_key, V2_SIGNING_KEY_ID, V2_ENCRYPTION_KEY_ID, 0)
+    }
+
     async fn ready(mock: &MockSdo, image: &[u8]) -> ReadyToFlash {
         let registry = registry();
         let target = authorize(mock, 1, &registry, Duration::from_millis(5))
@@ -1201,6 +1615,35 @@ mod tests {
         revalidate_prepared(mock, &prepared, &registry, Duration::from_millis(5))
             .await
             .unwrap()
+    }
+
+    async fn secure_ready(
+        mock: &MockSdo,
+        package_bytes: &[u8],
+        verifying_key: [u8; 64],
+    ) -> ReadyToFlash {
+        let registry = secure_registry(verifying_key);
+        let target = authorize(mock, 1, &registry, Duration::from_millis(5))
+            .await
+            .unwrap();
+        let package = read_package_bytes(package_bytes, PackageLimits::default()).unwrap();
+        let prepared = PreparedUpgrade::bind(target, package).unwrap();
+        revalidate_prepared(mock, &prepared, &registry, Duration::from_millis(5))
+            .await
+            .unwrap()
+    }
+
+    async fn bind_secure(
+        mock: &MockSdo,
+        package_bytes: &[u8],
+        verifying_key: [u8; 64],
+    ) -> Result<PreparedUpgrade, crate::ProfileError> {
+        let registry = secure_registry(verifying_key);
+        let target = authorize(mock, 1, &registry, Duration::from_millis(5))
+            .await
+            .unwrap();
+        let package = read_package_bytes(package_bytes, PackageLimits::default()).unwrap();
+        PreparedUpgrade::bind(target, package)
     }
 
     fn options() -> FlashOptions {
@@ -1226,6 +1669,377 @@ mod tests {
                 Operation::Upload(_) => None,
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn encrypted_v2_binding_authenticates_header_and_exposes_exact_sizes() {
+        let signing = signing_key(1);
+        let verifying_key = raw_verifying_key(&signing);
+        let (package_bytes, wire) = secure_package_bytes(
+            &signing,
+            &verifying_key,
+            true,
+            None,
+            V2_SIGNING_KEY_ID,
+            V2_ENCRYPTION_KEY_ID,
+        );
+        let mock = MockSdo::new(wire);
+        let prepared = bind_secure(&mock, &package_bytes, verifying_key)
+            .await
+            .unwrap();
+
+        assert_eq!(prepared.package().image_mode(), Stm32ImageMode::EncryptedV2);
+        assert_eq!(prepared.package().plaintext_size(), 481);
+        assert_eq!(prepared.package().wire_size(), 536);
+    }
+
+    #[tokio::test]
+    async fn encrypted_v2_binding_rejects_malformed_signature() {
+        let signing = signing_key(1);
+        let verifying_key = raw_verifying_key(&signing);
+        let (package_bytes, wire) = secure_package_bytes(
+            &signing,
+            &verifying_key,
+            true,
+            Some([0u8; 64]),
+            V2_SIGNING_KEY_ID,
+            V2_ENCRYPTION_KEY_ID,
+        );
+        let mock = MockSdo::new(wire);
+        let error = bind_secure(&mock, &package_bytes, verifying_key)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::ProfileError::MalformedHeaderSignature
+        ));
+    }
+
+    #[tokio::test]
+    async fn encrypted_v2_binding_rejects_malleable_high_s_signature() {
+        let signing = signing_key(1);
+        let verifying_key = raw_verifying_key(&signing);
+        let unsigned = secure_unsigned_header(true, V2_SIGNING_KEY_ID, V2_ENCRYPTION_KEY_ID);
+        let high_s = high_s_equivalent(signature_raw(&unsigned, &signing));
+        let (package_bytes, wire) = secure_package_bytes(
+            &signing,
+            &verifying_key,
+            true,
+            Some(high_s),
+            V2_SIGNING_KEY_ID,
+            V2_ENCRYPTION_KEY_ID,
+        );
+        let mock = MockSdo::new(wire);
+        let error = bind_secure(&mock, &package_bytes, verifying_key)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::ProfileError::NonCanonicalHeaderSignature
+        ));
+    }
+
+    #[tokio::test]
+    async fn encrypted_v2_binding_rejects_wrong_public_key_even_if_manifest_claims_it() {
+        let signer = signing_key(1);
+        let wrong_signer = signing_key(2);
+        let wrong_key = raw_verifying_key(&wrong_signer);
+        let (package_bytes, wire) = secure_package_bytes(
+            &signer,
+            &wrong_key,
+            true,
+            None,
+            V2_SIGNING_KEY_ID,
+            V2_ENCRYPTION_KEY_ID,
+        );
+        let mock = MockSdo::new(wire);
+        let error = bind_secure(&mock, &package_bytes, wrong_key)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::ProfileError::HeaderSignatureVerificationFailed
+        ));
+    }
+
+    #[tokio::test]
+    async fn encrypted_v2_binding_rejects_manifest_public_key_fingerprint_mismatch() {
+        let signer = signing_key(1);
+        let verifying_key = raw_verifying_key(&signer);
+        let other_key = raw_verifying_key(&signing_key(2));
+        let (package_bytes, wire) = secure_package_bytes(
+            &signer,
+            &other_key,
+            true,
+            None,
+            V2_SIGNING_KEY_ID,
+            V2_ENCRYPTION_KEY_ID,
+        );
+        let mock = MockSdo::new(wire);
+        let error = bind_secure(&mock, &package_bytes, verifying_key)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::ProfileError::PublicKeyFingerprintMismatch
+        ));
+    }
+
+    #[tokio::test]
+    async fn encrypted_v2_policy_rejects_signed_only_package() {
+        let signing = signing_key(1);
+        let verifying_key = raw_verifying_key(&signing);
+        let (package_bytes, wire) =
+            secure_package_bytes(&signing, &verifying_key, false, None, V2_SIGNING_KEY_ID, 0);
+        let mock = MockSdo::new(wire);
+        let error = bind_secure(&mock, &package_bytes, verifying_key)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::ProfileError::ArtifactModeMismatch {
+                actual: Stm32ImageMode::SignedV2,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn encrypted_v2_binding_requires_bootloader_key_ids() {
+        let signing = signing_key(1);
+        let verifying_key = raw_verifying_key(&signing);
+        let (wrong_signing_id, wire) = secure_package_bytes(
+            &signing,
+            &verifying_key,
+            true,
+            None,
+            V2_SIGNING_KEY_ID + 1,
+            V2_ENCRYPTION_KEY_ID,
+        );
+        let mock = MockSdo::new(wire);
+        let error = bind_secure(&mock, &wrong_signing_id, verifying_key)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::ProfileError::SigningKeyIdMismatch {
+                expected: 1,
+                actual: 2
+            }
+        ));
+
+        let (wrong_encryption_id, wire) = secure_package_bytes(
+            &signing,
+            &verifying_key,
+            true,
+            None,
+            V2_SIGNING_KEY_ID,
+            V2_ENCRYPTION_KEY_ID + 1,
+        );
+        let mock = MockSdo::new(wire);
+        let error = bind_secure(&mock, &wrong_encryption_id, verifying_key)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::ProfileError::EncryptionKeyIdMismatch {
+                expected: 1,
+                actual: 2
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn encrypted_v2_binding_requires_profile_security_epoch() {
+        let signing = signing_key(1);
+        let verifying_key = raw_verifying_key(&signing);
+        let (package_bytes, wire) = secure_package_bytes(
+            &signing,
+            &verifying_key,
+            true,
+            None,
+            V2_SIGNING_KEY_ID,
+            V2_ENCRYPTION_KEY_ID,
+        );
+        let mock = MockSdo::new(wire);
+        let registry =
+            secure_registry_with_ids(verifying_key, V2_SIGNING_KEY_ID, V2_ENCRYPTION_KEY_ID, 1);
+        let target = authorize(&mock, 1, &registry, Duration::from_millis(5))
+            .await
+            .unwrap();
+        let package = read_package_bytes(&package_bytes, PackageLimits::default()).unwrap();
+        let error = PreparedUpgrade::bind(target, package).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::ProfileError::SecurityEpochMismatch {
+                expected: 1,
+                actual: 0
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn encrypted_v2_streams_exact_records_without_tail_padding_or_duplicate_ack_retry() {
+        let signing = signing_key(1);
+        let verifying_key = raw_verifying_key(&signing);
+        let (package_bytes, wire) = secure_package_bytes(
+            &signing,
+            &verifying_key,
+            true,
+            None,
+            V2_SIGNING_KEY_ID,
+            V2_ENCRYPTION_KEY_ID,
+        );
+        let mock = MockSdo::new(wire.clone());
+        mock.set_bootloader_name(BL_NAME_STM32G0B1);
+        mock.set_data_failure(DataFailure::CommitThenLoseAck);
+        let ready = secure_ready(&mock, &package_bytes, verifying_key).await;
+        mock.clear_operations();
+
+        let outcome = flash(&mock, ready, &options(), &CancellationToken::new(), |_| {})
+            .await
+            .unwrap();
+
+        let writes = mock
+            .operations()
+            .into_iter()
+            .filter_map(|operation| match operation {
+                Operation::Download(address, data) if address == OD_FW_DATA => Some(data),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            writes.iter().map(Vec::len).collect::<Vec<_>>(),
+            vec![256, 256, 24]
+        );
+        assert_eq!(writes.concat(), wire);
+        assert_eq!(mock.streamed(), wire);
+        assert_eq!(outcome.streamed_bytes, 536);
+    }
+
+    #[tokio::test]
+    async fn encrypted_v2_resyncs_only_at_the_reported_record_start() {
+        let signing = signing_key(1);
+        let verifying_key = raw_verifying_key(&signing);
+        let (package_bytes, wire) = secure_package_bytes(
+            &signing,
+            &verifying_key,
+            true,
+            None,
+            V2_SIGNING_KEY_ID,
+            V2_ENCRYPTION_KEY_ID,
+        );
+        let mock = MockSdo::new(wire);
+        mock.set_bootloader_name(BL_NAME_STM32G0B1);
+        mock.set_data_failure(DataFailure::RejectWithoutCommit);
+        let ready = secure_ready(&mock, &package_bytes, verifying_key).await;
+        mock.clear_operations();
+        let mut events = Vec::new();
+
+        flash(
+            &mock,
+            ready,
+            &options(),
+            &CancellationToken::new(),
+            |event| events.push(event),
+        )
+        .await
+        .unwrap();
+
+        assert!(events.contains(&FlashEvent::Resynchronized {
+            attempted_offset: 0,
+            authoritative_offset: 0,
+            retries_left: 1,
+        }));
+        let operations = mock.operations();
+        let data_writes = operations
+            .iter()
+            .filter(|operation| {
+                matches!(operation, Operation::Download(address, _) if *address == OD_FW_DATA)
+            })
+            .count();
+        assert_eq!(data_writes, 4);
+        assert!(operations.iter().any(|operation| {
+            matches!(
+                operation,
+                Operation::Download(address, data)
+                    if *address == OD_FW_OFFSET && data == &0u32.to_le_bytes()
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn encrypted_v2_rejects_authoritative_offset_outside_attempted_record() {
+        let signing = signing_key(1);
+        let verifying_key = raw_verifying_key(&signing);
+        let (package_bytes, wire) = secure_package_bytes(
+            &signing,
+            &verifying_key,
+            true,
+            None,
+            V2_SIGNING_KEY_ID,
+            V2_ENCRYPTION_KEY_ID,
+        );
+        let mock = MockSdo::new(wire);
+        mock.set_bootloader_name(BL_NAME_STM32G0B1);
+        mock.set_data_failure(DataFailure::ReportWrongOffset(512));
+        let ready = secure_ready(&mock, &package_bytes, verifying_key).await;
+        mock.clear_operations();
+
+        let error = flash(&mock, ready, &options(), &CancellationToken::new(), |_| {})
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            FlashError::InvalidEncryptedAuthoritativeOffset {
+                offset: 512,
+                attempted_start: 0,
+                attempted_end: 256
+            }
+        ));
+        assert!(!mock.operations().iter().any(|operation| {
+            matches!(operation, Operation::Download(address, _) if *address == OD_FW_OFFSET)
+        }));
+    }
+
+    #[tokio::test]
+    async fn encrypted_v2_never_blindly_retries_without_authoritative_offset() {
+        let signing = signing_key(1);
+        let verifying_key = raw_verifying_key(&signing);
+        let (package_bytes, wire) = secure_package_bytes(
+            &signing,
+            &verifying_key,
+            true,
+            None,
+            V2_SIGNING_KEY_ID,
+            V2_ENCRYPTION_KEY_ID,
+        );
+        let mock = MockSdo::new(wire);
+        mock.set_bootloader_name(BL_NAME_STM32G0B1);
+        mock.set_data_failure(DataFailure::RejectAndLoseProgress);
+        let ready = secure_ready(&mock, &package_bytes, verifying_key).await;
+        mock.clear_operations();
+
+        let error = flash(&mock, ready, &options(), &CancellationToken::new(), |_| {})
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            FlashError::AmbiguousChunk { offset: 0, .. }
+        ));
+        let operations = mock.operations();
+        assert_eq!(
+            operations
+                .iter()
+                .filter(|operation| {
+                    matches!(operation, Operation::Download(address, _) if *address == OD_FW_DATA)
+                })
+                .count(),
+            1
+        );
+        assert!(!operations.iter().any(|operation| {
+            matches!(operation, Operation::Download(address, _) if *address == OD_FW_OFFSET)
+        }));
     }
 
     #[tokio::test]
@@ -1442,6 +2256,26 @@ mod tests {
                 expected: 0x0001_0001,
                 actual: 0x0001_0002
             }
+        ));
+    }
+
+    #[tokio::test]
+    async fn application_name_must_match_the_firmware_id_policy() {
+        let image = valid_image(128);
+        let mock = MockSdo::new(padded(&image));
+        let ready = ready(&mock, &image).await;
+        mock.clear_operations();
+        mock.set_application_name("different-firmware");
+
+        let error = flash(&mock, ready, &options(), &CancellationToken::new(), |_| {})
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            FlashError::ApplicationNameMismatch {
+                ref expected,
+                ref actual
+            } if expected == &["test-application".to_owned()] && actual == "different-firmware"
         ));
     }
 

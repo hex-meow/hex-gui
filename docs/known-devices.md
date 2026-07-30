@@ -6,15 +6,17 @@ machine-readable sources of truth:
 
 | Device class | Source of truth (code) | Used for |
 | --- | --- | --- |
-| **Motors** | `hex-motor` crate → `cia402::known_devices::KNOWN_DEVICES` | friendly name |
+| **Motors** | `hex-motor` → `KNOWN_DEVICES`; GUI → `device_registry::MOTOR_IDENTITIES` | friendly name + safe panel routing |
 | **Non-motor** (IMU, …) | this repo → [`src-tauri/src/device_registry.rs`](../src-tauri/src/device_registry.rs) | panel routing (`device_type`) |
 
-> Keep this file in sync by hand when you edit either source. `product_code: None`
-> (shown as `* (wildcard)`) matches **any** product under that vendor.
+> Keep this file in sync by hand when you edit either source. Classification
+> always requires an exact `(vendor_id, product_code)` tuple. Vendor-wide
+> wildcard routing is deliberately forbidden.
 
 ASCII note: identities are often ASCII-as-hex — `0x00686578` = `\0 h e x` =
 **"hex"** (HEXFELLOW), `0x6865786D` = `h e x m` = **"hexm"** (hex-meow),
-`0x00494D55` = `\0 I M U` = **"IMU"**.
+`0x00696D75` = `\0 i m u`, `0x61696D75` = `a i m u`, and
+`0x006C6674` = `\0 l f t`.
 
 ---
 
@@ -23,7 +25,7 @@ ASCII note: identities are often ASCII-as-hex — `0x00686578` = `\0 h e x` =
 | Vendor ID | ASCII | Who |
 | --- | --- | --- |
 | `0x00686578` | `"hex"` | **HEXFELLOW** — CiA402 motors, GELLO, … |
-| `0x6865786D` | `"hexm"` | **hex-meow** — IMU, … |
+| `0x6865786D` | `"hexm"` | **hex-meow** — IMU, lift, … |
 | `0x4859444C` | — | HEX CiA402 motor-series vendor |
 
 ---
@@ -34,11 +36,13 @@ Source: `hex-motor` `KNOWN_DEVICES`.
 
 | Vendor ID | Product code | ASCII (product) | Name |
 | --- | --- | --- | --- |
-| `0x00686578` | `* (wildcard)` | — | HexMeow Motor |
 | `0x4859444C` | `0xAAAA0001` | — | CiA402 HEX-4310 |
 | `0x4859444C` | `0xAAAA0002` | — | CiA402 HEX-4342P |
 | `0x4859444C` | `0xAAAA0005` | — | CiA402 HEX-4360P |
-| `0x4859444C` | `* (wildcard)` | — | CiA402 HEX Motor (unknown model) |
+
+Unknown products under either motor vendor remain `unknown` until their exact
+tuple is registered. This prevents an unrelated product sharing a vendor ID
+from being routed into CiA402 controls.
 
 > SmartKnob and HopeA3 are **applications** that run *on* these motors, not
 > separate identities. SmartKnob lets the user choose one motor; the raw
@@ -52,7 +56,9 @@ Source: this repo's `device_registry.rs`.
 
 | Vendor ID | Product code | ASCII (product) | Kind | Panel | Heartbeat | Name |
 | --- | --- | --- | --- | --- | --- | --- |
-| `0x6865786D` | `0x00494D55` | `"IMU"` | `imu` | `ImuPanel` (2D + 3D) | 500 ms | hex-meow IMU |
+| `0x6865786D` | `0x00696D75` | `"imu"` | `imu` | `ImuPanel` (2D + 3D) | 500 ms | hex-meow IMU G4 |
+| `0x6865786D` | `0x61696D75` | `"aimu"` | `imu` | `ImuPanel` (2D + 3D) | 500 ms | hex-meow arm IMU |
+| `0x6865786D` | `0x006C6674` | `"lft"` | `lift` | redirects to the Lift tool | device-defined | hex-meow lift controller |
 
 > Multiple IMU product codes may be added here; they all share the one `ImuPanel`.
 
@@ -60,10 +66,9 @@ Source: this repo's `device_registry.rs`.
 
 ## Other known product codes (informational — not in a routing registry)
 
-Observed in firmware sources under the HEXFELLOW vendor `0x00686578`; they
-currently fall through to the motor wildcard ("HexMeow Motor") unless/until given
-explicit entries. Listed so a human can decide whether they need dedicated
-handling (or a vendor reassignment).
+Observed in firmware sources under the HEXFELLOW vendor `0x00686578`. They
+remain `unknown` until given explicit entries. Listed so a human can decide
+whether they need dedicated handling.
 
 | Vendor ID | Product code | Device | Source |
 | --- | --- | --- | --- |

@@ -150,15 +150,20 @@ pub enum Stm32ImageMode {
 }
 
 /// A bounded package with transport integrity and header/manifest consistency
-/// checked.  For secure v2 this does not authenticate the opaque wire bytes;
-/// [`crate::PreparedUpgrade::bind`] therefore refuses v2 until catalog proof
-/// is implemented.
+/// checked.
+///
+/// For encrypted v2, the package parser deliberately does not decrypt opaque
+/// wire records. [`crate::PreparedUpgrade::bind`] authenticates the signed
+/// header with the product profile's P-256 public key, and the Bootloader
+/// authenticates each AES-GCM record before writing its plaintext.
 #[derive(Debug, Clone)]
 pub struct IntegrityCheckedPackage {
     manifest: Manifest,
     image: Vec<u8>,
     header: [u8; HEADER_LEN],
     image_mode: Stm32ImageMode,
+    plaintext_size: usize,
+    wire_size: usize,
 }
 
 impl IntegrityCheckedPackage {
@@ -176,6 +181,20 @@ impl IntegrityCheckedPackage {
 
     pub const fn image_mode(&self) -> Stm32ImageMode {
         self.image_mode
+    }
+
+    /// Unpadded application bytes described by the validated container.
+    pub const fn plaintext_size(&self) -> usize {
+        self.plaintext_size
+    }
+
+    /// Exact bytes streamed over CAN by this core.
+    ///
+    /// V1 adds canonical `0xFF` padding to the 8-byte Flash granularity.
+    /// Secure v2's `image.bin` already is its canonical wire representation;
+    /// encrypted mode includes one detached AES-GCM tag per record.
+    pub const fn wire_size(&self) -> usize {
+        self.wire_size
     }
 }
 
@@ -306,12 +325,19 @@ pub fn read_package_bytes(
     let parsed = Header::parse(&header)
         .map_err(|error| PackageError::InvalidHeader(format!("{error:?}")))?;
     let image_mode = cross_check(&manifest, &parsed, &image)?;
+    let plaintext_size = parsed.image_size() as usize;
+    let wire_size = match image_mode {
+        Stm32ImageMode::PlaintextV1 => image.len().div_ceil(8) * 8,
+        Stm32ImageMode::SignedV2 | Stm32ImageMode::EncryptedV2 => image.len(),
+    };
 
     Ok(IntegrityCheckedPackage {
         manifest,
         image,
         header,
         image_mode,
+        plaintext_size,
+        wire_size,
     })
 }
 
@@ -750,6 +776,8 @@ mod tests {
         let package = read_package_bytes(&package_bytes(&image), PackageLimits::default()).unwrap();
         assert_eq!(package.image(), image);
         assert_eq!(package.image_mode(), Stm32ImageMode::PlaintextV1);
+        assert_eq!(package.plaintext_size(), 4099);
+        assert_eq!(package.wire_size(), 4104);
         assert_eq!(package.manifest().product_code, PRODUCT);
     }
 

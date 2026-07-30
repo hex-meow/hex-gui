@@ -346,7 +346,9 @@ mod tests {
     use image_container::VENDOR_ID;
 
     use super::*;
-    use crate::profile::{ArtifactPolicy, RegisteredTarget, TargetRegistry, UpgradePolicy};
+    use crate::profile::{
+        ArtifactPolicy, FirmwarePolicy, RegisteredTarget, TargetRegistry, UpgradePolicy,
+    };
 
     const PRODUCT: u32 = 0x1234_5678;
     const HW: u32 = 0x0002_0001;
@@ -432,7 +434,7 @@ mod tests {
         let policy = UpgradePolicy::new(
             "stm32g431",
             vec![HW],
-            vec![0x42],
+            vec![FirmwarePolicy::new(0x42, vec!["identity-test-app".to_owned()]).unwrap()],
             ArtifactPolicy::UnprotectedV1,
         )
         .unwrap();

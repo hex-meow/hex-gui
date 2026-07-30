@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { App as AntdApp, Button, Empty, Layout, Tooltip, Typography } from "antd";
+import { Alert, App as AntdApp, Button, Empty, Layout, Tooltip, Typography } from "antd";
 import { api, errMsg } from "./api";
 import { useI18n } from "./i18n";
 import { ConnectBar } from "./components/ConnectBar";
@@ -212,6 +212,7 @@ export default function App() {
               connected={connected}
               onChange={onConnChange}
               broadcastHeartbeat={needsHeartbeat}
+              devices={devices}
             />
           </section>
         )}
@@ -220,7 +221,11 @@ export default function App() {
         {showSidebar && (
           <Layout.Sider width={288} theme="dark" className="app-sidebar">
             <Sidebar
-              devices={devices}
+              devices={
+                tool === "zero"
+                  ? devices.filter((device) => device.device_type === "motor")
+                  : devices
+              }
               selectedNid={selectedNid}
               onSelect={setSelectedNid}
               connected={connected}
@@ -236,7 +241,10 @@ export default function App() {
           ) : tool === "lift" ? (
             <LiftPanel connected={connected} />
           ) : tool === "smartknob" ? (
-            <SmartKnobPanel connected={connected} devices={devices} />
+            <SmartKnobPanel
+              connected={connected}
+              devices={devices.filter((device) => device.device_type === "motor")}
+            />
           ) : tool === "zenoh" ? (
             <ZenohPanel />
           ) : tool === "arm" ? (
@@ -250,9 +258,21 @@ export default function App() {
           ) : tool === "changeId" ? (
             <ChangeIdTool devices={devices} selectedNid={selectedNid} connected={connected} />
           ) : tool === "zero" ? (
-            <ZeroTool devices={devices} selectedNid={selectedNid} connected={connected} />
+            <ZeroTool
+              devices={devices.filter((device) => device.device_type === "motor")}
+              selectedNid={selectedNid}
+              connected={connected}
+            />
           ) : selected && selected.device_type === "imu" ? (
             <ImuPanel key={selected.node_id} info={selected} connected={connected} />
+          ) : selected && selected.device_type === "lift" ? (
+            <div style={{ padding: 24 }}>
+              <Alert type="info" showIcon message={t("canUseLiftTool")} />
+            </div>
+          ) : selected && selected.device_type === "unknown" ? (
+            <div style={{ padding: 24 }}>
+              <Alert type="warning" showIcon message={t("canUnknownDevice")} />
+            </div>
           ) : selected ? (
             <MotorDetail
               key={selected.node_id}

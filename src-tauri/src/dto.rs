@@ -11,13 +11,104 @@ use hex_motor::cia402::{
     Measurements as CoreMeasurements, MotorInfo as CoreMotorInfo,
     MotorLifecycle as CoreMotorLifecycle, ReinitReason as CoreReinitReason,
 };
+use hex_motor::types::{
+    DeviceCanConfig as CoreDeviceCanConfig, DeviceCanConfigStatus as CoreDeviceCanConfigStatus,
+};
 use hex_motor::types::{MotorErrorKind, MotorIdentity, MotorMode, MotorTarget};
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CanBitTimingDto {
+    pub bitrate: Option<u32>,
+    pub sample_point_per_mille: Option<u16>,
+}
+
+impl From<can_transport::CanBitTiming> for CanBitTimingDto {
+    fn from(timing: can_transport::CanBitTiming) -> Self {
+        Self {
+            bitrate: timing.bitrate,
+            sample_point_per_mille: timing.sample_point_per_mille,
+        }
+    }
+}
+
+/// Read-only snapshot returned when the manager connection is established.
+///
+/// `inspection_error` is diagnostic only: opening a SocketCAN interface must
+/// not fail merely because its timing cannot be inspected or is outside the
+/// fleet profile.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConnectionInfoDto {
+    pub backend: String,
+    pub fd_enabled: Option<bool>,
+    pub nominal: Option<CanBitTimingDto>,
+    pub data: Option<CanBitTimingDto>,
+    pub inspection_error: Option<String>,
+}
+
+impl ConnectionInfoDto {
+    pub fn new(
+        backend: &str,
+        config: Option<can_transport::CanLinkConfig>,
+        inspection_error: Option<String>,
+    ) -> Self {
+        let config = config.unwrap_or_default();
+        Self {
+            backend: backend.to_owned(),
+            fd_enabled: config.fd_enabled,
+            nominal: config.nominal.map(Into::into),
+            data: config.data.map(Into::into),
+            inspection_error,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceCanConfigDto {
+    pub nominal_bitrate: u32,
+    pub data_bitrate: Option<u32>,
+    pub transmit_pdo_brs: Option<bool>,
+}
+
+impl From<&CoreDeviceCanConfig> for DeviceCanConfigDto {
+    fn from(config: &CoreDeviceCanConfig) -> Self {
+        Self {
+            nominal_bitrate: config.nominal_bitrate,
+            data_bitrate: config.data_bitrate,
+            transmit_pdo_brs: config.transmit_pdo_brs,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum DeviceCanConfigStatusDto {
+    Pending,
+    Available { config: DeviceCanConfigDto },
+    Unsupported,
+    ReadFailed { reason: String },
+}
+
+impl From<&CoreDeviceCanConfigStatus> for DeviceCanConfigStatusDto {
+    fn from(status: &CoreDeviceCanConfigStatus) -> Self {
+        match status {
+            CoreDeviceCanConfigStatus::Pending => Self::Pending,
+            CoreDeviceCanConfigStatus::Available(config) => Self::Available {
+                config: config.into(),
+            },
+            CoreDeviceCanConfigStatus::Unsupported => Self::Unsupported,
+            CoreDeviceCanConfigStatus::ReadFailed { reason } => Self::ReadFailed {
+                reason: reason.clone(),
+            },
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MotorInfoDto {
     pub node_id: u8,
     pub friendly_name: String,
     pub identity: Option<MotorIdentityDto>,
+    pub can_config: DeviceCanConfigStatusDto,
     pub lifecycle: MotorLifecycleDto,
     pub online: bool,
     pub logic: Option<LogicDto>,
@@ -32,34 +123,43 @@ pub struct MotorInfoDto {
     /// the `0x6072` permille input as an approximate Nm value. `None` until
     /// initialized (or if the motor doesn't expose it).
     pub peak_torque_nm: Option<f32>,
-    /// Host device kind resolved from the `0x1018` identity via the GUI's
-    /// non-motor registry: `"motor"` (default), `"imu"`, … The frontend routes
-    /// the device to the matching panel on this field.
+    /// Host device kind resolved from the exact `0x1018` tuple via the GUI's
+    /// registry: `"motor"`, `"imu"`, `"lift"`, or `"unknown"`. Unknown tuples
+    /// never fall through to motor controls.
     pub device_type: String,
 }
 
 impl From<&CoreMotorInfo> for MotorInfoDto {
     fn from(m: &CoreMotorInfo) -> Self {
-        let can_initialize = matches!(
+        let lifecycle_allows_init = matches!(
             m.lifecycle,
             CoreMotorLifecycle::Identified | CoreMotorLifecycle::NeedsReinit { .. }
         );
-        // Resolve the host device kind from the 0x1018 identity (default motor).
+        // Resolve the host device kind from the exact 0x1018 tuple.
         let device_type = match &m.identity {
             Some(id) => crate::device_registry::classify(id.vendor_id, id.product_code),
-            None => crate::device_registry::DeviceKind::Motor,
+            None => crate::device_registry::DeviceKind::Unknown,
         }
         .as_str()
         .to_string();
+        let can_initialize = device_type == "motor" && lifecycle_allows_init;
         Self {
             node_id: m.node_id,
-            friendly_name: m.friendly_name(),
+            friendly_name: m
+                .identity
+                .as_ref()
+                .and_then(|identity| {
+                    crate::device_registry::display_name(identity.vendor_id, identity.product_code)
+                })
+                .map(str::to_owned)
+                .unwrap_or_else(|| m.friendly_name()),
             identity: m.identity.as_ref().map(MotorIdentityDto::from),
+            can_config: (&m.can_config).into(),
             lifecycle: (&m.lifecycle).into(),
             online: m.online,
             logic: m.logic.as_ref().map(LogicDto::from),
             nmt_state: m.nmt_state.map(NmtStateDto::from),
-            is_ready: m.is_ready(),
+            is_ready: device_type == "motor" && m.is_ready(),
             can_initialize,
             peak_torque_nm: m.peak_torque_nm,
             device_type,

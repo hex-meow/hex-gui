@@ -17,6 +17,88 @@ const STRINGS = {
   connectFailed: { en: "Connect failed", zh: "连接失败" },
   disconnectedMsg: { en: "Disconnected", zh: "已断开" },
   disconnectFailed: { en: "Disconnect failed", zh: "断开失败" },
+  dataRate: { en: "FD data rate", zh: "FD 数据段速率" },
+  hostCanProfile: { en: "Host CAN profile", zh: "主机 CAN 配置" },
+  hostCanProfileWarning: {
+    en: "The host link is outside the production CAN-FD profile. The connection remains open.",
+    zh: "主机链路不符合生产 CAN-FD 规范，连接仍会保持。",
+  },
+  socketCanProfileWarning: {
+    en: "The SocketCAN link is outside the production CAN-FD profile. The connection remains open; configure the interface externally.",
+    zh: "SocketCAN 链路不符合生产 CAN-FD 规范。连接仍会保持；请在 GUI 外配置该接口。",
+  },
+  deviceCanProfileError: {
+    en: "One or more device CAN configurations cannot be used with this host link.",
+    zh: "一个或多个设备的 CAN 配置无法与当前主机链路配合使用。",
+  },
+  canInspectionFailed: {
+    en: "Could not inspect the link",
+    zh: "无法读取链路配置",
+  },
+  canFdUnknown: { en: "CAN-FD state is unknown", zh: "CAN-FD 状态未知" },
+  canFdDisabled: { en: "CAN-FD is disabled", zh: "CAN-FD 未开启" },
+  canNominalUnknown: {
+    en: "Nominal bitrate is unknown",
+    zh: "仲裁段波特率未知",
+  },
+  canDataUnknown: {
+    en: "Data bitrate is unknown",
+    zh: "数据段波特率未知",
+  },
+  canNominalRate: { en: "Nominal bitrate", zh: "仲裁段波特率" },
+  canDataRate: { en: "Data bitrate", zh: "数据段波特率" },
+  canNominalSamplePoint: {
+    en: "Nominal sample point",
+    zh: "仲裁段采样点",
+  },
+  canDataSamplePoint: { en: "Data sample point", zh: "数据段采样点" },
+  canExpected: { en: "expected", zh: "应为" },
+  canConfigPending: { en: "CAN config pending", zh: "CAN 配置读取中" },
+  canConfigUnsupported: {
+    en: "CAN config schema unsupported",
+    zh: "不支持该设备的 CAN 配置对象",
+  },
+  canConfigReadFailed: {
+    en: "CAN config read failed",
+    zh: "CAN 配置读取失败",
+  },
+  canClassicOnly: { en: "Classic CAN only", zh: "仅 Classic CAN" },
+  canUseLiftTool: {
+    en: "This is a lift controller. Open the Lift tool to operate it.",
+    zh: "这是升降驱动器，请使用 Lift 工具操作。",
+  },
+  canUnknownDevice: {
+    en: "Unknown device identity; control routing is disabled.",
+    zh: "未知设备标识，已禁止路由到控制界面。",
+  },
+  canAnalyzerProfile: {
+    en: "gs_usb timing",
+    zh: "gs_usb 时序",
+  },
+  canAnalyzerArbitraryTimingHint: {
+    en: "For arbitrary bitrates or sample points, use Linux + SocketCAN and configure the interface outside the GUI.",
+    zh: "如需任意波特率或采样点，请使用 Linux + SocketCAN，并在 GUI 外配置接口。",
+  },
+  canAnalyzerClassic1M: {
+    en: "Classic 1M · SP 0.8",
+    zh: "Classic 1M · SP 0.8",
+  },
+  canAnalyzerFd1M: {
+    en: "FD 1M / 1M · SP 0.8",
+    zh: "FD 1M / 1M · SP 0.8",
+  },
+  canAnalyzerFd2M: {
+    en: "FD 1M / 2M · SP 0.8",
+    zh: "FD 1M / 2M · SP 0.8",
+  },
+  canAnalyzerFd4M: {
+    en: "FD 1M / 4M · SP 0.8",
+    zh: "FD 1M / 4M · SP 0.8",
+  },
+  canAnalyzerFd5M: {
+    en: "FD 1M / 5M · SP 0.75",
+    zh: "FD 1M / 5M · SP 0.75",
+  },
   dfuBusyLeave: {
     en: "Wait for the current firmware command, then cancel safely before leaving.",
     zh: "请等待当前固件命令完成并安全取消后再离开。",
@@ -24,6 +106,7 @@ const STRINGS = {
 
   // Sidebar
   motors: { en: "Motors", zh: "电机" },
+  devices: { en: "Devices", zh: "设备" },
   initAll: { en: "Init all", zh: "全部初始化" },
   discovering: { en: "Discovering…", zh: "等待发现…" },
   notConnected: { en: "Not connected", zh: "未连接" },

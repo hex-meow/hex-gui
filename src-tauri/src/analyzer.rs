@@ -505,6 +505,10 @@ impl CanBus for TxMirror {
     async fn bus_state(&self) -> Result<Option<can_transport::CanBusState>, CanIoError> {
         self.inner.bus_state().await
     }
+
+    async fn link_config(&self) -> Result<Option<can_transport::CanLinkConfig>, CanIoError> {
+        self.inner.link_config().await
+    }
 }
 
 // ─────────────────────────────── session ───────────────────────────────
@@ -534,8 +538,14 @@ pub struct CanAnalyzer {
 impl CanAnalyzer {
     /// Open `spec` (e.g. `"can0"`, `"gs_usb"`) as a fresh bus and start
     /// capturing. `hw_timestamp` requests device-clock stamping (gs_usb only).
-    pub async fn start(spec: &str, hw_timestamp: bool) -> Result<Self> {
-        let (bus, hw_ts) = crate::backend::open_bus(spec, hw_timestamp).await?;
+    pub async fn start(
+        spec: &str,
+        data_bitrate: Option<u32>,
+        hw_timestamp: bool,
+        can_lease: crate::can_lease::CanLease,
+    ) -> Result<Self> {
+        let (bus, hw_ts) =
+            crate::backend::open_analyzer_bus(spec, data_bitrate, hw_timestamp, can_lease).await?;
         // Two subscriptions: a single CanFilter is standard-XOR-extended.
         let rx_std = bus
             .subscribe(CanFilter::pass_all_standard())

@@ -15,6 +15,35 @@ export interface MotorIdentity {
   product_name: string | null;
 }
 
+export interface CanBitTiming {
+  bitrate: number | null;
+  /** Per-mille: 800 means a 0.800 sample point. */
+  sample_point_per_mille: number | null;
+}
+
+export interface ConnectionInfo {
+  backend: "socketcan" | "gs_usb";
+  fd_enabled: boolean | null;
+  nominal: CanBitTiming | null;
+  data: CanBitTiming | null;
+  /** Read-only inspection failure; the underlying connection remains open. */
+  inspection_error: string | null;
+}
+
+export interface DeviceCanConfig {
+  nominal_bitrate: number;
+  /** null means the device explicitly reported Classic CAN only. */
+  data_bitrate: number | null;
+  /** null means not applicable (for example, a Classic-only device). */
+  transmit_pdo_brs: boolean | null;
+}
+
+export type DeviceCanConfigStatus =
+  | { status: "pending" }
+  | { status: "available"; config: DeviceCanConfig }
+  | { status: "unsupported" }
+  | { status: "read_failed"; reason: string };
+
 export type Lifecycle =
   | { kind: "Unknown" }
   | { kind: "Identified" }
@@ -37,6 +66,7 @@ export interface MotorInfo {
   node_id: number;
   friendly_name: string;
   identity: MotorIdentity | null;
+  can_config: DeviceCanConfigStatus;
   lifecycle: Lifecycle;
   online: boolean;
   logic: Logic | null;
@@ -44,8 +74,8 @@ export interface MotorInfo {
   is_ready: boolean;
   can_initialize: boolean;
   peak_torque_nm: number | null;
-  /** Host device kind from the 0x1018 identity: "motor" (default), "imu", … */
-  device_type: string;
+  /** Host device kind from the exact 0x1018 identity tuple. */
+  device_type: "unknown" | "motor" | "imu" | "lift";
 }
 
 // ── IMU (mirrors imu::ImuState) ──

@@ -13,8 +13,8 @@ for it. This is the "who is who" convention for hex-meow devices.
    node to heartbeat *at all*.
 2. `hex-motor`'s `Cia402Manager` sweeps heartbeats and, for each new node, reads
    its **identity object `0x1018`** over SDO (vendor id, product code, …).
-3. The backend maps `(vendor_id, product_code)` → a **device kind**
-   (`"motor"` default, `"imu"`, …) and ships it as `device_type` on each entry
+3. The backend maps the exact `(vendor_id, product_code)` → a **device kind**
+   (`"motor"`, `"imu"`, `"lift"`, or `"unknown"`) and ships it as `device_type` on each entry
    of `list_devices()`.
 4. The sidebar lists every discovered device. **Clicking one routes by
    `device_type`**: an IMU opens `ImuPanel`, a motor opens `MotorDetail`.
@@ -27,41 +27,42 @@ exactly "like motors".
 | Sub | Field            | convention |
 | --- | ---------------- | ------------------- |
 | 01  | Vendor ID        | ASCII: `0x00686578`="hex" (**HEXFELLOW**), `0x6865786D`="hexm" (**hex-meow**) |
-| 02  | Product Code     | ASCII model tag, e.g. `0x00494D55` = `"IMU"` |
+| 02  | Product Code     | ASCII model tag, e.g. `0x00696D75` = `"imu"` |
 | 03  | Revision Number  | firmware date/letter code |
 | 04  | Serial Number    | per-unit |
 
 ASCII-as-hex makes identities human-readable in a bus sniffer: `0x00686578`
 reads `h e x` (HEXFELLOW), `0x6865786D` reads `h e x m` (hex-meow), and the
-generic IMU product `0x00494D55` reads `I M U`.
+IMU product `0x00696D75` reads `i m u`.
 
 A device **kind** may map to **several** product codes (e.g. future IMU variants
 `IMU2`, a different sensor) — they all share **one** frontend panel.
 
 ## Where the registry lives
 
-- **Motors** are the GUI's *default* kind. Their model table (which specific
-  motor a product code is) lives in the **`hex-motor` crate** (`KNOWN_DEVICES`).
+- **Motors** are routed only from exact tuples in
+  `device_registry::MOTOR_IDENTITIES`, mirrored from the motor driver's known
+  product table.
 - **Non-motor** devices (IMU, …) are registered in **this repo**:
   [`src-tauri/src/device_registry.rs`](../src-tauri/src/device_registry.rs).
 
 `device_registry::classify(vendor_id, product_code) -> DeviceKind` returns the
-kind; anything not listed is treated as `Motor`.
+kind; anything not listed is treated as `Unknown` and cannot open motor
+controls.
 
 ### Add a new IMU (or other non-motor device)
 
 1. Add a row to `NON_MOTOR_DEVICES` in `device_registry.rs`:
    ```rust
    KnownDevice {
-       vendor_id: VENDOR_HEX,
-       product_code: Some(0x.....),  // ASCII model tag of the new device
+       vendor_id: VENDOR_HEXM,
+       product_code: 0x........,     // exact ASCII model tag
        kind: DeviceKind::Imu,        // same kind → same panel
        name: "hex-meow IMU mk2",
    },
    ```
-2. Nothing else for IMUs — every `DeviceKind::Imu` product code routes to the
-   single `ImuPanel`. (`product_code: None` is a vendor-wide wildcard if you want
-   *every* product under a vendor to be one kind.)
+2. Nothing else for IMUs — every exact `DeviceKind::Imu` product tuple routes
+   to the single `ImuPanel`. Do not add vendor-wide wildcard entries.
 3. New **kind** (not IMU)? Add a `DeviceKind` variant, give it a panel, and add a
    routing arm in `App.tsx` (see below).
 
@@ -78,8 +79,10 @@ Sidebar lists devices; an IMU row shows an "IMU" badge
         │  user clicks a row → setSelectedNid(nid)
         ▼
 App.tsx panel switch:
-   selected.device_type === "imu"  → <ImuPanel info connected />
-   else                            → <MotorDetail … />
+   selected.device_type === "imu"     → <ImuPanel info connected />
+   selected.device_type === "motor"   → <MotorDetail … />
+   selected.device_type === "lift"    → prompt to open Lift tool
+   selected.device_type === "unknown" → safe unsupported-device notice
 ```
 
 Relevant files:

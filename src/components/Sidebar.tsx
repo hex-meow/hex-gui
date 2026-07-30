@@ -1,6 +1,7 @@
 import { App, Button, Empty, List, Space, Tag, Tooltip, Typography } from "antd";
 import { TranslationOutlined } from "@ant-design/icons";
 import { api, errMsg } from "../api";
+import { formatBitrate } from "../canProfile";
 import { nid2hex } from "../format";
 import { useI18n } from "../i18n";
 import { LifecycleTag, LogicTag, OnlineTag } from "../tags";
@@ -46,10 +47,14 @@ export function Sidebar({
       <div style={{ padding: 12, flex: 1, overflow: "auto" }}>
         <Space style={{ justifyContent: "space-between", width: "100%", marginBottom: 8 }}>
           <Typography.Text strong>
-            {t("motors")} ({devices.length})
+            {t("devices")} ({devices.length})
           </Typography.Text>
           {tool === "control" ? (
-            <Button size="small" disabled={!connected || devices.length === 0} onClick={initAll}>
+            <Button
+              size="small"
+              disabled={!connected || !devices.some((d) => d.device_type === "motor")}
+              onClick={initAll}
+            >
               {t("initAll")}
             </Button>
           ) : (
@@ -91,12 +96,17 @@ export function Sidebar({
                       <OnlineTag online={d.online} />
                       {d.device_type === "imu" ? (
                         <Tag color="geekblue">IMU</Tag>
+                      ) : d.device_type === "lift" ? (
+                        <Tag color="purple">Lift</Tag>
+                      ) : d.device_type === "unknown" ? (
+                        <Tag color="warning">Unknown</Tag>
                       ) : (
                         <>
                           <LifecycleTag lc={d.lifecycle} />
                           <LogicTag logic={d.logic} />
                         </>
                       )}
+                      <CanConfigTag info={d} t={t} />
                     </div>
                   </div>
                 </List.Item>
@@ -115,4 +125,40 @@ export function Sidebar({
       </div>
     </div>
   );
+}
+
+function CanConfigTag({
+  info,
+  t,
+}: {
+  info: MotorInfo;
+  t: ReturnType<typeof useI18n>["t"];
+}) {
+  const status = info.can_config;
+  switch (status.status) {
+    case "pending":
+      return <Tag>{t("canConfigPending")}</Tag>;
+    case "unsupported":
+      return <Tag color="orange">{t("canConfigUnsupported")}</Tag>;
+    case "read_failed":
+      return <Tag color="red">{t("canConfigReadFailed")}</Tag>;
+    case "available": {
+      const config = status.config;
+      if (config.data_bitrate == null) {
+        return <Tag color="default">{t("canClassicOnly")}</Tag>;
+      }
+      const brs =
+        config.transmit_pdo_brs == null
+          ? "BRS ?"
+          : config.transmit_pdo_brs
+            ? "BRS on"
+            : "BRS off";
+      return (
+        <Tag color="cyan">
+          {formatBitrate(config.nominal_bitrate)}/
+          {formatBitrate(config.data_bitrate)} · {brs}
+        </Tag>
+      );
+    }
+  }
 }

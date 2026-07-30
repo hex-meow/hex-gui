@@ -27,7 +27,9 @@ import {
   Tooltip,
   Typography,
 } from "antd";
+import { QuestionCircleOutlined } from "@ant-design/icons";
 import { api, errMsg } from "../api";
+import { isGsUsbSpec } from "../canProfile";
 import { nid2hex, parseNid } from "../format";
 import { useI18n, type I18nKey } from "../i18n";
 import { decodeCanopen, kindColor } from "../canopen";
@@ -97,6 +99,7 @@ export function CanAnalyzerPanel() {
   const { t } = useI18n();
 
   const [iface, setIface] = useState(DEFAULT_IFACE);
+  const [dataBitrate, setDataBitrate] = useState<number | null>(5_000_000);
   const [hwTs, setHwTs] = useState(true);
   const [running, setRunning] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -143,7 +146,7 @@ export function CanAnalyzerPanel() {
   const connect = async () => {
     setConnecting(true);
     try {
-      await api.analyzerStart(iface.trim(), hwTs);
+      await api.analyzerStart(iface.trim(), dataBitrate, hwTs);
       setRunning(true);
     } catch (e) {
       message.error(`${t("canConnectFailed")}: ${errMsg(e)}`);
@@ -182,6 +185,32 @@ export function CanAnalyzerPanel() {
               placeholder="can0 / gs_usb"
             />
           </Tooltip>
+          {isGsUsbSpec(iface) && (
+            <>
+              <Typography.Text>{t("canAnalyzerProfile")}</Typography.Text>
+              <Tooltip title={t("canAnalyzerArbitraryTimingHint")}>
+                <QuestionCircleOutlined
+                  aria-label={t("canAnalyzerArbitraryTimingHint")}
+                  style={{ color: "rgba(255,255,255,0.45)", cursor: "help" }}
+                />
+              </Tooltip>
+              <Select
+                value={dataBitrate == null ? "classic" : dataBitrate}
+                disabled={running}
+                style={{ width: 210 }}
+                onChange={(value) =>
+                  setDataBitrate(value === "classic" ? null : Number(value))
+                }
+                options={[
+                  { value: "classic", label: t("canAnalyzerClassic1M") },
+                  { value: 1_000_000, label: t("canAnalyzerFd1M") },
+                  { value: 2_000_000, label: t("canAnalyzerFd2M") },
+                  { value: 4_000_000, label: t("canAnalyzerFd4M") },
+                  { value: 5_000_000, label: t("canAnalyzerFd5M") },
+                ]}
+              />
+            </>
+          )}
           <Tooltip title={t("canHwTsHint")}>
             <Checkbox checked={hwTs} disabled={running} onChange={(e) => setHwTs(e.target.checked)}>
               {t("canHwTs")}
