@@ -188,7 +188,10 @@ export function CanAnalyzerPanel() {
           {isGsUsbSpec(iface) && (
             <>
               <Typography.Text>{t("canAnalyzerProfile")}</Typography.Text>
-              <Tooltip title={t("canAnalyzerArbitraryTimingHint")}>
+              <Tooltip
+                title={t("canAnalyzerArbitraryTimingHint")}
+                trigger="click"
+              >
                 <QuestionCircleOutlined
                   aria-label={t("canAnalyzerArbitraryTimingHint")}
                   style={{ color: "rgba(255,255,255,0.45)", cursor: "help" }}

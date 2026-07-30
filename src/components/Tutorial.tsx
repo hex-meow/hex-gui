@@ -70,39 +70,33 @@ function placeholderSlides(tool: string, count = 3): Slide[] {
   });
 }
 
-// Per-app tutorials migrated from the geek-docs "上位机的使用" guide.
-// Screenshots live under public/tutorial/<tool>/0N.png.
-const CHANGE_ID_SLIDES: Slide[] = [
+const SETTINGS_SLIDES: Slide[] = [
   {
-    media: { type: "image", src: "/tutorial/changeId/01.png" },
-    title: { en: "1 · Open Change ID", zh: "1 · 打开 Change ID" },
+    title: { en: "1 · Connect and select", zh: "1 · 连接并选择设备" },
     body: {
-      en: "From the tool picker, open the Change ID app.",
-      zh: "在工具选择界面点击 Change ID（修改 ID）方框，进入该工具。",
+      en: "Open Device Settings, connect the CAN bus, and select a device from the sidebar. All discovered nodes are shown, but write operations are available only for an exact known Vendor-ID + Product-code identity.",
+      zh: "打开「设备设置」，连接 CAN 总线，再从侧栏选择设备。这里会显示所有发现的节点，但只有 Vendor-ID + Product-code 精确匹配的已知设备才开放写操作。",
     },
   },
   {
-    media: { type: "image", src: "/tutorial/changeId/02.png" },
-    title: { en: "2 · Connect", zh: "2 · 连接" },
+    title: { en: "2 · Configure communication", zh: "2 · 配置通信参数" },
     body: {
-      en: "Press Connect. The input box to the left of the button is this host's NodeID — any value works as long as it doesn't clash with a motor's NodeID.",
-      zh: "点击 Connect 连接。按钮左边的输入框是上位机自身的 NodeID，只要不与电机的 NodeID 冲突即可。",
+      en: "The current Node-ID comes from the selected device and cannot be typed manually. Nominal timing is fixed at 1 Mbit/s, SP 0.80. CAN-FD devices offer 1/2/4 Mbit/s at SP 0.80 or 5 Mbit/s at SP 0.75, plus TPDO BRS. Classic-CAN devices hide the FD fields.",
+      zh: "当前 Node-ID 来自所选设备，不能手动填写。仲裁段固定为 1 Mbit/s、SP 0.80。CAN-FD 设备可选 1/2/4 Mbit/s（SP 0.80）或 5 Mbit/s（SP 0.75），并可设置 TPDO BRS；Classic CAN 设备会隐藏 FD 字段。",
     },
   },
   {
-    media: { type: "image", src: "/tutorial/changeId/03.png" },
-    title: { en: "3 · Pick the motor", zh: "3 · 选择电机" },
+    title: { en: "3 · Apply and follow the result", zh: "3 · 应用并按结果处理" },
     body: {
-      en: "Detected motors appear in the left list. Click the one whose ID you want to change.",
-      zh: "左侧列表会显示识别到的电机，点击你要修改的那台。",
+      en: "Communication settings can be applied only while the device is Pre-Operational or Stopped. A 0x2001 change requires a later power cycle. A pending 0x2100 change must be allowed to persist; do not reset the device automatically. A BRS-only change may take effect immediately.",
+      zh: "只有设备处于 Pre-Operational 或 Stopped 时才能应用通信设置。修改 0x2001 后需要稍后重新上电；0x2100 显示等待持久化时，应等待完成，不要自动复位设备；仅修改 BRS 时可以立即生效。",
     },
   },
   {
-    media: { type: "image", src: "/tutorial/changeId/04.png" },
-    title: { en: "4 · Write & Save", zh: "4 · 写入并保存" },
+    title: { en: "4 · Motor position preset", zh: "4 · 电机位置预设" },
     body: {
-      en: "Enter the new ID in the New ID box, then press Write & Save. Power-cycle the motor and it reappears in the list with its new ID.",
-      zh: "在 New ID 框中输入新的 ID，点击 Write & Save。写入后给电机重新上电，它会以新 ID 重新出现在下方列表里。",
+      en: "Known motors have a separate Position Preset card. Position is read once after each online edge and can always be refreshed manually. Saving a preset is its own transaction and performs one confirmation read; a failed read is never retried in a loop.",
+      zh: "已知电机另有独立的「位置预设」卡片。每次设备上线后只自动读取一次位置，也可以随时手动刷新。保存预设是独立事务，之后只确认读取一次；读取失败不会进入自动重试循环。",
     },
   },
 ];
@@ -170,25 +164,6 @@ const CONTROL_SLIDES: Slide[] = [
     body: {
       en: "Press Record CSV to save the run. The highlighted field (2) shows the path of the saved data file.",
       zh: "按下 Record CSV 按钮即可保存运行数据。图中标记的 2 号方框就是数据文件的存储路径。",
-    },
-  },
-];
-
-const ZERO_SLIDES: Slide[] = [
-  {
-    media: { type: "image", src: "/tutorial/zero/01.png" },
-    title: { en: "1 · Open Set Zero", zh: "1 · 打开 Set Zero" },
-    body: {
-      en: "Open the Set Zero (position preset) app from the tool picker.",
-      zh: "在工具选择界面选择 Set Zero（设置零点）模式。",
-    },
-  },
-  {
-    media: { type: "image", src: "/tutorial/zero/02.png" },
-    title: { en: "2 · Read, then Save as preset", zh: "2 · 读取后 Save as preset" },
-    body: {
-      en: "Connect the bus and select the motor. Read the current position first, then enter the position you want to set and press Save as preset. No error warning means it worked.",
-      zh: "连接总线并选择要修改的电机。先读取当前位置，再输入你要设置的位置，按下 Save as preset。无错误警告即为设置成功。",
     },
   },
 ];
@@ -308,8 +283,7 @@ const CANALYZER_SLIDES: Slide[] = [
 export const TUTORIALS: Record<string, Slide[]> = {
   home: HOME_SLIDES,
   control: CONTROL_SLIDES,
-  changeId: CHANGE_ID_SLIDES,
-  zero: ZERO_SLIDES,
+  settings: SETTINGS_SLIDES,
   hopea3: placeholderSlides("hopea3"),
   lift: LIFT_SLIDES,
   smartknob: SMARTKNOB_SLIDES,

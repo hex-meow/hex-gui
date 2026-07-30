@@ -47,6 +47,16 @@ impl DeviceKind {
             DeviceKind::Lift => "lift",
         }
     }
+
+    /// Unknown tuples remain inventory-only in the settings workspace.
+    pub fn supports_device_settings(self) -> bool {
+        !matches!(self, DeviceKind::Unknown)
+    }
+
+    /// Position preset is a registered operation only for exact motor tuples.
+    pub fn supports_position_preset(self) -> bool {
+        matches!(self, DeviceKind::Motor)
+    }
 }
 
 /// One exact non-motor device identity.
@@ -126,5 +136,25 @@ mod tests {
     #[test]
     fn exact_motor_products_still_route_to_motor_controls() {
         assert_eq!(classify(0x4859_444C, 0xAAAA_0001), DeviceKind::Motor);
+    }
+
+    #[test]
+    fn operation_capabilities_follow_exact_classification() {
+        let motor = classify(0x4859_444C, 0xAAAA_0002);
+        assert!(motor.supports_device_settings());
+        assert!(motor.supports_position_preset());
+
+        for known_non_motor in [
+            classify(VENDOR_HEXM, PRODUCT_IMU_G4),
+            classify(VENDOR_HEXM, PRODUCT_ARM_IMU),
+            classify(VENDOR_HEXM, PRODUCT_LIFT),
+        ] {
+            assert!(known_non_motor.supports_device_settings());
+            assert!(!known_non_motor.supports_position_preset());
+        }
+
+        let unknown = classify(VENDOR_HEXM, 0xDEAD_BEEF);
+        assert!(!unknown.supports_device_settings());
+        assert!(!unknown.supports_position_preset());
     }
 }

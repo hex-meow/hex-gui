@@ -6,8 +6,8 @@ machine-readable sources of truth:
 
 | Device class | Source of truth (code) | Used for |
 | --- | --- | --- |
-| **Motors** | `hex-motor` → `KNOWN_DEVICES`; GUI → `device_registry::MOTOR_IDENTITIES` | friendly name + safe panel routing |
-| **Non-motor** (IMU, …) | this repo → [`src-tauri/src/device_registry.rs`](../src-tauri/src/device_registry.rs) | panel routing (`device_type`) |
+| **Motors** | `hex-motor` → `KNOWN_DEVICES`; GUI → `device_registry::MOTOR_IDENTITIES` | friendly name + safe panel/settings routing |
+| **Non-motor** (IMU, …) | this repo → [`src-tauri/src/device_registry.rs`](../src-tauri/src/device_registry.rs) | panel/settings routing (`device_type`) |
 
 > Keep this file in sync by hand when you edit either source. Classification
 > always requires an exact `(vendor_id, product_code)` tuple. Vendor-wide
@@ -34,11 +34,11 @@ ASCII note: identities are often ASCII-as-hex — `0x00686578` = `\0 h e x` =
 
 Source: `hex-motor` `KNOWN_DEVICES`.
 
-| Vendor ID | Product code | ASCII (product) | Name |
-| --- | --- | --- | --- |
-| `0x4859444C` | `0xAAAA0001` | — | CiA402 HEX-4310 |
-| `0x4859444C` | `0xAAAA0002` | — | CiA402 HEX-4342P |
-| `0x4859444C` | `0xAAAA0005` | — | CiA402 HEX-4360P |
+| Vendor ID | Product code | ASCII (product) | Name | Settings schema | Zero |
+| --- | --- | --- | --- | --- | --- |
+| `0x4859444C` | `0xAAAA0001` | — | CiA402 HEX-4310 | `0x2001` | `0x3001` |
+| `0x4859444C` | `0xAAAA0002` | — | CiA402 HEX-4342P | `0x2001` | `0x3001` |
+| `0x4859444C` | `0xAAAA0005` | — | CiA402 HEX-4360P | `0x2001` | `0x3001` |
 
 Unknown products under either motor vendor remain `unknown` until their exact
 tuple is registered. This prevents an unrelated product sharing a vendor ID
@@ -54,13 +54,16 @@ from being routed into CiA402 controls.
 
 Source: this repo's `device_registry.rs`.
 
-| Vendor ID | Product code | ASCII (product) | Kind | Panel | Heartbeat | Name |
-| --- | --- | --- | --- | --- | --- | --- |
-| `0x6865786D` | `0x00696D75` | `"imu"` | `imu` | `ImuPanel` (2D + 3D) | 500 ms | hex-meow IMU G4 |
-| `0x6865786D` | `0x61696D75` | `"aimu"` | `imu` | `ImuPanel` (2D + 3D) | 500 ms | hex-meow arm IMU |
-| `0x6865786D` | `0x006C6674` | `"lft"` | `lift` | redirects to the Lift tool | device-defined | hex-meow lift controller |
+| Vendor ID | Product code | ASCII (product) | Kind | Panel | Settings schema | Heartbeat | Name |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `0x6865786D` | `0x00696D75` | `"imu"` | `imu` | `ImuPanel` (2D + 3D) | `0x2100/0x2101` | 500 ms | hex-meow IMU G4 |
+| `0x6865786D` | `0x61696D75` | `"aimu"` | `imu` | `ImuPanel` (2D + 3D) | `0x2100/0x2101` | 500 ms | hex-meow arm IMU |
+| `0x6865786D` | `0x006C6674` | `"lft"` | `lift` | redirects to the Lift tool | `0x2100/0x2101` | device-defined | hex-meow lift controller |
 
 > Multiple IMU product codes may be added here; they all share the one `ImuPanel`.
+> `0x2100:00` remains the runtime capability source: a known product reporting
+> `1` is Classic-only and must not be offered data-rate or BRS writes; only
+> `3` enables those fields.
 
 ---
 

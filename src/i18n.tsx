@@ -103,6 +103,14 @@ const STRINGS = {
     en: "Wait for the current firmware command, then cancel safely before leaving.",
     zh: "请等待当前固件命令完成并安全取消后再离开。",
   },
+  settingsBusyLeave: {
+    en: "Wait for the current device-settings transaction to finish before leaving.",
+    zh: "请等待当前设备设置事务完成后再离开。",
+  },
+  settingsBusyClose: {
+    en: "A device-settings transaction is still running. Wait for it to finish, then close the window again.",
+    zh: "设备设置事务仍在执行。请等待完成后再次关闭窗口。",
+  },
 
   // Sidebar
   motors: { en: "Motors", zh: "电机" },
@@ -305,8 +313,7 @@ const STRINGS = {
 
   // Tool selector
   toolControl: { en: "Motor Control", zh: "电机控制" },
-  toolChangeId: { en: "Change ID", zh: "改 ID" },
-  toolZero: { en: "Set Zero", zh: "零点预设" },
+  toolSettings: { en: "Device Settings", zh: "设备设置" },
   pickTool: { en: "Pick a tool", zh: "选择工具" },
   toolPickerEyebrow: { en: "Tool launcher", zh: "工具启动器" },
   toolPickerTitle: { en: "Pick a workspace", zh: "选择工作区" },
@@ -315,13 +322,9 @@ const STRINGS = {
     zh: "选择电机控制工作流、机器人应用，或用于配置与诊断的工具。",
   },
   toolControlDesc: { en: "Discover, drive, chart & log motors.", zh: "发现、控制、绘图、记录电机。" },
-  toolChangeIdDesc: {
-    en: "Change a motor's Node-ID. No heartbeat is broadcast, so powering a motor off won't flood the bus.",
-    zh: "更改电机 Node-ID。不广播心跳，所以断电不会造成总线错误风暴。",
-  },
-  toolZeroDesc: {
-    en: "Set a motor's current position as its zero (0x3001 preset). RX-only, batch-friendly.",
-    zh: "把电机当前位置设为零点（0x3001 预设）。只读总线、适合批量。",
+  toolSettingsDesc: {
+    en: "Configure a known device's Node-ID and CAN timing. Motors also provide a separate position preset.",
+    zh: "配置已知设备的 Node-ID 与 CAN 时序；电机另提供独立的位置预设。",
   },
   switchTool: { en: "Switch tool", zh: "切换工具" },
 
@@ -988,13 +991,29 @@ const STRINGS = {
     zh: "（此处放截图 / 视频）",
   },
 
-  // Zero / position-preset tool
-  zeroTitle: { en: "Position Preset (Zero)", zh: "位置预设（零点）" },
-  zeroPick: {
-    en: "Pick a motor on the left, or type its ID. The motor must be in Switch On Disabled (fresh power-up).",
-    zh: "在左侧选择电机，或填写其 ID。电机需在 Switch On Disabled 状态（刚上电即是）。",
+  // Device settings (communication transaction + motor-only position transaction)
+  settingsPickDevice: {
+    en: "Select a device on the left",
+    zh: "请在左侧选择设备",
   },
-  motorId: { en: "Motor ID", zh: "电机 ID" },
+  settingsIdentityPending: {
+    en: "Waiting for exact device identity",
+    zh: "正在等待精确设备身份",
+  },
+  settingsUnknownDevice: {
+    en: "This device identity is not supported",
+    zh: "不支持此设备身份",
+  },
+  settingsNoOperations: {
+    en: "No operation is available unless the Vendor-ID + Product-code pair matches a known device.",
+    zh: "只有 Vendor-ID + Product-code 组合精确匹配已知设备时，才会开放操作。",
+  },
+  settingsCommunicationTitle: {
+    en: "Communication configuration",
+    zh: "通信配置",
+  },
+  settingsDeviceLabel: { en: "Device", zh: "设备" },
+  settingsIdentityLabel: { en: "Identity", zh: "身份" },
   readPos: { en: "Read position", zh: "读取位置" },
   currentPos: { en: "Current position", zh: "当前位置" },
   presetPos: { en: "Preset position (rev, -0.5..0.5)", zh: "预设位置 (rev, -0.5..0.5)" },
@@ -1002,25 +1021,104 @@ const STRINGS = {
   zeroDone: { en: "Preset written", zh: "已写入预设" },
   zeroFailed: { en: "Preset failed", zh: "预设失败" },
   readFailed: { en: "Read failed", zh: "读取失败" },
-  discovered: { en: "Discovered", zh: "已发现" },
-  never: { en: "—", zh: "—" },
-
-  // Change-ID tool
-  changeIdTitle: { en: "Change Node-ID", zh: "更改节点 ID" },
   currentId: { en: "Current ID", zh: "当前 ID" },
   newId: { en: "New ID", zh: "新 ID" },
-  changeIdBtn: { en: "Write & Save", zh: "写入并保存" },
-  changeIdOk: { en: "Wrote ID change", zh: "已写入 ID 变更" },
-  changeIdInstr: {
-    en: "After writing, power-cycle the motor; it will re-appear with the new ID below.",
-    zh: "写入后给电机重新上电，它会以新 ID 重新出现在下方列表里。",
+  settingsActiveNodeId: {
+    en: "Active heartbeat ID",
+    zh: "当前心跳 ID",
   },
-  changeIdPick: {
-    en: "Pick a motor on the left, or type its current ID.",
-    zh: "在左侧选择电机，或填写其当前 ID。",
+  settingsStoredTargetNodeId: {
+    en: "Stored / target ID",
+    zh: "已存储 / 目标 ID",
   },
-  changeIdFailed: { en: "Change ID failed", zh: "改 ID 失败" },
-  sameIdError: { en: "New ID must differ from current", zh: "新 ID 必须与当前不同" },
+  settingsNominalBitrate: {
+    en: "Nominal timing (fixed)",
+    zh: "仲裁段时序（固定）",
+  },
+  settingsDataBitrate: { en: "FD data timing", zh: "FD 数据段时序" },
+  settingsTransmitPdoBrs: {
+    en: "All TPDOs use BRS",
+    zh: "所有 TPDO 使用 BRS",
+  },
+  settingsClassicOnly: {
+    en: "This device reports Classic CAN only. FD data timing and BRS do not apply.",
+    zh: "此设备报告仅支持 Classic CAN；FD 数据段时序和 BRS 不适用。",
+  },
+  settingsInvalidNodeId: {
+    en: "Node-ID must be an integer from 1 to 127.",
+    zh: "Node-ID 必须是 1 至 127 的整数。",
+  },
+  settingsReservedNodeId: {
+    en: "Node-IDs 100, 101 and 127 are reserved and cannot be assigned.",
+    zh: "Node-ID 100、101、127 为保留值，不能分配。",
+  },
+  settingsLiftNodeIdRange: {
+    en: "Lift devices must use a Node-ID from 16 to 20.",
+    zh: "Lift 设备的 Node-ID 必须在 16 至 20 范围内。",
+  },
+  settingsImuNodeIdRange: {
+    en: "IMU devices must use a Node-ID from 31 to 40.",
+    zh: "IMU 设备的 Node-ID 必须在 31 至 40 范围内。",
+  },
+  settingsNodeIdCollision: {
+    en: "The new Node-ID is already used by an online device.",
+    zh: "已有在线设备使用该新 Node-ID。",
+  },
+  settingsInvalidDataRate: {
+    en: "Choose a supported FD data timing: 1/2/4 Mbit/s at SP 0.80, or 5 Mbit/s at SP 0.75.",
+    zh: "请选择受支持的 FD 数据段时序：1/2/4 Mbit/s 使用 SP 0.80，或 5 Mbit/s 使用 SP 0.75。",
+  },
+  settingsApplyButton: { en: "Apply settings", zh: "应用设置" },
+  settingsApplied: {
+    en: "Settings writes were acknowledged",
+    zh: "设置写入已确认",
+  },
+  settingsNoChanges: { en: "No setting changed", zh: "设置没有变化" },
+  settingsApplyFailed: { en: "Applying settings failed", zh: "应用设置失败" },
+  settingsMotorRestartRequired: {
+    en: "All motor communication settings under 0x2001 require physically powering the motor off and back on before they take effect.",
+    zh: "电机对象 0x2001 下的所有通信设置都需要物理断电后重新上电才会生效。",
+  },
+  settingsCanRestartRequired: {
+    en: "Restart is required. Wait for persistence, then restart manually and confirm the device on its new heartbeat; do not reset it automatically.",
+    zh: "需要重启。请等待持久化完成，再手动重启并通过新心跳确认设备；不要自动复位。",
+  },
+  settingsPersistencePending: {
+    en: "0x2100 persistence is pending. Wait for it to complete; do not reset the device automatically.",
+    zh: "0x2100 正在等待持久化。请等待完成，不要自动复位设备。",
+  },
+  settingsBrsImmediate: {
+    en: "The TPDO BRS setting was applied immediately.",
+    zh: "TPDO BRS 设置已立即生效。",
+  },
+  settingsZeroTitle: {
+    en: "Position preset (separate transaction)",
+    zh: "位置预设（独立事务）",
+  },
+  settingsZeroHint: {
+    en: "Available for an exact known motor while it is online. Position is read once after each online edge; use Read position for a manual refresh.",
+    zh: "精确识别的已知电机在线时可用。每次上线后只自动读取一次位置；可使用“读取位置”手动刷新。",
+  },
+  settingsDeviceOffline: {
+    en: "The selected device is offline",
+    zh: "所选设备已离线",
+  },
+  settingsConfigPending: {
+    en: "Waiting for the device CAN configuration",
+    zh: "正在等待设备 CAN 配置",
+  },
+  settingsConfigUnsupported: {
+    en: "This device does not expose a supported CAN configuration schema",
+    zh: "此设备未提供受支持的 CAN 配置结构",
+  },
+  settingsConfigReadFailed: {
+    en: "Reading the device CAN configuration failed",
+    zh: "读取设备 CAN 配置失败",
+  },
+  settingsNmtRequired: {
+    en: "Communication settings require NMT Pre-Operational or Stopped",
+    zh: "通信设置要求 NMT 处于 Pre-Operational 或 Stopped",
+  },
   forgetOffline: { en: "Forget offline", zh: "清除离线" },
 
   // Diagnostics (log / events viewing, clear_fault) — shared Arm/Base Zenoh

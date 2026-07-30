@@ -41,14 +41,14 @@ use tauri::{Emitter, Manager};
 /// make closing the GUI feel stuck.
 const LIFT_CLOSE_STOP_BUDGET: Duration = Duration::from_millis(1_500);
 
-/// A normal window close must *always* succeed. The firmware fails safe on its
-/// own — the velocity RPDO watchdog coasts the bridge when the stream stops,
-/// autonomous Position/Homing moves are soft-limit bounded and end in coast, and
-/// IWDG + the LOCKUP hardware break cover a firmware crash — so closing the GUI
-/// must never be held hostage by a CAN handshake. A pulled CAN cable would
-/// otherwise trap the window open. We make a time-boxed best-effort safe detach
-/// (which sends a directed NMT Stop first thing, dropping the node to coast) and
-/// then exit unconditionally whether or not it was acknowledged.
+/// A normal window close is postponed only while a bounded DFU or persistent
+/// settings/position transaction is active; the user can retry when it returns.
+/// Outside those mutations, closing must *always* succeed. The firmware fails
+/// safe on its own — the velocity RPDO watchdog coasts the bridge when the
+/// stream stops, autonomous Position/Homing moves are soft-limit bounded and
+/// end in coast, and IWDG + the LOCKUP hardware break cover a firmware crash.
+/// We make a time-boxed best-effort safe lift detach and then exit
+/// unconditionally whether or not its CAN handshake was acknowledged.
 fn request_safe_close(window: tauri::Window) {
     let handle = window.app_handle().clone();
     let mutation_gate = handle.state::<dfu_gate::DfuMutationGate>();
@@ -60,6 +60,11 @@ fn request_safe_close(window: tauri::Window) {
         return;
     }
     let state = handle.state::<AppState>();
+    if state.device_settings_operation.is_active() {
+        log::warn!("window close blocked while a device-settings command is active");
+        let _ = window.emit("device-settings-close-blocked", ());
+        return;
+    }
     if state.lift_close_in_progress.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -115,7 +120,7 @@ pub fn run() {
             commands::set_max_torque,
             commands::disable,
             commands::clear_error,
-            commands::change_node_id,
+            commands::apply_device_settings,
             commands::forget_offline,
             commands::set_position_preset,
             commands::read_position,

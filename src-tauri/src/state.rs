@@ -1,25 +1,73 @@
 //! Tauri-managed app state.
 //!
 //! Holds at most one [`Cia402Manager`] at a time (one CAN bus per app
-//! lifetime). All commands acquire the async mutex, clone the `Arc` out of
-//! the guard, and drop the guard before awaiting any motor I/O so callers
-//! can run concurrently.
+//! lifetime). Commands clone its `Arc` and release the manager mutex before
+//! awaiting motor I/O. Persistent settings/position operations are the narrow
+//! exception: they share a separate gate with disconnect.
 
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use hex_motor::cia402::Cia402Manager;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::hopea3::{Hopea3, InitProgress};
 use crate::lift::LiftSession;
 use crate::logging::LogHandle;
 use crate::smartknob::SmartKnob;
 
+/// Serializes persistent communication settings and motor position operations
+/// with disconnect. The counter includes both the current holder and queued
+/// callers, so a window close cannot slip past a command waiting for the lock.
+#[derive(Default)]
+pub(crate) struct DeviceSettingsOperationGate {
+    mutex: Mutex<()>,
+    pending_or_active: AtomicUsize,
+}
+
+impl DeviceSettingsOperationGate {
+    pub(crate) async fn acquire(&self) -> DeviceSettingsOperationGuard<'_> {
+        self.pending_or_active.fetch_add(1, Ordering::AcqRel);
+        // This token is created before awaiting the mutex. If the command
+        // future is cancelled while queued, Drop repairs the active count.
+        let count = OperationCount {
+            counter: &self.pending_or_active,
+        };
+        let lock = self.mutex.lock().await;
+        DeviceSettingsOperationGuard {
+            _lock: lock,
+            _count: count,
+        }
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.pending_or_active.load(Ordering::Acquire) != 0
+    }
+}
+
+struct OperationCount<'a> {
+    counter: &'a AtomicUsize,
+}
+
+impl Drop for OperationCount<'_> {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+pub(crate) struct DeviceSettingsOperationGuard<'a> {
+    // Field order matters: release the mutex before the active-count token.
+    _lock: MutexGuard<'a, ()>,
+    _count: OperationCount<'a>,
+}
+
 #[derive(Default)]
 pub struct AppState {
     pub manager: Mutex<Option<Arc<Cia402Manager>>>,
+    /// Global settings/position/disconnect lock. Commands always acquire this
+    /// before cloning or locking the manager to keep lock ordering acyclic.
+    pub(crate) device_settings_operation: DeviceSettingsOperationGate,
     /// Active CSV recorders, keyed by node id. Inserted by `start_log`,
     /// removed by `stop_log` / `disconnect`. A `std` mutex is fine: we only
     /// ever insert/remove under it, never await while holding it.
@@ -72,5 +120,100 @@ impl AppState {
     /// Drain all log handles (used on disconnect).
     pub fn drain_logs(&self) -> Vec<LogHandle> {
         self.logs.lock().unwrap().drain().map(|(_, h)| h).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn settings_gate_is_active_for_holder_until_drop() {
+        let gate = DeviceSettingsOperationGate::default();
+        assert!(!gate.is_active());
+
+        let guard = gate.acquire().await;
+        assert!(gate.is_active());
+        assert_eq!(gate.pending_or_active.load(Ordering::Acquire), 1);
+
+        drop(guard);
+        assert!(!gate.is_active());
+        assert_eq!(gate.pending_or_active.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn settings_gate_counts_waiter_and_acquires_strictly_in_order() {
+        let gate = Arc::new(DeviceSettingsOperationGate::default());
+        let first = gate.acquire().await;
+        let (acquired_tx, mut acquired_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+
+        let waiter_gate = Arc::clone(&gate);
+        let waiter = tokio::spawn(async move {
+            let _second = waiter_gate.acquire().await;
+            let _ = acquired_tx.send(());
+            let _ = release_rx.await;
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while gate.pending_or_active.load(Ordering::Acquire) != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("queued operation was not counted");
+        assert!(gate.is_active());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut acquired_rx)
+                .await
+                .is_err(),
+            "the queued operation acquired before the first guard was dropped"
+        );
+
+        drop(first);
+        tokio::time::timeout(Duration::from_secs(1), &mut acquired_rx)
+            .await
+            .expect("queued operation did not acquire after release")
+            .expect("queued operation exited before reporting acquisition");
+        assert!(gate.is_active());
+        assert_eq!(gate.pending_or_active.load(Ordering::Acquire), 1);
+
+        let _ = release_tx.send(());
+        waiter.await.expect("waiter task panicked");
+        assert!(!gate.is_active());
+        assert_eq!(gate.pending_or_active.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn cancelling_queued_settings_operation_repairs_active_count() {
+        let gate = Arc::new(DeviceSettingsOperationGate::default());
+        let first = gate.acquire().await;
+        let waiter_gate = Arc::clone(&gate);
+        let waiter = tokio::spawn(async move {
+            let _second = waiter_gate.acquire().await;
+            std::future::pending::<()>().await;
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while gate.pending_or_active.load(Ordering::Acquire) != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("queued operation was not counted");
+
+        waiter.abort();
+        assert!(waiter
+            .await
+            .expect_err("aborted waiter unexpectedly completed")
+            .is_cancelled());
+        assert!(gate.is_active());
+        assert_eq!(gate.pending_or_active.load(Ordering::Acquire), 1);
+
+        drop(first);
+        assert!(!gate.is_active());
+        assert_eq!(gate.pending_or_active.load(Ordering::Acquire), 0);
     }
 }

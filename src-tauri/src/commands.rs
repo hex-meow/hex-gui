@@ -15,7 +15,10 @@ use tauri::State;
 use crate::backend;
 use crate::can_lease::{CanOwner, CanTransportGate};
 use crate::diag::{EventsSnapshot, LogLine};
-use crate::dto::{ConnectionInfoDto, LiveStateDto, MotorInfoDto, MotorModeDto, MotorTargetDto};
+use crate::dto::{
+    ConnectionInfoDto, DeviceSettingsRequestDto, DeviceSettingsResultDto, LiveStateDto,
+    MotorInfoDto, MotorModeDto, MotorTargetDto,
+};
 use crate::state::AppState;
 use crate::zenoh_arm::{ArmInfo, ArmUrdf, ZenohArmConn, ZenohArmState};
 use crate::zenoh_base::{BaseInfo, ZenohBaseState, ZenohConn};
@@ -115,6 +118,10 @@ pub async fn connect(
 
 #[tauri::command]
 pub async fn disconnect(state: State<'_, AppState>) -> CmdResult<()> {
+    // Persistent settings and position commands take the same gate before
+    // touching the manager. An external disconnect therefore waits for the
+    // in-flight transaction, while later transactions wait for teardown.
+    let _operation = state.device_settings_operation.acquire().await;
     // Stop any running Robot Application first (disables its motors cleanly).
     stop_lift_session(&state).await?;
     if let (Some(app), Some(mgr)) = (state.hopea3.lock().await.take(), state.manager().await) {
@@ -226,14 +233,41 @@ pub async fn clear_error(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
     mgr.clear_error(nid).await.map_err(err)
 }
 
-/// Change a motor's Node-ID (0x2001:01 + save). Power-cycle to apply.
+/// Apply one explicitly requested communication-settings transaction.
+///
+/// The manager force-reads `0x1018` inside the same per-node exclusive
+/// operation before choosing an object-dictionary dialect. The GUI registry
+/// check here is defense in depth and keeps unknown tuples read-only even if a
+/// caller bypasses the React controls.
 #[tauri::command]
-pub async fn change_node_id(state: State<'_, AppState>, nid: u8, new_id: u8) -> CmdResult<()> {
+pub async fn apply_device_settings(
+    state: State<'_, AppState>,
+    request: DeviceSettingsRequestDto,
+) -> CmdResult<DeviceSettingsResultDto> {
+    let _operation = state.device_settings_operation.acquire().await;
+    let kind =
+        crate::device_registry::classify(request.expected_vendor_id, request.expected_product_code);
+    if !kind.supports_device_settings() {
+        return Err(format!(
+            "unsupported device identity 0x{:08X}/0x{:08X}",
+            request.expected_vendor_id, request.expected_product_code
+        ));
+    }
+
     let mgr = manager(&state).await?;
-    mgr.change_node_id(nid, new_id).await.map_err(err)
+    let result = mgr
+        .apply_device_settings(
+            request.node_id,
+            request.expected_vendor_id,
+            request.expected_product_code,
+            request.update(),
+        )
+        .await
+        .map_err(err)?;
+    Ok(result.into())
 }
 
-/// Drop offline motor entries from the discovery list (batch ID-change cleanup).
+/// Drop offline device entries from the discovery list (batch setup cleanup).
 #[tauri::command]
 pub async fn forget_offline(state: State<'_, AppState>) -> CmdResult<()> {
     if let Some(mgr) = state.manager().await {
@@ -242,20 +276,53 @@ pub async fn forget_offline(state: State<'_, AppState>) -> CmdResult<()> {
     Ok(())
 }
 
-/// Set this motor's current rotor position to `pos` (Rev, -0.5..0.5) via the
-/// 0x3001 user-position-preset. Motor must be in Switch On Disabled (it is on
-/// fresh power-up). See huayi.md §3.6.
+/// Set this exact registered motor's current rotor position to `pos`
+/// (Rev, -0.5..0.5) via the 0x3001 user-position-preset. The driver force
+/// refreshes identity, requests Disable Voltage and confirms
+/// Switch-On-Disabled before committing the preset.
 #[tauri::command]
-pub async fn set_position_preset(state: State<'_, AppState>, nid: u8, pos: f32) -> CmdResult<()> {
+pub async fn set_position_preset(
+    state: State<'_, AppState>,
+    nid: u8,
+    expected_vendor_id: u32,
+    expected_product_code: u32,
+    pos: f32,
+) -> CmdResult<()> {
+    let _operation = state.device_settings_operation.acquire().await;
+    if !crate::device_registry::classify(expected_vendor_id, expected_product_code)
+        .supports_position_preset()
+    {
+        return Err(format!(
+            "position preset is unavailable for identity 0x{expected_vendor_id:08X}/0x{expected_product_code:08X}"
+        ));
+    }
     let mgr = manager(&state).await?;
-    mgr.set_position_preset(nid, pos).await.map_err(err)
+    mgr.set_position_preset_for(nid, expected_vendor_id, expected_product_code, pos)
+        .await
+        .map_err(err)
 }
 
-/// Read 0x6064 (actual position, Rev) once, on demand.
+/// Read 0x6064 (actual position, Rev) once, on demand, after exact identity
+/// verification.
 #[tauri::command]
-pub async fn read_position(state: State<'_, AppState>, nid: u8) -> CmdResult<f32> {
+pub async fn read_position(
+    state: State<'_, AppState>,
+    nid: u8,
+    expected_vendor_id: u32,
+    expected_product_code: u32,
+) -> CmdResult<f32> {
+    let _operation = state.device_settings_operation.acquire().await;
+    if !crate::device_registry::classify(expected_vendor_id, expected_product_code)
+        .supports_position_preset()
+    {
+        return Err(format!(
+            "position read is unavailable for identity 0x{expected_vendor_id:08X}/0x{expected_product_code:08X}"
+        ));
+    }
     let mgr = manager(&state).await?;
-    mgr.read_position(nid).await.map_err(err)
+    mgr.read_position_for(nid, expected_vendor_id, expected_product_code)
+        .await
+        .map_err(err)
 }
 
 #[tauri::command]

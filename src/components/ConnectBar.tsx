@@ -28,11 +28,13 @@ export function ConnectBar({
   onChange,
   broadcastHeartbeat,
   devices,
+  disconnectDisabled = false,
 }: {
   connected: boolean;
   onChange: (connected: boolean) => void;
   broadcastHeartbeat: boolean;
   devices: MotorInfo[];
+  disconnectDisabled?: boolean;
 }) {
   const { message } = App.useApp();
   const { t } = useI18n();
@@ -130,7 +132,12 @@ export function ConnectBar({
           placeholder={DEFAULT_HOST_NID}
         />
         {connected ? (
-          <Button danger loading={busy} onClick={disconnect}>
+          <Button
+            danger
+            loading={busy}
+            disabled={disconnectDisabled}
+            onClick={disconnect}
+          >
             {t("disconnect")}
           </Button>
         ) : (

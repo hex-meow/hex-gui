@@ -362,24 +362,30 @@ bus with the right settings:
   autonomous goal: confirmed shutdown cancels it, but a process crash cannot,
   so commissioning still requires a physical power-removal path. This tool
   does not broadcast a host heartbeat.
-- **Change ID** — batch-friendly Node-ID changer. Connect, pick a motor (or
-  type its current ID), enter a new ID, **Write & Save** (writes `0x2001:01`
-  then `0x1010:01 = "save"`). The change takes effect **only after a
-  power-cycle**. The sidebar shows all heartbeat-discovered nodes live, so you
-  can power-cycle a motor and watch its new ID appear (old one goes offline;
-  **Forget offline** prunes stale entries). No app restart needed between
-  motors. **This tool does NOT broadcast our heartbeat** — otherwise powering
-  the (only) motor off would leave our frames unACKed and flood the bus with
-  CAN errors.
+- **Device Settings** — the merged identity-gated Node-ID, CAN profile and
+  motor-zero workspace. The sidebar shows every heartbeat-discovered node, but
+  unknown `(vendor_id, product_code)` tuples have no actions. A known motor can
+  change Node-ID, 1/2/4/5 Mbit/s data rate, TPDO BRS and its `0x3001` position
+  preset; known non-motor products expose only the communication fields their
+  actual object shape supports. Classic-only `0x2100:00 == 1` images never get
+  data-rate/BRS controls. Communication Apply is accepted only while the last
+  device heartbeat reports Pre-operational or Stopped; the tool does not issue
+  NMT just to force that state.
 
-- **Set Zero** — user-position-preset (zero-point) tool. Also RX-only (no
-  heartbeat). Pick a motor (or type its ID), optionally **Read position**
-  (one-shot `0x6064` read), enter the desired position (rev, −0.5..0.5) and
-  **Save as preset** — writes `0x3001:01` then `0x3001:02 = "pres"`, which sets
-  the motor's *current* rotor position to that value (motor must be in Switch
-  On Disabled, i.e. freshly powered). Position is read only on demand: once per
-  discovery, once 20 ms after a save, and on button click — never polled (to
-  avoid TX-without-ACK when motors get powered off).
+  Every write button force-reads `0x1018` again and verifies the exact expected
+  tuple in the same per-node exclusive SDO transaction. Motor `0x2001` changes
+  are stored with one final `0x1010:01 = "save"` and take effect after a
+  physical power cycle. `0x2100/0x2101` changes are write-through, are not
+  followed by `0x1010`, and are never auto-reset; wait for persistence before
+  restarting and verify after the next heartbeat. Position preset is a
+  separate button transaction that confirms Switch On Disabled before writing
+  `0x3001`.
+
+  This workspace does **not** broadcast a host heartbeat. It sends CAN traffic
+  only after receiving a device heartbeat or after a user click. Position is
+  read once per online edge, on explicit Read, and once after preset; failed
+  edge reads are not retried by the UI refresh. This avoids accumulating TX
+  errors while a device is unplugged or the bus is empty.
 
 Use **Switch tool** in the header to go back to the picker (it disconnects
 first).

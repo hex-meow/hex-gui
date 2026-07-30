@@ -13,12 +13,14 @@ export function Sidebar({
   onSelect,
   connected,
   tool,
+  disabled = false,
 }: {
   devices: MotorInfo[];
   selectedNid: number | null;
   onSelect: (nid: number) => void;
   connected: boolean;
-  tool: "control" | "changeId" | "zero";
+  tool: "control" | "settings";
+  disabled?: boolean;
 }) {
   const { message } = App.useApp();
   const { t, lang, toggle } = useI18n();
@@ -58,7 +60,11 @@ export function Sidebar({
               {t("initAll")}
             </Button>
           ) : (
-            <Button size="small" disabled={!connected} onClick={forgetOffline}>
+            <Button
+              size="small"
+              disabled={!connected || disabled}
+              onClick={forgetOffline}
+            >
               {t("forgetOffline")}
             </Button>
           )}
@@ -77,9 +83,13 @@ export function Sidebar({
               const selected = d.node_id === selectedNid;
               return (
                 <List.Item
-                  onClick={() => onSelect(d.node_id)}
+                  aria-disabled={disabled}
+                  onClick={() => {
+                    if (!disabled) onSelect(d.node_id);
+                  }}
                   style={{
-                    cursor: "pointer",
+                    cursor: disabled ? "not-allowed" : "pointer",
+                    opacity: disabled && !selected ? 0.62 : 1,
                     padding: "8px 10px",
                     borderRadius: 8,
                     marginBottom: 6,

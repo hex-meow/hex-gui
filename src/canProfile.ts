@@ -143,6 +143,11 @@ export function validateDeviceProfiles(
 ): DeviceProfileIssue[] {
   const issues: DeviceProfileIssue[] = [];
   for (const device of devices) {
+    // Unknown exact identities are inventory-only. We neither guess their
+    // object dictionary nor turn the absence of a registered schema into a
+    // fleet-profile error.
+    if (device.device_type === "unknown") continue;
+
     const status = device.can_config;
     if (status.status === "pending") continue;
     if (status.status === "unsupported") {

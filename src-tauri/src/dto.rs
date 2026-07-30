@@ -13,6 +13,8 @@ use hex_motor::cia402::{
 };
 use hex_motor::types::{
     DeviceCanConfig as CoreDeviceCanConfig, DeviceCanConfigStatus as CoreDeviceCanConfigStatus,
+    DeviceSettingsResult as CoreDeviceSettingsResult,
+    DeviceSettingsUpdate as CoreDeviceSettingsUpdate,
 };
 use hex_motor::types::{MotorErrorKind, MotorIdentity, MotorMode, MotorTarget};
 
@@ -64,6 +66,7 @@ impl ConnectionInfoDto {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceCanConfigDto {
+    pub stored_node_id: u8,
     pub nominal_bitrate: u32,
     pub data_bitrate: Option<u32>,
     pub transmit_pdo_brs: Option<bool>,
@@ -72,6 +75,7 @@ pub struct DeviceCanConfigDto {
 impl From<&CoreDeviceCanConfig> for DeviceCanConfigDto {
     fn from(config: &CoreDeviceCanConfig) -> Self {
         Self {
+            stored_node_id: config.stored_node_id,
             nominal_bitrate: config.nominal_bitrate,
             data_bitrate: config.data_bitrate,
             transmit_pdo_brs: config.transmit_pdo_brs,
@@ -103,9 +107,59 @@ impl From<&CoreDeviceCanConfigStatus> for DeviceCanConfigStatusDto {
     }
 }
 
+/// One explicit, user-triggered settings transaction.
+///
+/// The expected identity is part of the request so the backend can force-read
+/// `0x1018` and reject a device that was unplugged and replaced after the
+/// sidebar snapshot was rendered.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceSettingsRequestDto {
+    pub node_id: u8,
+    pub expected_vendor_id: u32,
+    pub expected_product_code: u32,
+    pub new_node_id: u8,
+    pub nominal_bitrate: u32,
+    pub data_bitrate: Option<u32>,
+    pub transmit_pdo_brs: Option<bool>,
+}
+
+impl DeviceSettingsRequestDto {
+    pub fn update(self) -> CoreDeviceSettingsUpdate {
+        CoreDeviceSettingsUpdate {
+            new_node_id: self.new_node_id,
+            nominal_bitrate: self.nominal_bitrate,
+            data_bitrate: self.data_bitrate,
+            transmit_pdo_brs: self.transmit_pdo_brs,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct DeviceSettingsResultDto {
+    pub changed: bool,
+    pub restart_required: bool,
+    pub persistence_pending: bool,
+    pub brs_applied_immediately: bool,
+}
+
+impl From<CoreDeviceSettingsResult> for DeviceSettingsResultDto {
+    fn from(result: CoreDeviceSettingsResult) -> Self {
+        Self {
+            changed: result.changed,
+            restart_required: result.restart_required,
+            persistence_pending: result.persistence_pending,
+            brs_applied_immediately: result.brs_applied_immediately,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MotorInfoDto {
     pub node_id: u8,
+    /// Changes on BootUp and on an online→offline liveness edge. Frontends use
+    /// it to reject cached values from an earlier physical device session.
+    pub session_epoch: u64,
     pub friendly_name: String,
     pub identity: Option<MotorIdentityDto>,
     pub can_config: DeviceCanConfigStatusDto,
@@ -145,6 +199,7 @@ impl From<&CoreMotorInfo> for MotorInfoDto {
         let can_initialize = device_type == "motor" && lifecycle_allows_init;
         Self {
             node_id: m.node_id,
+            session_epoch: m.session_epoch,
             friendly_name: m
                 .identity
                 .as_ref()

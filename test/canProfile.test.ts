@@ -41,7 +41,7 @@ function device(overrides: Partial<MotorInfo> = {}): MotorInfo {
     is_ready: false,
     can_initialize: true,
     peak_torque_nm: null,
-    device_type: "unknown",
+    device_type: "motor",
     ...overrides,
   };
 }
@@ -116,6 +116,18 @@ test("pending, unsupported and read failures remain distinct", () => {
       }),
     ])[0]?.code,
     "read_failed",
+  );
+});
+
+test("unknown identities remain inventory-only and do not raise profile errors", () => {
+  assert.deepEqual(
+    validateDeviceProfiles(host(), [
+      device({
+        device_type: "unknown",
+        can_config: { status: "unsupported" },
+      }),
+    ]),
+    [],
   );
 });
 

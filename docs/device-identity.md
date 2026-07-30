@@ -17,7 +17,9 @@ for it. This is the "who is who" convention for hex-meow devices.
    (`"motor"`, `"imu"`, `"lift"`, or `"unknown"`) and ships it as `device_type` on each entry
    of `list_devices()`.
 4. The sidebar lists every discovered device. **Clicking one routes by
-   `device_type`**: an IMU opens `ImuPanel`, a motor opens `MotorDetail`.
+   `device_type`**: the control workspace opens a matching panel; Device
+   Settings exposes only the operations registered for that exact identity.
+   Unknown tuples stay visible but have no operations.
 
 No per-device-type discovery code — IMUs show up in the same list as motors,
 exactly "like motors".
@@ -78,12 +80,51 @@ list_devices() → MotorInfo { …, device_type }   (device_registry::classify)
 Sidebar lists devices; an IMU row shows an "IMU" badge
         │  user clicks a row → setSelectedNid(nid)
         ▼
-App.tsx panel switch:
+App.tsx control-panel switch:
    selected.device_type === "imu"     → <ImuPanel info connected />
    selected.device_type === "motor"   → <MotorDetail … />
    selected.device_type === "lift"    → prompt to open Lift tool
    selected.device_type === "unknown" → safe unsupported-device notice
 ```
+
+## Device Settings safety boundary
+
+The Device Settings workspace deliberately does not trust an old sidebar
+snapshot as authorization to write. Every Apply or zero-preset transaction:
+
+1. requires a node that is online because the manager received its heartbeat;
+2. takes the manager's per-node exclusive SDO slot;
+3. force-reads `0x1018` again and compares the exact expected
+   `(vendor_id, product_code)`;
+4. chooses an object dictionary only from that exact tuple;
+5. rejects unknown or changed identities before the first setting write.
+
+Communication Apply additionally requires the last inbound heartbeat state to
+be Pre-operational or Stopped. The tool does not send NMT to force that state.
+Motor zero is separate: its explicit transaction requests Disable Voltage and
+then confirms Switch-On-Disabled before the preset write.
+
+When a node ages offline, its cached identity/configuration is invalidated.
+The next inbound heartbeat triggers identification again. Device Settings does
+not broadcast a host heartbeat and does not poll SDOs: CAN traffic is initiated
+only by an inbound device heartbeat or an explicit user action. Position is
+read once on an online edge, when the user clicks Read, and once after a
+successful preset; a failed edge read is not retried by the 700 ms UI refresh.
+Unknown identities remain sidebar inventory only and are excluded from
+known-device CAN-profile mismatch warnings.
+
+Communication settings and motor zero are separate button transactions:
+
+- the three registered motor tuples use `0x2001`; changed fields are written
+  before Node-ID, then one `0x1010:01 = "save"` stores the complete change.
+  The old link settings remain active until a physical power cycle;
+- registered hex-meow products use `0x2100/0x2101`. The actual
+  `0x2100:00` value controls capability: `1` exposes only nominal timing,
+  while `3` also exposes data bitrate and TPDO BRS. These fields are
+  write-through and are never followed by `0x1010` or an automatic reset;
+- only registered motor tuples expose `0x3001` position preset. The backend
+  first requests Disable Voltage and confirms the CiA402
+  Switch-On-Disabled status before issuing the preset command.
 
 Relevant files:
 

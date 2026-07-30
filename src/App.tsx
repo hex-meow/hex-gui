@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Alert, App as AntdApp, Button, Empty, Layout, Tooltip, Typography } from "antd";
+import { listen } from "@tauri-apps/api/event";
 import { api, errMsg } from "./api";
 import { useI18n } from "./i18n";
 import { ConnectBar } from "./components/ConnectBar";
 import { Sidebar } from "./components/Sidebar";
 import { MotorDetail } from "./components/MotorDetail";
 import { ImuPanel } from "./components/ImuPanel";
-import { ChangeIdTool } from "./components/ChangeIdTool";
-import { ZeroTool } from "./components/ZeroTool";
+import { DeviceSettingsTool } from "./components/DeviceSettingsTool";
 import { Hopea3Panel } from "./components/Hopea3Panel";
 import { LiftPanel } from "./components/LiftPanel";
 import { SmartKnobPanel } from "./components/SmartKnobPanel";
@@ -24,8 +24,7 @@ import "./App.css";
 
 type Tool =
   | "control"
-  | "changeId"
-  | "zero"
+  | "settings"
   | "hopea3"
   | "lift"
   | "smartknob"
@@ -53,6 +52,29 @@ export default function App() {
   // The DFU backend also enforces this lock. The frontend copy disables Back
   // immediately so a user cannot accidentally unmount a running job.
   const [dfuBusy, setDfuBusy] = useState(false);
+  // Device Settings reports every config/preset/read transaction, including
+  // the one-shot automatic position reads. Keep navigation and disconnect
+  // locked until the backend command has actually returned.
+  const [settingsBusy, setSettingsBusy] = useState(false);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen("device-settings-close-blocked", () => {
+      message.warning(t("settingsBusyClose"));
+    })
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      })
+      .catch(() => {
+        // Browser-only development and an app teardown may lack an event bus.
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [message, t]);
 
   // Poll the device list while connected.
   useEffect(() => {
@@ -77,9 +99,14 @@ export default function App() {
     };
   }, [connected]);
 
-  // Auto-select the first motor once one appears (control mode only).
+  // Auto-select the first discovered device in workspaces that use the
+  // sidebar. Device Settings still applies exact identity/config gates.
   useEffect(() => {
-    if (tool === "control" && selectedNid == null && devices.length > 0) {
+    if (
+      (tool === "control" || tool === "settings") &&
+      selectedNid == null &&
+      devices.length > 0
+    ) {
       setSelectedNid(devices[0].node_id);
     }
   }, [devices, selectedNid, tool]);
@@ -95,6 +122,10 @@ export default function App() {
   const switchTool = useCallback(async () => {
     if (tool === "dfu" && dfuBusy) {
       message.warning(t("dfuBusyLeave"));
+      return;
+    }
+    if (tool === "settings" && settingsBusy) {
+      message.warning(t("settingsBusyLeave"));
       return;
     }
     try {
@@ -113,7 +144,7 @@ export default function App() {
     setDevices([]);
     setTutorialOpen(false);
     setTool(null);
-  }, [dfuBusy, message, t, tool]);
+  }, [dfuBusy, message, settingsBusy, t, tool]);
 
   const onToggleLog = useCallback(
     async (nid: number, on: boolean) => {
@@ -143,8 +174,7 @@ export default function App() {
   const selected = devices.find((d) => d.node_id === selectedNid) ?? null;
   const toolMeta = {
     control: { title: t("toolControl"), desc: t("toolControlDesc") },
-    changeId: { title: t("toolChangeId"), desc: t("toolChangeIdDesc") },
-    zero: { title: t("toolZero"), desc: t("toolZeroDesc") },
+    settings: { title: t("toolSettings"), desc: t("toolSettingsDesc") },
     hopea3: { title: t("toolHopeA3"), desc: t("toolHopeA3Desc") },
     lift: { title: t("toolLift"), desc: t("toolLiftDesc") },
     smartknob: { title: t("toolSmartKnob"), desc: t("toolSmartKnobDesc") },
@@ -184,7 +214,10 @@ export default function App() {
           <Button
             className="app-chrome__back"
             size="small"
-            disabled={tool === "dfu" && dfuBusy}
+            disabled={
+              (tool === "dfu" && dfuBusy) ||
+              (tool === "settings" && settingsBusy)
+            }
             onClick={switchTool}
           >
             ← {t("backToTools")}
@@ -213,6 +246,7 @@ export default function App() {
               onChange={onConnChange}
               broadcastHeartbeat={needsHeartbeat}
               devices={devices}
+              disconnectDisabled={tool === "settings" && settingsBusy}
             />
           </section>
         )}
@@ -221,15 +255,12 @@ export default function App() {
         {showSidebar && (
           <Layout.Sider width={288} theme="dark" className="app-sidebar">
             <Sidebar
-              devices={
-                tool === "zero"
-                  ? devices.filter((device) => device.device_type === "motor")
-                  : devices
-              }
+              devices={devices}
               selectedNid={selectedNid}
               onSelect={setSelectedNid}
               connected={connected}
-              tool={tool as "control" | "changeId" | "zero"}
+              tool={tool as "control" | "settings"}
+              disabled={tool === "settings" && settingsBusy}
             />
           </Layout.Sider>
         )}
@@ -255,13 +286,12 @@ export default function App() {
             <CanAnalyzerPanel />
           ) : tool === "dfu" ? (
             <DfuPanel onBusyChange={setDfuBusy} />
-          ) : tool === "changeId" ? (
-            <ChangeIdTool devices={devices} selectedNid={selectedNid} connected={connected} />
-          ) : tool === "zero" ? (
-            <ZeroTool
-              devices={devices.filter((device) => device.device_type === "motor")}
-              selectedNid={selectedNid}
+          ) : tool === "settings" ? (
+            <DeviceSettingsTool
+              device={selected}
+              devices={devices}
               connected={connected}
+              onBusyChange={setSettingsBusy}
             />
           ) : selected && selected.device_type === "imu" ? (
             <ImuPanel key={selected.node_id} info={selected} connected={connected} />
@@ -382,18 +412,11 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
 
         <ToolSection title={t("catTools")} hint={t("catToolsHint")}>
           <ToolCard
-            title={t("toolChangeId")}
-            desc={t("toolChangeIdDesc")}
+            title={t("toolSettings")}
+            desc={t("toolSettingsDesc")}
             tag={t("tagFactorySetup")}
             accent="amber"
-            onClick={() => onPick("changeId")}
-          />
-          <ToolCard
-            title={t("toolZero")}
-            desc={t("toolZeroDesc")}
-            tag={t("tagCalibration")}
-            accent="green"
-            onClick={() => onPick("zero")}
+            onClick={() => onPick("settings")}
           />
           <ToolCard
             title={t("toolCanalyzer")}

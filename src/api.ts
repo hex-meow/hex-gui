@@ -3,7 +3,7 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ConnectionInfo, ControllerInfo, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftFactoryCalibrationResult, LiftState, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
+import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ConnectionInfo, ControllerInfo, DeviceSettingsRequest, DeviceSettingsResult, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftFactoryCalibrationResult, LiftState, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
 
 export const api = {
   connect: (iface: string, dataBitrate: number, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -27,13 +27,32 @@ export const api = {
   clearError: (nid: number) => invoke<void>("clear_error", { nid }),
   getStatus: (nid: number) => invoke<LiveState>("get_status", { nid }),
 
-  changeNodeId: (nid: number, newId: number) =>
-    invoke<void>("change_node_id", { nid, newId }),
+  applyDeviceSettings: (request: DeviceSettingsRequest) =>
+    invoke<DeviceSettingsResult>("apply_device_settings", { request }),
   forgetOffline: () => invoke<void>("forget_offline"),
 
-  setPositionPreset: (nid: number, pos: number) =>
-    invoke<void>("set_position_preset", { nid, pos }),
-  readPosition: (nid: number) => invoke<number>("read_position", { nid }),
+  setPositionPreset: (
+    nid: number,
+    pos: number,
+    expectedVendorId: number,
+    expectedProductCode: number,
+  ) =>
+    invoke<void>("set_position_preset", {
+      nid,
+      pos,
+      expectedVendorId,
+      expectedProductCode,
+    }),
+  readPosition: (
+    nid: number,
+    expectedVendorId: number,
+    expectedProductCode: number,
+  ) =>
+    invoke<number>("read_position", {
+      nid,
+      expectedVendorId,
+      expectedProductCode,
+    }),
 
   startLog: (nid: number) => invoke<string>("start_log", { nid }),
   stopLog: (nid: number) => invoke<void>("stop_log", { nid }),

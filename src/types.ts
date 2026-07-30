@@ -31,6 +31,8 @@ export interface ConnectionInfo {
 }
 
 export interface DeviceCanConfig {
+  /** Node-ID stored in nonvolatile config; it may differ from the active ID. */
+  stored_node_id: number;
   nominal_bitrate: number;
   /** null means the device explicitly reported Classic CAN only. */
   data_bitrate: number | null;
@@ -43,6 +45,23 @@ export type DeviceCanConfigStatus =
   | { status: "available"; config: DeviceCanConfig }
   | { status: "unsupported" }
   | { status: "read_failed"; reason: string };
+
+export interface DeviceSettingsRequest {
+  node_id: number;
+  expected_vendor_id: number;
+  expected_product_code: number;
+  new_node_id: number;
+  nominal_bitrate: number;
+  data_bitrate: number | null;
+  transmit_pdo_brs: boolean | null;
+}
+
+export interface DeviceSettingsResult {
+  changed: boolean;
+  restart_required: boolean;
+  persistence_pending: boolean;
+  brs_applied_immediately: boolean;
+}
 
 export type Lifecycle =
   | { kind: "Unknown" }
@@ -64,6 +83,8 @@ export type NmtState =
 
 export interface MotorInfo {
   node_id: number;
+  /** Device-session generation, changed on BootUp and online→offline edges. */
+  session_epoch: number;
   friendly_name: string;
   identity: MotorIdentity | null;
   can_config: DeviceCanConfigStatus;
