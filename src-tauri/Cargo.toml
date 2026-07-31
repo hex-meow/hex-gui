@@ -38,11 +38,8 @@ env_logger = "0.11"
 anyhow = "1"
 getrandom = "0.3"
 chrono = "0.4"
-# Both protocol crates remain on local paths while identity-gated CAN settings
-# and session-aware snapshots are integrated. After can-transport 0.1.3 and
-# hex-motor 0.2.0 are published, switch both back to version dependencies and
-# remove the [patch.crates-io] override below.
-hex-motor = { path = "../../hex-motor" }
+# Published identity-gated CAN settings and session-aware snapshots.
+hex-motor = "0.2.0"
 
 # Public, secret-free runtime for the current HPM USB Bootloader. It owns the
 # strict legacy profile/package parser and flash state machine; the Tauri
@@ -66,10 +63,7 @@ hex-arm-dynamics = "0.1.0"
 # Adding another backend is a single arm in src/backend.rs; the rest of the
 # GUI keeps holding an `Arc<dyn CanBus>` and never knows the difference.
 [target.'cfg(target_os = "linux")'.dependencies]
-can-transport = { path = "../../can-transport", features = ["socketcan", "gs_usb"] }
+can-transport = { version = "0.1.3", features = ["socketcan", "gs_usb"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-can-transport = { path = "../../can-transport", features = ["gs_usb"] }
-
-[patch.crates-io]
-can-transport = { path = "../../can-transport" }
+can-transport = { version = "0.1.3", features = ["gs_usb"] }
