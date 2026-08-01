@@ -54,7 +54,10 @@ export function Sidebar({
           {tool === "control" ? (
             <Button
               size="small"
-              disabled={!connected || !devices.some((d) => d.device_type === "motor")}
+              disabled={
+                !connected ||
+                !devices.some((d) => d.device_type === "cia402_motor")
+              }
               onClick={initAll}
             >
               {t("initAll")}

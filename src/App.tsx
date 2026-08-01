@@ -6,6 +6,7 @@ import { useI18n } from "./i18n";
 import { ConnectBar } from "./components/ConnectBar";
 import { Sidebar } from "./components/Sidebar";
 import { MotorDetail } from "./components/MotorDetail";
+import { MeowMotorPanel } from "./components/MeowMotorPanel";
 import { ImuPanel } from "./components/ImuPanel";
 import { DeviceSettingsTool } from "./components/DeviceSettingsTool";
 import { Hopea3Panel } from "./components/Hopea3Panel";
@@ -274,7 +275,9 @@ export default function App() {
           ) : tool === "smartknob" ? (
             <SmartKnobPanel
               connected={connected}
-              devices={devices.filter((device) => device.device_type === "motor")}
+              devices={devices.filter(
+                (device) => device.device_type === "cia402_motor",
+              )}
             />
           ) : tool === "zenoh" ? (
             <ZenohPanel />
@@ -287,12 +290,22 @@ export default function App() {
           ) : tool === "dfu" ? (
             <DfuPanel onBusyChange={setDfuBusy} />
           ) : tool === "settings" ? (
-            <DeviceSettingsTool
-              device={selected}
-              devices={devices}
-              connected={connected}
-              onBusyChange={setSettingsBusy}
-            />
+            selected?.device_type === "meow_motor" ? (
+              <MeowMotorPanel
+                key={selected.node_id}
+                info={selected}
+                connected={connected}
+                settingsOnly
+                onBusyChange={setSettingsBusy}
+              />
+            ) : (
+              <DeviceSettingsTool
+                device={selected}
+                devices={devices}
+                connected={connected}
+                onBusyChange={setSettingsBusy}
+              />
+            )
           ) : selected && selected.device_type === "imu" ? (
             <ImuPanel key={selected.node_id} info={selected} connected={connected} />
           ) : selected && selected.device_type === "lift" ? (
@@ -303,7 +316,14 @@ export default function App() {
             <div style={{ padding: 24 }}>
               <Alert type="warning" showIcon message={t("canUnknownDevice")} />
             </div>
-          ) : selected ? (
+          ) : selected && selected.device_type === "meow_motor" ? (
+            <MeowMotorPanel
+              key={selected.node_id}
+              info={selected}
+              connected={connected}
+              onBusyChange={setSettingsBusy}
+            />
+          ) : selected && selected.device_type === "cia402_motor" ? (
             <MotorDetail
               key={selected.node_id}
               info={selected}

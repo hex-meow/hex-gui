@@ -3,7 +3,7 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ConnectionInfo, ControllerInfo, DeviceSettingsRequest, DeviceSettingsResult, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftFactoryCalibrationResult, LiftState, LiveState, LogLine, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
+import type { ArmInfo, ArmUrdf, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ConnectionInfo, ControllerInfo, DeviceSettingsRequest, DeviceSettingsResult, EventsSnapshot, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftFactoryCalibrationResult, LiftState, LiveState, LogLine, MeowCanSettingsRequest, MeowMotorSnapshot, MeowMotorTarget, MeowProfileLimits, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
 
 export const api = {
   connect: (iface: string, dataBitrate: number, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -26,6 +26,26 @@ export const api = {
   disable: (nid: number) => invoke<void>("disable", { nid }),
   clearError: (nid: number) => invoke<void>("clear_error", { nid }),
   getStatus: (nid: number) => invoke<LiveState>("get_status", { nid }),
+
+  meowIdentify: (nid: number) =>
+    invoke<MeowMotorSnapshot>("meow_identify", { nid }),
+  meowGetStatus: (nid: number) =>
+    invoke<MeowMotorSnapshot>("meow_get_status", { nid }),
+  meowInitialize: (nid: number, rateHz: 500 | 1000) =>
+    invoke<MeowMotorSnapshot>("meow_initialize", { nid, rateHz }),
+  meowSetMode: (nid: number, mode: MotorMode) =>
+    invoke<void>("meow_set_mode", { nid, mode }),
+  meowSetTarget: (nid: number, target: MeowMotorTarget) =>
+    invoke<void>("meow_set_target", { nid, target }),
+  meowSetMaxTorque: (nid: number, permille: number) =>
+    invoke<void>("meow_set_max_torque", { nid, permille }),
+  meowSetProfileLimits: (nid: number, limits: MeowProfileLimits) =>
+    invoke<void>("meow_set_profile_limits", { nid, limits }),
+  meowDisable: (nid: number) => invoke<void>("meow_disable", { nid }),
+  meowClearError: (nid: number) =>
+    invoke<void>("meow_clear_error", { nid }),
+  meowApplyCanSettings: (nid: number, request: MeowCanSettingsRequest) =>
+    invoke<boolean>("meow_apply_can_settings", { nid, request }),
 
   applyDeviceSettings: (request: DeviceSettingsRequest) =>
     invoke<DeviceSettingsResult>("apply_device_settings", { request }),

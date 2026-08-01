@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use hex_motor::cia402::Cia402Manager;
+use hex_motor::meow_motor::MeowMotorManager;
 use tokio::sync::{Mutex, MutexGuard};
 
 use crate::hopea3::{Hopea3, InitProgress};
@@ -65,6 +66,9 @@ pub(crate) struct DeviceSettingsOperationGuard<'a> {
 #[derive(Default)]
 pub struct AppState {
     pub manager: Mutex<Option<Arc<Cia402Manager>>>,
+    /// Independent manager for the new protocol, sharing the same CAN transport. It never
+    /// broadcasts a second host heartbeat and performs identification only on explicit GUI use.
+    pub meow_manager: Mutex<Option<Arc<MeowMotorManager>>>,
     /// Global settings/position/disconnect lock. Commands always acquire this
     /// before cloning or locking the manager to keep lock ordering acyclic.
     pub(crate) device_settings_operation: DeviceSettingsOperationGate,
@@ -110,6 +114,10 @@ impl AppState {
     /// caller awaits.
     pub async fn manager(&self) -> Option<Arc<Cia402Manager>> {
         self.manager.lock().await.clone()
+    }
+
+    pub async fn meow_manager(&self) -> Option<Arc<MeowMotorManager>> {
+        self.meow_manager.lock().await.clone()
     }
 
     /// Take a log handle out of the map (for stopping), if present.

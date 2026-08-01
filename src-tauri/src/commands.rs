@@ -9,6 +9,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hex_motor::cia402::{Cia402Manager, Cia402ManagerOptions};
+use hex_motor::meow_motor::{
+    MeowMitTarget, MeowMotorCanSettings, MeowMotorInitializeOptions, MeowMotorManager,
+    MeowMotorManagerOptions, MeowMotorTarget, MeowProfileLimits, SignedQ8_24, Tpdo1Rate,
+};
 use hex_motor::types::MotorMode;
 use tauri::State;
 
@@ -17,6 +21,7 @@ use crate::can_lease::{CanOwner, CanTransportGate};
 use crate::diag::{EventsSnapshot, LogLine};
 use crate::dto::{
     ConnectionInfoDto, DeviceSettingsRequestDto, DeviceSettingsResultDto, LiveStateDto,
+    MeowCanSettingsRequestDto, MeowMotorSnapshotDto, MeowMotorTargetDto, MeowProfileLimitsDto,
     MotorInfoDto, MotorModeDto, MotorTargetDto,
 };
 use crate::state::AppState;
@@ -41,6 +46,13 @@ fn err<E: std::fmt::Display>(e: E) -> String {
 async fn manager(state: &AppState) -> CmdResult<Arc<Cia402Manager>> {
     state
         .manager()
+        .await
+        .ok_or_else(|| "not connected: call connect() first".to_string())
+}
+
+async fn meow_manager(state: &AppState) -> CmdResult<Arc<MeowMotorManager>> {
+    state
+        .meow_manager()
         .await
         .ok_or_else(|| "not connected: call connect() first".to_string())
 }
@@ -106,8 +118,17 @@ pub async fn connect(
         sdo_timeout: Duration::from_millis(500),
         ..Default::default()
     };
+    let meow_opts = MeowMotorManagerOptions {
+        heartbeat_node_id: our_nid,
+        broadcast_heartbeat: false,
+        auto_identify: false,
+        sdo_timeout: Duration::from_millis(500),
+        ..Default::default()
+    };
+    let meow_mgr = MeowMotorManager::new(bus.clone(), meow_opts).map_err(err)?;
     let mgr = Cia402Manager::new(bus, opts).map_err(err)?;
     log::info!("connected to {iface} as nid 0x{our_nid:02X}");
+    *state.meow_manager.lock().await = Some(Arc::new(meow_mgr));
     *guard = Some(Arc::new(mgr));
     Ok(ConnectionInfoDto::new(
         backend_name,
@@ -144,6 +165,7 @@ pub async fn disconnect(state: State<'_, AppState>) -> CmdResult<()> {
     }
     let mut guard = state.manager.lock().await;
     let was = guard.take().is_some();
+    state.meow_manager.lock().await.take();
     if was {
         log::info!("disconnected");
     }
@@ -183,8 +205,8 @@ pub async fn initialize_all(state: State<'_, AppState>) -> CmdResult<Vec<(u8, Op
         .into_iter()
         .filter_map(|device| {
             let identity = device.identity.as_ref()?;
-            (crate::device_registry::classify(identity.vendor_id, identity.product_code)
-                == crate::device_registry::DeviceKind::Motor)
+            crate::device_registry::classify(identity.vendor_id, identity.product_code)
+                .supports_cia402_controls()
                 .then_some(device.node_id)
         })
         .collect::<Vec<_>>();
@@ -233,12 +255,239 @@ pub async fn clear_error(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
     mgr.clear_error(nid).await.map_err(err)
 }
 
+fn meow_snapshot_for(manager: &MeowMotorManager, nid: u8) -> CmdResult<MeowMotorSnapshotDto> {
+    let info = manager
+        .list()
+        .into_iter()
+        .find(|info| info.node_id == nid)
+        .ok_or_else(|| format!("new-protocol motor node 0x{nid:02X} has not appeared"))?;
+    let live = manager.status(nid).map_err(err)?;
+    Ok(MeowMotorSnapshotDto::new(&info, &live))
+}
+
+#[tauri::command]
+pub async fn meow_identify(state: State<'_, AppState>, nid: u8) -> CmdResult<MeowMotorSnapshotDto> {
+    let manager = meow_manager(&state).await?;
+    manager.identify(nid).await.map_err(err)?;
+    meow_snapshot_for(&manager, nid)
+}
+
+#[tauri::command]
+pub async fn meow_get_status(
+    state: State<'_, AppState>,
+    nid: u8,
+) -> CmdResult<MeowMotorSnapshotDto> {
+    let manager = meow_manager(&state).await?;
+    meow_snapshot_for(&manager, nid)
+}
+
+#[tauri::command]
+pub async fn meow_initialize(
+    state: State<'_, AppState>,
+    nid: u8,
+    rate_hz: u16,
+) -> CmdResult<MeowMotorSnapshotDto> {
+    let manager = meow_manager(&state).await?;
+    manager.identify(nid).await.map_err(err)?;
+    let rate = match rate_hz {
+        500 => Tpdo1Rate::Hz500,
+        1000 => Tpdo1Rate::Hz1000,
+        _ => return Err(format!("TPDO1 rate must be 500 or 1000, got {rate_hz}")),
+    };
+    let options = MeowMotorInitializeOptions::new(rate);
+    manager
+        .initialize_with_options(nid, options)
+        .await
+        .map_err(err)?;
+    meow_snapshot_for(&manager, nid)
+}
+
+fn safe_meow_target(
+    manager: &MeowMotorManager,
+    nid: u8,
+    mode: MotorModeDto,
+) -> CmdResult<MeowMotorTarget> {
+    Ok(match mode {
+        MotorModeDto::ProfilePosition => {
+            let position = manager
+                .status(nid)
+                .map_err(err)?
+                .measurements
+                .position
+                .ok_or_else(|| "Profile Position requires fresh position feedback".to_string())?;
+            MeowMotorTarget::ProfilePosition { position }
+        }
+        MotorModeDto::ProfileVelocity => MeowMotorTarget::ProfileVelocity {
+            velocity_rev_per_s: 0.0,
+        },
+        MotorModeDto::Torque => MeowMotorTarget::Torque { torque_permille: 0 },
+        MotorModeDto::Mit => MeowMotorTarget::Mit(MeowMitTarget {
+            position_rev: 0.0,
+            velocity_rev_per_s: 0.0,
+            torque_nm: 0.0,
+            kp: 0,
+            kd: 0,
+            kp_kd_limit_permille: 0,
+        }),
+    })
+}
+
+#[tauri::command]
+pub async fn meow_set_mode(
+    state: State<'_, AppState>,
+    nid: u8,
+    mode: MotorModeDto,
+) -> CmdResult<()> {
+    let manager = meow_manager(&state).await?;
+    let target = safe_meow_target(&manager, nid, mode)?;
+    manager.set_mode_sdo(nid, target).await.map_err(err)
+}
+
+fn meow_target(target: MeowMotorTargetDto) -> CmdResult<MeowMotorTarget> {
+    Ok(match target {
+        MeowMotorTargetDto::ProfilePosition { position_rev } => MeowMotorTarget::ProfilePosition {
+            position: SignedQ8_24::from_revolutions(position_rev).map_err(err)?,
+        },
+        MeowMotorTargetDto::ProfileVelocity { velocity_rev_per_s } => {
+            MeowMotorTarget::ProfileVelocity { velocity_rev_per_s }
+        }
+        MeowMotorTargetDto::Torque { torque_permille } => {
+            MeowMotorTarget::Torque { torque_permille }
+        }
+        MeowMotorTargetDto::Mit {
+            position_rev,
+            velocity_rev_per_s,
+            torque_nm,
+            kp,
+            kd,
+            kp_kd_limit_permille,
+        } => MeowMotorTarget::Mit(MeowMitTarget {
+            position_rev,
+            velocity_rev_per_s,
+            torque_nm,
+            kp,
+            kd,
+            kp_kd_limit_permille,
+        }),
+    })
+}
+
+#[cfg(test)]
+mod meow_command_tests {
+    use super::*;
+
+    #[test]
+    fn pp_target_accepts_negative_endpoint_and_rejects_positive_endpoint() {
+        let minimum = meow_target(MeowMotorTargetDto::ProfilePosition {
+            position_rev: -128.0,
+        })
+        .expect("-128 rev is the signed Q8.24 minimum");
+        match minimum {
+            MeowMotorTarget::ProfilePosition { position } => {
+                assert_eq!(position, SignedQ8_24::MIN);
+            }
+            other => panic!("unexpected target: {other:?}"),
+        }
+
+        assert!(meow_target(MeowMotorTargetDto::ProfilePosition {
+            position_rev: 128.0,
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn pp_target_does_not_clamp_or_wrap_invalid_values() {
+        for position_rev in [-128.000_001, f64::NAN, f64::INFINITY] {
+            assert!(meow_target(MeowMotorTargetDto::ProfilePosition { position_rev }).is_err());
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn meow_set_target(
+    state: State<'_, AppState>,
+    nid: u8,
+    target: MeowMotorTargetDto,
+) -> CmdResult<()> {
+    let manager = meow_manager(&state).await?;
+    manager
+        .set_target_sdo(nid, meow_target(target)?)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn meow_set_max_torque(
+    state: State<'_, AppState>,
+    nid: u8,
+    permille: u16,
+) -> CmdResult<()> {
+    let manager = meow_manager(&state).await?;
+    manager.set_max_torque(nid, permille).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn meow_set_profile_limits(
+    state: State<'_, AppState>,
+    nid: u8,
+    limits: MeowProfileLimitsDto,
+) -> CmdResult<()> {
+    let manager = meow_manager(&state).await?;
+    manager
+        .set_profile_limits(
+            nid,
+            MeowProfileLimits {
+                velocity_rev_per_s: limits.velocity_rev_per_s,
+                acceleration_rev_per_s2: limits.acceleration_rev_per_s2,
+                deceleration_rev_per_s2: limits.deceleration_rev_per_s2,
+            },
+        )
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn meow_disable(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
+    let manager = meow_manager(&state).await?;
+    manager.disable(nid).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn meow_clear_error(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
+    let manager = meow_manager(&state).await?;
+    manager.clear_error(nid).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn meow_apply_can_settings(
+    state: State<'_, AppState>,
+    nid: u8,
+    request: MeowCanSettingsRequestDto,
+) -> CmdResult<bool> {
+    let _operation = state.device_settings_operation.acquire().await;
+    let manager = meow_manager(&state).await?;
+    manager.identify(nid).await.map_err(err)?;
+    manager
+        .apply_can_settings(
+            nid,
+            MeowMotorCanSettings {
+                node_id: request.node_id,
+                nominal_bitrate: request.nominal_bitrate,
+                data_bitrate: request.data_bitrate,
+                transmit_pdo_brs: request.transmit_pdo_brs,
+            },
+        )
+        .await
+        .map_err(err)
+}
+
 /// Apply one explicitly requested communication-settings transaction.
 ///
 /// The manager force-reads `0x1018` inside the same per-node exclusive
 /// operation before choosing an object-dictionary dialect. The GUI registry
-/// check here is defense in depth and keeps unknown tuples read-only even if a
-/// caller bypasses the React controls.
+/// check here is defense in depth and keeps unknown tuples and motor types
+/// without a dedicated settings manager read-only even if a caller bypasses
+/// the React controls.
 #[tauri::command]
 pub async fn apply_device_settings(
     state: State<'_, AppState>,
@@ -248,8 +497,13 @@ pub async fn apply_device_settings(
     let kind =
         crate::device_registry::classify(request.expected_vendor_id, request.expected_product_code);
     if !kind.supports_device_settings() {
+        let reason = if matches!(kind, crate::device_registry::DeviceKind::MeowMotor) {
+            "this motor requires the dedicated meow_motor settings command"
+        } else {
+            "unsupported device identity"
+        };
         return Err(format!(
-            "unsupported device identity 0x{:08X}/0x{:08X}",
+            "{reason} 0x{:08X}/0x{:08X}",
             request.expected_vendor_id, request.expected_product_code
         ));
     }

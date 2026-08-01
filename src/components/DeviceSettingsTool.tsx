@@ -80,7 +80,7 @@ export function DeviceSettingsTool({
   const transmitPdoBrs = draft?.transmitPdoBrs ?? false;
   const isKnown =
     device != null && device.identity != null && device.device_type !== "unknown";
-  const isMotor = isKnown && device.device_type === "motor";
+  const isMotor = isKnown && device.device_type === "cia402_motor";
   const isFd = config?.data_bitrate != null;
   const operationBusy = operationCount > 0;
 
@@ -202,7 +202,7 @@ export function DeviceSettingsTool({
           devices
             .filter(
               (candidate) =>
-                candidate.device_type === "motor" &&
+                candidate.device_type === "cia402_motor" &&
                 candidate.online &&
                 candidate.identity != null,
             )
@@ -242,7 +242,7 @@ export function DeviceSettingsTool({
 
     if (
       !device ||
-      device.device_type !== "motor" ||
+      device.device_type !== "cia402_motor" ||
       !device.online ||
       !device.identity
     ) {
@@ -290,6 +290,17 @@ export function DeviceSettingsTool({
         showIcon
         message={t("settingsUnknownDevice")}
         description={t("settingsNoOperations")}
+      />
+    );
+  }
+
+  if (device.device_type === "meow_motor") {
+    return (
+      <Alert
+        type="info"
+        showIcon
+        message={device.friendly_name}
+        description={t("meowCanSettings")}
       />
     );
   }
@@ -668,7 +679,7 @@ function SettingsResultAlert({
   const details = [
     result.changed ? t("settingsApplied") : t("settingsNoChanges"),
     result.restart_required
-      ? deviceType === "motor"
+      ? deviceType === "cia402_motor" || deviceType === "meow_motor"
         ? t("settingsMotorRestartRequired")
         : t("settingsCanRestartRequired")
       : null,

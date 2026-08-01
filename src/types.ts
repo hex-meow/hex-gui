@@ -96,7 +96,80 @@ export interface MotorInfo {
   can_initialize: boolean;
   peak_torque_nm: number | null;
   /** Host device kind from the exact 0x1018 identity tuple. */
-  device_type: "unknown" | "motor" | "imu" | "lift";
+  device_type:
+    | "unknown"
+    | "cia402_motor"
+    | "meow_motor"
+    | "imu"
+    | "lift";
+}
+
+export type MeowMotorLifecycle =
+  | { kind: "Unknown" }
+  | { kind: "UnsupportedIdentity" }
+  | { kind: "Identified" }
+  | { kind: "Initializing" }
+  | { kind: "Initialized" }
+  | { kind: "NeedsReinit"; reason: string }
+  | { kind: "NeedsRestart" };
+
+export interface MeowMotorMeasurements {
+  position_rev: number | null;
+  accumulated_position_rev: number | null;
+  accumulation_valid: boolean;
+  accumulation_segment: number;
+  velocity_rev_per_s: number | null;
+  torque_permille: number | null;
+  driver_temp_c: number | null;
+  motor_temp_c: number | null;
+  mode_display: number | null;
+  detailed_error: number | null;
+  timestamp_us: number | null;
+  tpdo1_generation: number;
+  tpdo2_generation: number;
+}
+
+export interface MeowMotorSnapshot {
+  node_id: number;
+  session_epoch: number;
+  friendly_name: string;
+  identity: MotorIdentity | null;
+  can_config: DeviceCanConfigStatus;
+  lifecycle: MeowMotorLifecycle;
+  online: boolean;
+  nmt_state: NmtState | null;
+  logic: Logic | null;
+  is_ready: boolean;
+  peak_torque_nm: number | null;
+  mit_kp_kd_factor: number | null;
+  measurements: MeowMotorMeasurements;
+}
+
+export type MeowMotorTarget =
+  | { kind: "ProfilePosition"; position_rev: number }
+  | { kind: "ProfileVelocity"; velocity_rev_per_s: number }
+  | { kind: "Torque"; torque_permille: number }
+  | {
+      kind: "Mit";
+      position_rev: number;
+      velocity_rev_per_s: number;
+      torque_nm: number;
+      kp: number;
+      kd: number;
+      kp_kd_limit_permille: number;
+    };
+
+export interface MeowProfileLimits {
+  velocity_rev_per_s: number;
+  acceleration_rev_per_s2: number;
+  deceleration_rev_per_s2: number;
+}
+
+export interface MeowCanSettingsRequest {
+  node_id: number;
+  nominal_bitrate: number;
+  data_bitrate: number;
+  transmit_pdo_brs: boolean;
 }
 
 // ── IMU (mirrors imu::ImuState) ──
