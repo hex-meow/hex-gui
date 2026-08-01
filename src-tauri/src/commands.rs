@@ -302,45 +302,19 @@ pub async fn meow_initialize(
     meow_snapshot_for(&manager, nid)
 }
 
-fn safe_meow_target(
-    manager: &MeowMotorManager,
-    nid: u8,
-    mode: MotorModeDto,
-) -> CmdResult<MeowMotorTarget> {
-    Ok(match mode {
-        MotorModeDto::ProfilePosition => {
-            let position = manager
-                .status(nid)
-                .map_err(err)?
-                .measurements
-                .position
-                .ok_or_else(|| "Profile Position requires fresh position feedback".to_string())?;
-            MeowMotorTarget::ProfilePosition { position }
-        }
-        MotorModeDto::ProfileVelocity => MeowMotorTarget::ProfileVelocity {
-            velocity_rev_per_s: 0.0,
-        },
-        MotorModeDto::Torque => MeowMotorTarget::Torque { torque_permille: 0 },
-        MotorModeDto::Mit => MeowMotorTarget::Mit(MeowMitTarget {
-            position_rev: 0.0,
-            velocity_rev_per_s: 0.0,
-            torque_nm: 0.0,
-            kp: 0,
-            kd: 0,
-            kp_kd_limit_permille: 0,
-        }),
-    })
-}
-
 #[tauri::command]
-pub async fn meow_set_mode(
+pub async fn meow_activate_target(
     state: State<'_, AppState>,
     nid: u8,
-    mode: MotorModeDto,
+    target: MeowMotorTargetDto,
 ) -> CmdResult<()> {
     let manager = meow_manager(&state).await?;
-    let target = safe_meow_target(&manager, nid, mode)?;
-    manager.set_mode_sdo(nid, target).await.map_err(err)
+    // `set_mode_sdo` is deliberately ordered: every target object is written
+    // first, then the 0x4401 mode command, then fresh TPDO2 confirms the mode.
+    manager
+        .set_mode_sdo(nid, meow_target(target)?)
+        .await
+        .map_err(err)
 }
 
 fn meow_target(target: MeowMotorTargetDto) -> CmdResult<MeowMotorTarget> {
@@ -456,6 +430,21 @@ pub async fn meow_disable(state: State<'_, AppState>, nid: u8) -> CmdResult<()> 
 pub async fn meow_clear_error(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
     let manager = meow_manager(&state).await?;
     manager.clear_error(nid).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn meow_start_log(state: State<'_, AppState>, nid: u8) -> CmdResult<String> {
+    let manager = meow_manager(&state).await?;
+    if let Some(existing) = state.take_log(nid) {
+        crate::logging::stop(existing).await;
+    }
+    let handle = crate::logging::start_meow(manager, nid)
+        .await
+        .map_err(err)?;
+    let path = handle.path.clone();
+    state.logs.lock().unwrap().insert(nid, handle);
+    log::info!("started meow CSV log for nid 0x{nid:02X}: {path}");
+    Ok(path)
 }
 
 #[tauri::command]

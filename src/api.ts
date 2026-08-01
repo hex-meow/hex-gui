@@ -33,8 +33,8 @@ export const api = {
     invoke<MeowMotorSnapshot>("meow_get_status", { nid }),
   meowInitialize: (nid: number, rateHz: 500 | 1000) =>
     invoke<MeowMotorSnapshot>("meow_initialize", { nid, rateHz }),
-  meowSetMode: (nid: number, mode: MotorMode) =>
-    invoke<void>("meow_set_mode", { nid, mode }),
+  meowActivateTarget: (nid: number, target: MeowMotorTarget) =>
+    invoke<void>("meow_activate_target", { nid, target }),
   meowSetTarget: (nid: number, target: MeowMotorTarget) =>
     invoke<void>("meow_set_target", { nid, target }),
   meowSetMaxTorque: (nid: number, permille: number) =>
@@ -44,6 +44,8 @@ export const api = {
   meowDisable: (nid: number) => invoke<void>("meow_disable", { nid }),
   meowClearError: (nid: number) =>
     invoke<void>("meow_clear_error", { nid }),
+  meowStartLog: (nid: number) =>
+    invoke<string>("meow_start_log", { nid }),
   meowApplyCanSettings: (nid: number, request: MeowCanSettingsRequest) =>
     invoke<boolean>("meow_apply_can_settings", { nid, request }),
 

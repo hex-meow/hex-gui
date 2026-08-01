@@ -148,10 +148,12 @@ export default function App() {
   }, [dfuBusy, message, settingsBusy, t, tool]);
 
   const onToggleLog = useCallback(
-    async (nid: number, on: boolean) => {
+    async (nid: number, on: boolean, meowMotor = false) => {
       try {
         if (on) {
-          const path = await api.startLog(nid);
+          const path = meowMotor
+            ? await api.meowStartLog(nid)
+            : await api.startLog(nid);
           setLogging((m) => ({ ...m, [nid]: path }));
           message.success(t("startedLog"));
         } else {
@@ -321,6 +323,9 @@ export default function App() {
               key={selected.node_id}
               info={selected}
               connected={connected}
+              logging={logging[selected.node_id] != null}
+              logPath={logging[selected.node_id] ?? null}
+              onToggleLog={(on) => onToggleLog(selected.node_id, on, true)}
               onBusyChange={setSettingsBusy}
             />
           ) : selected && selected.device_type === "cia402_motor" ? (

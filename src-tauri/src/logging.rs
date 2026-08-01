@@ -12,9 +12,8 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use hex_motor::cia402::{
-    Cia402Manager, LiveState, Logic, StatusStreamItem, StreamOptions,
-};
+use hex_motor::cia402::{Cia402Manager, LiveState, Logic, StatusStreamItem, StreamOptions};
+use hex_motor::meow_motor::{MeowMotorLiveState, MeowMotorLogic, MeowMotorManager};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
@@ -92,6 +91,63 @@ pub async fn start(mgr: Arc<Cia402Manager>, nid: u8) -> anyhow::Result<LogHandle
     })
 }
 
+/// Open a full-publication CSV recorder for a new-protocol motor.
+pub async fn start_meow(mgr: Arc<MeowMotorManager>, nid: u8) -> anyhow::Result<LogHandle> {
+    let dir = PathBuf::from("logs");
+    fs::create_dir_all(&dir)?;
+    let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S_%3f");
+    let path = dir.join(format!("meow_motor_0x{nid:02X}_{stamp}.csv"));
+
+    let file = File::create(&path)?;
+    let mut writer = BufWriter::new(file);
+    writeln!(
+        writer,
+        "host_iso,motor_ts_us,position_q8_24_rev,position_accumulated_rev,\
+         accumulation_valid,accumulation_segment,velocity_rev_per_s,torque_permille,\
+         mode_display,detailed_error,driver_temp_c,motor_temp_c,tpdo1_generation,\
+         tpdo2_generation,logic"
+    )?;
+    writer.flush()?;
+
+    let abs = fs::canonicalize(&path).unwrap_or(path);
+    let path_str = abs.to_string_lossy().into_owned();
+    let mut stream = mgr.subscribe_status_stream(nid)?;
+    let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
+
+    let task = tokio::spawn(async move {
+        let mut rows: u32 = 0;
+        loop {
+            tokio::select! {
+                _ = &mut stop_rx => break,
+                item = stream.recv() => match item {
+                    Ok(state) => {
+                        if write_meow_row(&mut writer, &state).is_err() {
+                            break;
+                        }
+                        rows += 1;
+                        if rows >= FLUSH_EVERY_ROWS {
+                            let _ = writer.flush();
+                            rows = 0;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(dropped)) => {
+                        log::warn!("meow csv log nid 0x{nid:02X}: lagged, dropped {dropped} snapshots");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                },
+            }
+        }
+        let _ = writer.flush();
+        log::info!("meow csv log nid 0x{nid:02X}: stopped");
+    });
+
+    Ok(LogHandle {
+        path: path_str,
+        stop: stop_tx,
+        task,
+    })
+}
+
 /// Signal the task to stop and await its final flush.
 pub async fn stop(handle: LogHandle) {
     let _ = handle.stop.send(());
@@ -123,11 +179,59 @@ fn write_row(w: &mut impl Write, ls: &LiveState) -> std::io::Result<()> {
     )
 }
 
+fn write_meow_row(w: &mut impl Write, state: &MeowMotorLiveState) -> std::io::Result<()> {
+    let measurements = &state.measurements;
+    let host = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
+    let optional = |value: Option<f64>| value.map(|v| v.to_string()).unwrap_or_default();
+    let optional_f32 = |value: Option<f32>| value.map(|v| v.to_string()).unwrap_or_default();
+    let optional_i16 = |value: Option<i16>| value.map(|v| v.to_string()).unwrap_or_default();
+    let optional_u16 = |value: Option<u16>| value.map(|v| v.to_string()).unwrap_or_default();
+    let position = measurements.position.map(|value| value.to_revolutions());
+
+    writeln!(
+        w,
+        "{host},{ts},{position},{accumulated},{valid},{segment},{velocity},{torque},\
+         {mode},{error},{driver_temp},{motor_temp},{tpdo1},{tpdo2},{logic}",
+        ts = optional_u16(measurements.timestamp_us),
+        position = optional(position),
+        accumulated = optional(measurements.accumulated_position_rev),
+        valid = measurements.position_accumulation_valid,
+        segment = measurements.position_accumulation_segment,
+        velocity = optional(measurements.velocity_rev_per_s),
+        torque = optional_i16(measurements.torque_permille),
+        mode = measurements
+            .mode_display
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        error = measurements
+            .detailed_error
+            .map(|value| format!("0x{value:04X}"))
+            .unwrap_or_default(),
+        driver_temp = optional_f32(measurements.driver_temp_c),
+        motor_temp = optional_f32(measurements.motor_temp_c),
+        tpdo1 = measurements.tpdo1_generation,
+        tpdo2 = measurements.tpdo2_generation,
+        logic = meow_logic_str(state.logic.as_ref()),
+    )
+}
+
 fn logic_str(l: Option<&Logic>) -> String {
     match l {
         None => String::new(),
         Some(Logic::Disabled) => "Disabled".into(),
         Some(Logic::Enabled(m)) => format!("Enabled({})", m.name()),
         Some(Logic::Error { kind, raw_code }) => format!("Error({kind:?}:0x{raw_code:04X})"),
+    }
+}
+
+fn meow_logic_str(logic: Option<&MeowMotorLogic>) -> String {
+    match logic {
+        None => String::new(),
+        Some(MeowMotorLogic::Disabled) => "Disabled".into(),
+        Some(MeowMotorLogic::Enabled(mode)) => format!("Enabled({mode:?})"),
+        Some(MeowMotorLogic::Error {
+            mode_display,
+            detailed_error,
+        }) => format!("Error(mode=0x{mode_display:02X},detail=0x{detailed_error:04X})"),
     }
 }

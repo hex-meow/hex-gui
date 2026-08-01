@@ -301,6 +301,25 @@ const STRINGS = {
   meowIdentifyFailed: { en: "Dedicated motor identification failed", zh: "专用电机识别失败" },
   meowPowerCycleRequired: { en: "Power-cycle the motor before continuing", zh: "继续前请给电机重新上电" },
   meowTpdoRate: { en: "Device TPDO rate (Hz)", zh: "电机 TPDO 频率 (Hz)" },
+  meowRefreshHint: {
+    en: "The display polls the latest driver snapshot at 50 or 100 Hz. CSV logging records the full driver publication stream.",
+    zh: "界面以 50 或 100 Hz 读取驱动层最新快照；CSV 日志会记录驱动层发布的完整数据流。",
+  },
+  meowModeTargetHint: {
+    en: "Send Target writes the selected mode's target objects first, then changes and confirms the mode.",
+    zh: "“发送目标值”会先写入所选模式的目标对象，再切换并确认模式。",
+  },
+  meowDisabledModeHint: {
+    en: "Disable torque without changing the configured target values.",
+    zh: "关闭力矩输出，不修改已经配置的目标值。",
+  },
+  meowUseCurrentPosition: {
+    en: "Use current position",
+    zh: "使用当前位置",
+  },
+  meowLimits: { en: "Motion limits", zh: "运动限制" },
+  meowAccumulationValid: { en: "continuous", zh: "连续累计有效" },
+  meowAccumulationInvalid: { en: "waiting for continuity", zh: "等待连续性建立" },
   meowOnlineModeHint: {
     en: "Modes can be changed while enabled. The driver first sends a safe target for the selected mode.",
     zh: "使能状态下可以在线切换模式；驱动会先发送所选模式的安全目标值。",
