@@ -86,6 +86,7 @@ export interface CanDfuDevice {
   hardware_version: number | null;
   hardware_version_hex: string | null;
   authorization: CanDfuAuthorization;
+  backend: "stm32_canopen" | "cobs_can_iap_v1" | null;
   profile_id: string | null;
   display_name: string | null;
   reason: string;
@@ -105,16 +106,18 @@ export interface CanDfuDiscovery {
 export interface CanDfuPrepared {
   token: string;
   device: CanDfuDevice;
+  backend: "stm32_canopen" | "cobs_can_iap_v1";
+  artifact_kind: "meowpkg" | "compatible_img";
   artifact_sha256: string;
   artifact_size: number;
-  mcu: "stm32g431" | "stm32g474" | "stm32g0b1";
-  format_version: number;
+  mcu: "stm32g431" | "stm32g474" | "stm32g0b1" | null;
+  format_version: number | null;
   encrypted: boolean;
   firmware_id: number;
   firmware_id_hex: string;
   firmware_version: number;
   firmware_version_hex: string;
-  plaintext_size: number;
+  plaintext_size: number | null;
   wire_size: number;
   version_warning: "unknown" | "none" | "reinstall" | "downgrade";
 }
@@ -126,7 +129,13 @@ export type CanDfuStage =
   | "clearing"
   | "writing"
   | "verifying_and_starting"
-  | "confirming_application";
+  | "confirming_application"
+  | "resetting"
+  | "entering_compatible_bootloader"
+  | "validating_compatible_identity"
+  | "starting_download"
+  | "finalizing"
+  | "verifying";
 
 export interface CanDfuProgress {
   stage: CanDfuStage;
@@ -137,6 +146,7 @@ export interface CanDfuProgress {
 
 export type CanDfuOutcomeStatus =
   | "application_verified"
+  | "verify_acked_startup_unconfirmed"
   | "cancelled_before_write"
   | "cancelled_recoverable";
 

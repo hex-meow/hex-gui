@@ -9,6 +9,7 @@ const NONE: u8 = 0;
 pub enum DfuBackend {
     HpmUsb = 1,
     Stm32Can = 2,
+    CobsCanIap = 3,
 }
 
 #[derive(Default)]
@@ -60,8 +61,12 @@ mod tests {
         let first = gate.try_acquire(DfuBackend::HpmUsb).unwrap();
         assert!(gate.is_active());
         assert!(gate.try_acquire(DfuBackend::Stm32Can).is_err());
+        assert!(gate.try_acquire(DfuBackend::CobsCanIap).is_err());
         drop(first);
         assert!(!gate.is_active());
-        assert!(gate.try_acquire(DfuBackend::Stm32Can).is_ok());
+        let second = gate.try_acquire(DfuBackend::Stm32Can).unwrap();
+        assert!(gate.try_acquire(DfuBackend::CobsCanIap).is_err());
+        drop(second);
+        assert!(gate.try_acquire(DfuBackend::CobsCanIap).is_ok());
     }
 }

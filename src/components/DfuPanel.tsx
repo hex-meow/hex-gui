@@ -499,8 +499,8 @@ function textFor(lang: "en" | "zh") {
       eyebrow: "固件维护",
       title: "设备升级",
       lead:
-        "HPM 使用已真机验证的 USB v2 流程；STM32 CAN 当前只开放安全发现与身份分类，所有写入等待首个产品 profile 完成资格确认。",
-      canTransportLabel: "CAN · 只读",
+        "HPM 使用已真机验证的 USB v2 流程；CAN 会先读取完整 0x1018，再由本地精确 profile 自动选择标准或兼容升级后端。",
+      canTransportLabel: "CAN",
       closeBlocked: "升级命令正在执行。请先等待当前命令结束并取消升级，再关闭窗口。",
       deviceStep: "1 · 识别设备",
       bootloaderHint: "请先让设备进入 USB Bootloader",
@@ -575,8 +575,8 @@ function textFor(lang: "en" | "zh") {
     eyebrow: "Firmware maintenance",
     title: "Device Firmware Update",
     lead:
-      "HPM uses the hardware-tested USB v2 flow. STM32 CAN currently exposes safe discovery and identity classification only; all writes await the first qualified product profile.",
-    canTransportLabel: "CAN · read-only",
+      "HPM uses the hardware-tested USB v2 flow. CAN reads the complete 0x1018 identity first, then an exact local profile automatically selects the standard or compatible update backend.",
+    canTransportLabel: "CAN",
     closeBlocked:
       "A firmware command is in progress. Wait for it, cancel safely, then close the window.",
     deviceStep: "1 · Identify device",

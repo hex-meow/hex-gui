@@ -17,8 +17,8 @@ use can_transport::{
 pub enum CanOwner {
     Manager,
     Analyzer,
-    Stm32Discovery,
-    Stm32Dfu,
+    DfuDiscovery,
+    DfuUpdate,
 }
 
 impl fmt::Display for CanOwner {
@@ -26,8 +26,8 @@ impl fmt::Display for CanOwner {
         formatter.write_str(match self {
             Self::Manager => "the normal CAN session",
             Self::Analyzer => "CAN Analyzer",
-            Self::Stm32Discovery => "STM32 CAN discovery",
-            Self::Stm32Dfu => "STM32 CAN update",
+            Self::DfuDiscovery => "CAN firmware discovery",
+            Self::DfuUpdate => "CAN firmware update",
         })
     }
 }
@@ -309,9 +309,9 @@ mod tests {
     #[test]
     fn held_permit_excludes_every_other_owner_until_drop() {
         let gate = CanTransportGate::default();
-        let mut permit = gate.try_acquire(CanOwner::Stm32Dfu).unwrap();
+        let mut permit = gate.try_acquire(CanOwner::DfuUpdate).unwrap();
         permit.mark_held().unwrap();
-        assert_eq!(gate.active(), Some((CanOwner::Stm32Dfu, "held")));
+        assert_eq!(gate.active(), Some((CanOwner::DfuUpdate, "held")));
         assert!(gate.try_acquire(CanOwner::Manager).is_err());
         assert!(gate.try_acquire(CanOwner::Analyzer).is_err());
 
@@ -328,7 +328,7 @@ mod tests {
         drop(bus);
 
         assert_eq!(gate.active(), Some((CanOwner::Manager, "held")));
-        assert!(gate.try_acquire(CanOwner::Stm32Discovery).is_err());
+        assert!(gate.try_acquire(CanOwner::DfuDiscovery).is_err());
         drop(in_flight);
         assert_eq!(gate.active(), None);
     }

@@ -1,10 +1,11 @@
-//! Tauri adapter for the fail-closed STM32 CANopen DFU core.
+//! Tauri adapter for identity-routed CAN firmware-update backends.
 //!
-//! The GUI exposes heartbeat discovery, exact local target classification,
-//! bounded `.meowpkg` preflight, and the common streaming engine behind the
-//! core's opaque `ReadyToFlash` gate. Only the explicitly registered Lift and
-//! Arm IMU test profiles can reach an SDO download; every unknown, incomplete,
-//! disabled, or mismatched identity remains read-only.
+//! Discovery is shared and read-only: heartbeat candidates must return a
+//! complete 0x1018 record before an exact local registry selects a backend.
+//! Standard STM32 `.meowpkg` and compatible encrypted IMG files retain
+//! independent parsers, policy tables, capability types, and flash engines.
+//! Unknown, incomplete, disabled, or changed identities never receive a
+//! protocol-specific update frame.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,11 +18,19 @@ use can_transport::{
     CanBus, CanBusState, CanCapabilities, CanFilter, CanFrame, CanId, CanIoError, CanLinkConfig,
     CanRx,
 };
+use cobs_can_iap::{
+    flash as flash_cobs_iap, CancellationToken as CobsCancellationToken,
+    CanopenIdentity as CobsCanopenIdentity, FlashError as CobsFlashError,
+    FlashEvent as CobsFlashEvent, FlashOptions as CobsFlashOptions, FlashStage as CobsFlashStage,
+    ImgArtifact, ImgLimits, PreparedUpgrade as CobsPreparedUpgrade,
+    SupportPolicy as CobsSupportPolicy, TargetClassification as CobsTargetClassification,
+    TargetRegistry as CobsTargetRegistry,
+};
 use hexmeow_stm32_can_dfu::{
     authorize, flash, observe_identity, read_package_bytes, revalidate_prepared, AuthorizedTarget,
     CanBusSdo, CancellationToken, FlashError, FlashEvent, FlashOptions, FlashStage,
-    IdentitySnapshot, PackageLimits, PreparedUpgrade, RegisteredTarget, Stm32ImageMode,
-    SupportPolicy, TargetClassification, TargetRegistry,
+    IdentitySnapshot, PackageLimits, PreparedUpgrade, Stm32ImageMode, SupportPolicy,
+    TargetClassification, TargetRegistry,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -29,6 +38,10 @@ use tauri::ipc::{Channel, InvokeBody, Request};
 use tauri::State;
 
 use crate::can_lease::{CanOwner, CanTransportGate};
+use crate::cobs_can_iap_profiles::{
+    display_name_for_profile as cobs_display_name_for_profile,
+    target_registry as cobs_target_registry,
+};
 use crate::dfu_gate::{DfuBackend, DfuMutationGate};
 use crate::stm32_can_profiles::{display_name_for_profile, target_registry};
 
@@ -47,19 +60,71 @@ const TSDO_FAMILY_MASK: u32 = 0x780;
 struct CanDfuInner {
     spec: Option<String>,
     discovered: HashMap<u8, DiscoveredTarget>,
-    selected: Option<AuthorizedTarget>,
+    selected: Option<SelectedTarget>,
     staged: Option<StagedArtifact>,
 }
 
 #[derive(Clone)]
 struct DiscoveredTarget {
     dto: DeviceDto,
-    authorized: Option<AuthorizedTarget>,
+    authorized: Option<SelectedTarget>,
 }
 
-struct StagedArtifact {
-    token: String,
-    prepared: PreparedUpgrade,
+#[derive(Clone)]
+enum SelectedTarget {
+    Stm32(AuthorizedTarget),
+    CobsIap(cobs_can_iap::AuthorizedTarget),
+}
+
+impl SelectedTarget {
+    fn node_id(&self) -> u8 {
+        match self {
+            Self::Stm32(target) => target.node_id(),
+            Self::CobsIap(target) => target.identity().node_id(),
+        }
+    }
+}
+
+#[derive(Clone)]
+enum StagedArtifact {
+    Stm32 {
+        token: String,
+        prepared: PreparedUpgrade,
+    },
+    CobsIap {
+        token: String,
+        prepared: CobsPreparedUpgrade,
+    },
+}
+
+impl StagedArtifact {
+    fn token(&self) -> &str {
+        match self {
+            Self::Stm32 { token, .. } | Self::CobsIap { token, .. } => token,
+        }
+    }
+
+    fn backend(&self) -> DfuBackend {
+        match self {
+            Self::Stm32 { .. } => DfuBackend::Stm32Can,
+            Self::CobsIap { .. } => DfuBackend::CobsCanIap,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum ActiveCancellation {
+    Stm32(CancellationToken),
+    CobsIap(CobsCancellationToken),
+}
+
+impl ActiveCancellation {
+    fn cancel(&self) {
+        match self {
+            Self::Stm32(token) => token.cancel(),
+            Self::CobsIap(token) => token.cancel(),
+        }
+    }
 }
 
 pub struct CanDfuState {
@@ -67,7 +132,7 @@ pub struct CanDfuState {
     session_lock: tokio::sync::Mutex<()>,
     active: AtomicBool,
     cancellable: AtomicBool,
-    cancellation: Mutex<Option<CancellationToken>>,
+    cancellation: Mutex<Option<ActiveCancellation>>,
 }
 
 impl Default for CanDfuState {
@@ -116,6 +181,7 @@ pub struct DeviceDto {
     hardware_version: Option<u32>,
     hardware_version_hex: Option<String>,
     authorization: &'static str,
+    backend: Option<&'static str>,
     profile_id: Option<String>,
     display_name: Option<&'static str>,
     reason: String,
@@ -138,16 +204,18 @@ pub struct DiscoveryDto {
 pub struct PreparedDto {
     token: String,
     device: DeviceDto,
+    backend: &'static str,
+    artifact_kind: &'static str,
     artifact_sha256: String,
     artifact_size: usize,
-    mcu: String,
-    format_version: u16,
+    mcu: Option<String>,
+    format_version: Option<u16>,
     encrypted: bool,
     firmware_id: u32,
     firmware_id_hex: String,
     firmware_version: u32,
     firmware_version_hex: String,
-    plaintext_size: usize,
+    plaintext_size: Option<usize>,
     wire_size: usize,
     version_warning: &'static str,
 }
@@ -182,7 +250,7 @@ pub async fn stm32_can_dfu_discover(
     if spec.is_empty() {
         return Err("CAN interface must not be empty".into());
     }
-    let can_lease = can_gate.try_acquire(CanOwner::Stm32Discovery)?;
+    let can_lease = can_gate.try_acquire(CanOwner::DfuDiscovery)?;
     *state.inner.lock().unwrap() = CanDfuInner::default();
     let bus = crate::backend::open_classic_1m_bus(&spec, can_lease)
         .await
@@ -192,6 +260,8 @@ pub async fn stm32_can_dfu_discover(
         .await
         .map_err(|error| error.to_string())?;
     let registry = target_registry().map_err(|error| error.to_string())?;
+    let cobs_registry = cobs_target_registry().map_err(|error| error.to_string())?;
+    ensure_disjoint_backend_routes(&registry, &cobs_registry)?;
     let sdo = CanBusSdo::new(bus.as_ref());
 
     let mut devices = Vec::new();
@@ -209,7 +279,7 @@ pub async fn stm32_can_dfu_discover(
                 continue;
             }
         };
-        let record = classify_target(&sdo, node_id, identity, &registry).await;
+        let record = classify_target(&sdo, node_id, identity, &registry, &cobs_registry).await;
         devices.push(record.dto.clone());
         discovered.insert(node_id, record);
     }
@@ -285,60 +355,109 @@ pub async fn stm32_can_dfu_prepare(
         (target, device)
     };
 
-    let source_size = bytes.len();
-    let source_sha256 = hex_sha256(&bytes);
-    let package = read_package_bytes(
-        &bytes,
-        PackageLimits {
-            max_archive_bytes: 2 * 1024 * 1024,
-            max_manifest_bytes: 64 * 1024,
-            max_image_bytes: 1024 * 1024,
-            max_entries: 3,
-        },
-    )
-    .map_err(|error| error.to_string())?;
-    let prepared = PreparedUpgrade::bind(target, package).map_err(|error| error.to_string())?;
-    let summary = prepared.package();
-    let manifest = summary.manifest();
-    let format_version = manifest
-        .payload_format
-        .as_ref()
-        .and_then(|format| format.stm32_header_version)
-        .ok_or_else(|| "validated STM32 package has no header version".to_owned())?;
-    let encrypted = matches!(summary.image_mode(), Stm32ImageMode::EncryptedV2);
-    let plaintext_size = summary.plaintext_size();
-    // Discovery intentionally does not read 0x1008, and 0x1018:03 belongs to
-    // whichever endpoint currently responds (APP or Bootloader). Do not label
-    // the package as an upgrade/reinstall/downgrade from that ambiguous value.
-    let version_warning = "unknown";
     let token = format!(
         "{:016x}",
         getrandom::u64().map_err(|error| format!("cannot create artifact token: {error}"))?
     );
-    let dto = PreparedDto {
-        token: token.clone(),
-        device,
-        artifact_sha256: source_sha256,
-        artifact_size: source_size,
-        mcu: manifest.mcu.clone(),
-        format_version,
-        encrypted,
-        firmware_id: manifest.firmware_id,
-        firmware_id_hex: format!("0x{:08X}", manifest.firmware_id),
-        firmware_version: manifest.firmware_version,
-        firmware_version_hex: format!("0x{:08X}", manifest.firmware_version),
-        plaintext_size,
-        wire_size: summary.wire_size(),
-        version_warning,
+    let source_size = bytes.len();
+    let source_sha256 = hex_sha256(&bytes);
+    let (staged, dto) = match target {
+        SelectedTarget::Stm32(target) => {
+            let package = read_package_bytes(
+                &bytes,
+                PackageLimits {
+                    max_archive_bytes: 2 * 1024 * 1024,
+                    max_manifest_bytes: 64 * 1024,
+                    max_image_bytes: 1024 * 1024,
+                    max_entries: 3,
+                },
+            )
+            .map_err(|error| error.to_string())?;
+            let prepared =
+                PreparedUpgrade::bind(target, package).map_err(|error| error.to_string())?;
+            let summary = prepared.package();
+            let manifest = summary.manifest();
+            let format_version = manifest
+                .payload_format
+                .as_ref()
+                .and_then(|format| format.stm32_header_version)
+                .ok_or_else(|| "validated STM32 package has no header version".to_owned())?;
+            let dto = PreparedDto {
+                token: token.clone(),
+                device,
+                backend: "stm32_canopen",
+                artifact_kind: "meowpkg",
+                artifact_sha256: source_sha256,
+                artifact_size: source_size,
+                mcu: Some(manifest.mcu.clone()),
+                format_version: Some(format_version),
+                encrypted: matches!(summary.image_mode(), Stm32ImageMode::EncryptedV2),
+                firmware_id: manifest.firmware_id,
+                firmware_id_hex: format!("0x{:08X}", manifest.firmware_id),
+                firmware_version: manifest.firmware_version,
+                firmware_version_hex: format!("0x{:08X}", manifest.firmware_version),
+                plaintext_size: Some(summary.plaintext_size()),
+                wire_size: summary.wire_size(),
+                version_warning: "unknown",
+            };
+            (
+                StagedArtifact::Stm32 {
+                    token: token.clone(),
+                    prepared,
+                },
+                dto,
+            )
+        }
+        SelectedTarget::CobsIap(target) => {
+            let artifact = ImgArtifact::parse(
+                &bytes,
+                ImgLimits {
+                    max_file_bytes: MAX_ARTIFACT_BYTES,
+                    max_bin_bytes: MAX_ARTIFACT_BYTES - cobs_can_iap::IMG_TAG_SIZE,
+                },
+            )
+            .map_err(|error| error.to_string())?;
+            let prepared =
+                CobsPreparedUpgrade::bind(target, artifact).map_err(|error| error.to_string())?;
+            let artifact = prepared.artifact();
+            let dto = PreparedDto {
+                token: token.clone(),
+                device,
+                backend: "cobs_can_iap_v1",
+                artifact_kind: "compatible_img",
+                artifact_sha256: source_sha256,
+                artifact_size: source_size,
+                mcu: None,
+                format_version: None,
+                encrypted: matches!(
+                    artifact.encryption(),
+                    cobs_can_iap::EncryptionMode::Encrypted
+                ),
+                firmware_id: artifact.firmware_id(),
+                firmware_id_hex: format!("0x{:08X}", artifact.firmware_id()),
+                firmware_version: artifact.firmware_version(),
+                firmware_version_hex: format!("0x{:08X}", artifact.firmware_version()),
+                plaintext_size: None,
+                wire_size: artifact.bin_size(),
+                version_warning: "unknown",
+            };
+            (
+                StagedArtifact::CobsIap {
+                    token: token.clone(),
+                    prepared,
+                },
+                dto,
+            )
+        }
     };
-    state.inner.lock().unwrap().staged = Some(StagedArtifact { token, prepared });
+    state.inner.lock().unwrap().staged = Some(staged);
     Ok(dto)
 }
 
 struct ActiveReset<'a> {
     active: &'a AtomicBool,
     cancellable: &'a AtomicBool,
-    cancellation: &'a Mutex<Option<CancellationToken>>,
+    cancellation: &'a Mutex<Option<ActiveCancellation>>,
 }
 
 impl Drop for ActiveReset<'_> {
@@ -349,12 +468,11 @@ impl Drop for ActiveReset<'_> {
     }
 }
 
-/// Mutation entry point for locally registered STM32 test profiles.
+/// Mutation entry point for all locally registered CAN update profiles.
 ///
-/// A valid token can only be created after exact device authorization and
-/// product-pinned secure-v2 package validation. The process-wide CAN lease
-/// excludes Analyzer and normal manager sessions for the complete revalidation
-/// and flash operation.
+/// The selected 0x1018 row fixes the backend before a file is parsed. A token
+/// is single-use, and the complete identity is reread on the exact update bus
+/// before either backend can transmit its first protocol-specific mutation.
 #[tauri::command]
 pub async fn stm32_can_dfu_start(
     state: State<'_, CanDfuState>,
@@ -367,27 +485,30 @@ pub async fn stm32_can_dfu_start(
     if state.is_active() {
         return Err("an upgrade is already running".into());
     }
-    let (spec, prepared) = {
+    let (spec, staged) = {
         let inner = state.inner.lock().unwrap();
         let staged = inner
             .staged
             .as_ref()
-            .ok_or_else(|| "no validated STM32 CAN artifact is staged".to_owned())?;
-        if staged.token != token {
+            .ok_or_else(|| "no validated CAN artifact is staged".to_owned())?;
+        if staged.token() != token {
             return Err("artifact token is stale; select and validate the file again".into());
         }
         let spec = inner
             .spec
             .clone()
             .ok_or_else(|| "the CAN discovery session is stale".to_owned())?;
-        (spec, staged.prepared.clone())
+        (spec, staged.clone())
     };
 
     let _mutation_permit = mutation_gate
-        .try_acquire(DfuBackend::Stm32Can)
+        .try_acquire(staged.backend())
         .map_err(str::to_owned)?;
-    let can_lease = can_gate.try_acquire(CanOwner::Stm32Dfu)?;
-    let cancellation = CancellationToken::new();
+    let can_lease = can_gate.try_acquire(CanOwner::DfuUpdate)?;
+    let cancellation = match &staged {
+        StagedArtifact::Stm32 { .. } => ActiveCancellation::Stm32(CancellationToken::new()),
+        StagedArtifact::CobsIap { .. } => ActiveCancellation::CobsIap(CobsCancellationToken::new()),
+    };
     *state.cancellation.lock().unwrap() = Some(cancellation.clone());
     if state
         .active
@@ -421,21 +542,36 @@ pub async fn stm32_can_dfu_start(
         .await
         .map_err(|error| error.to_string())?;
     let bus = with_exact_sdo_filter(bus);
+    match (staged, cancellation) {
+        (StagedArtifact::Stm32 { prepared, .. }, ActiveCancellation::Stm32(cancellation)) => {
+            run_stm32_update(bus.as_ref(), prepared, cancellation, &on_event, &state).await
+        }
+        (StagedArtifact::CobsIap { prepared, .. }, ActiveCancellation::CobsIap(cancellation)) => {
+            run_cobs_iap_update(bus.as_ref(), prepared, cancellation, &on_event, &state).await
+        }
+        _ => Err("internal CAN update backend/cancellation mismatch".to_owned()),
+    }
+}
+
+async fn run_stm32_update(
+    bus: &dyn CanBus,
+    prepared: PreparedUpgrade,
+    cancellation: CancellationToken,
+    on_event: &Channel<ProgressDto>,
+    state: &CanDfuState,
+) -> CmdResult<OutcomeDto> {
     let registry = target_registry().map_err(|error| error.to_string())?;
-    let sdo = CanBusSdo::new(bus.as_ref());
+    let sdo = CanBusSdo::new(bus);
     let ready = revalidate_prepared(&sdo, &prepared, &registry, IDENTITY_TIMEOUT)
         .await
         .map_err(|error| error.to_string())?;
     let wire_total = ready.package().wire_size();
-
     let result = flash(
         &sdo,
         ready,
         &FlashOptions::default(),
         &cancellation,
-        |event| {
-            send_flash_progress(&on_event, event, wire_total, &state.cancellable);
-        },
+        |event| send_flash_progress(on_event, event, wire_total, &state.cancellable),
     )
     .await;
 
@@ -461,6 +597,77 @@ pub async fn stm32_can_dfu_start(
             "{error}. If update writes had started, keep the device powered. It may be recoverable in Bootloader, or an application may have started but failed host confirmation; inspect its identity and run one complete qualified upgrade again if needed"
         )),
     }
+}
+
+async fn run_cobs_iap_update(
+    bus: &dyn CanBus,
+    prepared: CobsPreparedUpgrade,
+    cancellation: CobsCancellationToken,
+    on_event: &Channel<ProgressDto>,
+    state: &CanDfuState,
+) -> CmdResult<OutcomeDto> {
+    let registry = cobs_target_registry().map_err(|error| error.to_string())?;
+    let expected = prepared.target().identity();
+    let sdo = CanBusSdo::new(bus);
+    let observed = observe_identity(&sdo, expected.node_id(), IDENTITY_TIMEOUT)
+        .await
+        .map_err(|error| error.to_string())?;
+    let actual = CobsCanopenIdentity::new(
+        expected.node_id(),
+        observed.vendor_id(),
+        observed.product_code(),
+        observed.revision_number(),
+        observed.serial_number(),
+    )
+    .map_err(|error| error.to_string())?;
+    let ready = prepared
+        .revalidate(actual, &registry)
+        .map_err(|error| error.to_string())?;
+    let wire_total = ready_artifact_size(&prepared);
+    let result = flash_cobs_iap(
+        bus,
+        ready,
+        &CobsFlashOptions::default(),
+        &cancellation,
+        |event| send_cobs_flash_progress(on_event, event, wire_total, &state.cancellable),
+    )
+    .await;
+
+    match result {
+        Ok(_) => Ok(OutcomeDto {
+            status: "verify_acked_startup_unconfirmed",
+            startup_confirmed: false,
+            recoverable_bootloader_expected: false,
+        }),
+        Err(CobsFlashError::Cancelled {
+            recovery_required: false,
+            ..
+        }) => Ok(OutcomeDto {
+            status: "cancelled_before_write",
+            startup_confirmed: false,
+            recoverable_bootloader_expected: false,
+        }),
+        Err(CobsFlashError::Cancelled { .. }) => Ok(OutcomeDto {
+            status: "cancelled_recoverable",
+            startup_confirmed: false,
+            recoverable_bootloader_expected: true,
+        }),
+        Err(error) => {
+            let recovery = error.recovery_required();
+            Err(format!(
+                "{error}. {}",
+                if recovery {
+                    "The command outcome may be ambiguous after download began. Keep the device powered and do not retry blindly. This test backend intentionally refuses an unidentified all-0xFF recovery identity until a product-specific recovery path is hardware-qualified"
+                } else {
+                    "No download write was confirmed. Recheck the exact device identity and IMG policy before retrying"
+                }
+            ))
+        }
+    }
+}
+
+fn ready_artifact_size(prepared: &CobsPreparedUpgrade) -> usize {
+    prepared.artifact().bin_size()
 }
 
 #[tauri::command]
@@ -548,27 +755,88 @@ fn send_flash_progress(
     }
 }
 
+fn send_cobs_flash_progress(
+    channel: &Channel<ProgressDto>,
+    event: CobsFlashEvent,
+    total: usize,
+    cancellable: &AtomicBool,
+) {
+    let total = total as u64;
+    let progress = match event {
+        CobsFlashEvent::Stage(stage) => {
+            // Stage notifications are emitted after a complete request is on
+            // the wire and while its ACK is pending. Cancellation is accepted
+            // again only after an identity/progress event proves that command
+            // reached an unambiguous boundary.
+            cancellable.store(false, Ordering::SeqCst);
+            let (stage, completed) = match stage {
+                CobsFlashStage::Resetting => ("resetting", 0),
+                CobsFlashStage::EnteringBootloader => ("entering_compatible_bootloader", 0),
+                CobsFlashStage::IdentityVerified => {
+                    cancellable.store(true, Ordering::SeqCst);
+                    ("validating_compatible_identity", 0)
+                }
+                CobsFlashStage::StartingDownload => ("starting_download", 0),
+                CobsFlashStage::Transferring => ("writing", 0),
+                CobsFlashStage::Finalizing => ("finalizing", total),
+                CobsFlashStage::Verifying => ("verifying", total),
+            };
+            Some(ProgressDto {
+                stage,
+                completed,
+                total,
+                cancellable: cancellable.load(Ordering::SeqCst),
+            })
+        }
+        CobsFlashEvent::IapIdentity(_) => {
+            cancellable.store(true, Ordering::SeqCst);
+            Some(ProgressDto {
+                stage: "validating_compatible_identity",
+                completed: 0,
+                total,
+                cancellable: true,
+            })
+        }
+        CobsFlashEvent::Progress { written, total } => {
+            cancellable.store(true, Ordering::SeqCst);
+            Some(ProgressDto {
+                stage: "writing",
+                completed: written as u64,
+                total: total as u64,
+                cancellable: true,
+            })
+        }
+    };
+    if let Some(progress) = progress {
+        send_progress(channel, progress);
+    }
+}
+
 async fn classify_target(
     sdo: &CanBusSdo<'_, dyn CanBus>,
     node_id: u8,
     identity: IdentitySnapshot,
     registry: &TargetRegistry,
+    cobs_registry: &CobsTargetRegistry,
 ) -> DiscoveredTarget {
     match registry.classify(&identity) {
         TargetClassification::Enabled(target) => {
             match authorize(sdo, node_id, registry, IDENTITY_TIMEOUT).await {
                 Ok(authorized) => {
+                    let profile_id = target.profile_id().to_owned();
                     let dto = device_dto(
                         node_id,
                         *authorized.identity(),
                         Some(authorized.hardware_version()),
                         "enabled",
-                        Some(target),
+                        Some("stm32_canopen"),
+                        Some(profile_id.clone()),
+                        display_name_for_profile(&profile_id),
                         "Exact local product, hardware, MCU and firmware policy matched".into(),
                     );
                     DiscoveredTarget {
                         dto,
-                        authorized: Some(authorized),
+                        authorized: Some(SelectedTarget::Stm32(authorized)),
                     }
                 }
                 Err(error) => DiscoveredTarget {
@@ -577,7 +845,9 @@ async fn classify_target(
                         identity,
                         None,
                         "known_disabled",
-                        Some(target),
+                        Some("stm32_canopen"),
+                        Some(target.profile_id().to_owned()),
+                        display_name_for_profile(target.profile_id()),
                         error.to_string(),
                     ),
                     authorized: None,
@@ -595,33 +865,23 @@ async fn classify_target(
                     identity,
                     None,
                     "known_disabled",
-                    Some(target),
+                    Some("stm32_canopen"),
+                    Some(target.profile_id().to_owned()),
+                    display_name_for_profile(target.profile_id()),
                     reason,
                 ),
                 authorized: None,
             }
         }
-        TargetClassification::Unknown => DiscoveredTarget {
-            dto: device_dto(
-                node_id,
-                identity,
-                None,
-                "unsupported",
-                None,
-                format!(
-                    "No local profile matches vendor 0x{:08X}, product 0x{:08X}",
-                    identity.vendor_id(),
-                    identity.product_code()
-                ),
-            ),
-            authorized: None,
-        },
+        TargetClassification::Unknown => classify_cobs_target(node_id, identity, cobs_registry),
         TargetClassification::Sentinel { field } => DiscoveredTarget {
             dto: device_dto(
                 node_id,
                 identity,
                 None,
                 "unsupported",
+                None,
+                None,
                 None,
                 format!("Identity field {field} is unprovisioned (0xFFFFFFFF)"),
             ),
@@ -630,16 +890,139 @@ async fn classify_target(
     }
 }
 
+fn classify_cobs_target(
+    node_id: u8,
+    identity: IdentitySnapshot,
+    registry: &CobsTargetRegistry,
+) -> DiscoveredTarget {
+    let cobs_identity = match CobsCanopenIdentity::new(
+        node_id,
+        identity.vendor_id(),
+        identity.product_code(),
+        identity.revision_number(),
+        identity.serial_number(),
+    ) {
+        Ok(identity) => identity,
+        Err(error) => {
+            return DiscoveredTarget {
+                dto: device_dto(
+                    node_id,
+                    identity,
+                    None,
+                    "unsupported",
+                    None,
+                    None,
+                    None,
+                    error.to_string(),
+                ),
+                authorized: None,
+            }
+        }
+    };
+
+    match registry.classify(cobs_identity) {
+        CobsTargetClassification::Enabled(target) => {
+            let profile_id = target.profile_id().to_owned();
+            match registry.authorize(cobs_identity) {
+                Ok(authorized) => DiscoveredTarget {
+                    dto: device_dto(
+                        node_id,
+                        identity,
+                        None,
+                        "enabled",
+                        Some("cobs_can_iap_v1"),
+                        Some(profile_id.clone()),
+                        cobs_display_name_for_profile(&profile_id),
+                        "Exact local CANopen identity selected a compatible IAP policy; IMG and Enter-IAP identity remain unverified"
+                            .into(),
+                    ),
+                    authorized: Some(SelectedTarget::CobsIap(authorized)),
+                },
+                Err(error) => DiscoveredTarget {
+                    dto: device_dto(
+                        node_id,
+                        identity,
+                        None,
+                        "known_disabled",
+                        Some("cobs_can_iap_v1"),
+                        Some(profile_id.clone()),
+                        cobs_display_name_for_profile(&profile_id),
+                        error.to_string(),
+                    ),
+                    authorized: None,
+                },
+            }
+        }
+        CobsTargetClassification::Disabled(target) => {
+            let reason = match target.support() {
+                CobsSupportPolicy::Disabled { reason } => reason.clone(),
+                CobsSupportPolicy::Enabled(_) => unreachable!("classification agrees with policy"),
+            };
+            let profile_id = target.profile_id().to_owned();
+            DiscoveredTarget {
+                dto: device_dto(
+                    node_id,
+                    identity,
+                    None,
+                    "known_disabled",
+                    Some("cobs_can_iap_v1"),
+                    Some(profile_id.clone()),
+                    cobs_display_name_for_profile(&profile_id),
+                    reason,
+                ),
+                authorized: None,
+            }
+        }
+        CobsTargetClassification::Unknown => DiscoveredTarget {
+            dto: device_dto(
+                node_id,
+                identity,
+                None,
+                "unsupported",
+                None,
+                None,
+                None,
+                format!(
+                    "No local update profile matches vendor 0x{:08X}, product 0x{:08X}",
+                    identity.vendor_id(),
+                    identity.product_code()
+                ),
+            ),
+            authorized: None,
+        },
+    }
+}
+
+fn ensure_disjoint_backend_routes(
+    standard: &TargetRegistry,
+    compatible: &CobsTargetRegistry,
+) -> CmdResult<()> {
+    for first in standard.targets() {
+        for second in compatible.targets() {
+            if first.vendor_id() == second.vendor_id()
+                && first.product_code() == second.product_code()
+            {
+                return Err(format!(
+                    "CAN update registries overlap at vendor 0x{:08X}, product 0x{:08X}",
+                    first.vendor_id(),
+                    first.product_code()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn device_dto(
     node_id: u8,
     identity: IdentitySnapshot,
     hardware_version: Option<u32>,
     authorization: &'static str,
-    target: Option<&RegisteredTarget>,
+    backend: Option<&'static str>,
+    profile_id: Option<String>,
+    display_name: Option<&'static str>,
     reason: String,
 ) -> DeviceDto {
-    let profile_id = target.map(|target| target.profile_id().to_owned());
-    let display_name = profile_id.as_deref().and_then(display_name_for_profile);
     DeviceDto {
         node_id,
         node_id_hex: format!("0x{node_id:02X}"),
@@ -655,6 +1038,7 @@ fn device_dto(
         hardware_version,
         hardware_version_hex: hardware_version.map(|value| format!("0x{value:08X}")),
         authorization,
+        backend,
         profile_id,
         display_name,
         reason,
@@ -773,7 +1157,7 @@ impl CanRx for ValidatedSdoRx {
                 return Ok(frame);
             }
             log::warn!(
-                "discarding STM32 DFU SDO frame from the wrong node: expected 0x{:03X}, got {:?}",
+                "discarding CAN DFU SDO frame from the wrong node: expected 0x{:03X}, got {:?}",
                 self.expected,
                 frame.id()
             );
@@ -789,7 +1173,7 @@ impl CanRx for ValidatedSdoRx {
                 return Ok(Some(frame));
             }
             log::warn!(
-                "discarding STM32 DFU SDO frame from the wrong node: expected 0x{:03X}, got {:?}",
+                "discarding CAN DFU SDO frame from the wrong node: expected 0x{:03X}, got {:?}",
                 self.expected,
                 frame.id()
             );
@@ -819,7 +1203,7 @@ mod tests {
         assert!(!state.request_cancel());
 
         let token = CancellationToken::new();
-        *state.cancellation.lock().unwrap() = Some(token.clone());
+        *state.cancellation.lock().unwrap() = Some(ActiveCancellation::Stm32(token.clone()));
         assert!(state.request_cancel());
         assert!(token.is_cancelled());
 
@@ -845,5 +1229,12 @@ mod tests {
         assert!(heartbeat_node_id(&CanFrame::new_data(0x714u16, &[6]).unwrap()).is_none());
         assert!(heartbeat_node_id(&CanFrame::new_fd(0x714u16, &[5], false).unwrap()).is_none());
         assert!(heartbeat_node_id(&CanFrame::new_data(0x700u16, &[0]).unwrap()).is_none());
+    }
+
+    #[test]
+    fn enabled_backend_registries_are_disjoint() {
+        let standard = target_registry().unwrap();
+        let compatible = cobs_target_registry().unwrap();
+        ensure_disjoint_backend_routes(&standard, &compatible).unwrap();
     }
 }

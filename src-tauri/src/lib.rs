@@ -6,6 +6,7 @@
 mod analyzer;
 mod backend;
 mod can_lease;
+mod cobs_can_iap_profiles;
 mod commands;
 mod device_registry;
 mod dfu_gate;
