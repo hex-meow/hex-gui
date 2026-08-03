@@ -56,7 +56,9 @@ export function Sidebar({
               size="small"
               disabled={
                 !connected ||
-                !devices.some((d) => d.device_type === "cia402_motor")
+                !devices.some(
+                  (d) => d.device_type === "cia402_motor" || d.device_type === "meow_motor",
+                )
               }
               onClick={initAll}
             >

@@ -327,7 +327,20 @@ const STRINGS = {
   meowApplyMode: { en: "Switch mode", zh: "切换模式" },
   meowPositionTarget: { en: "PP target (rev)", zh: "PP 目标位置 (圈)" },
   meowVelocityTarget: { en: "PV target (rev/s)", zh: "PV 目标速度 (圈/秒)" },
-  meowTorqueTarget: { en: "Torque target (permille)", zh: "力矩目标 (千分比)" },
+  meowTorqueTarget: { en: "Torque target", zh: "力矩目标" },
+  meowTorquePeakUnavailable: {
+    en: "Initialize the motor to read its peak torque from 0x4576.",
+    zh: "请先初始化电机，以从 0x4576 读取峰值力矩。",
+  },
+  meowMitKpKdLimit: { en: "Kp/Kd result limit (‰)", zh: "Kp/Kd 运算结果限制 (‰)" },
+  meowMitKpKdLimitHint: {
+    en: "Limits the calculated torque result of each Kp and Kd term; it does not limit the Kp or Kd values themselves.",
+    zh: "分别限制 Kp 与 Kd 项运算产生的力矩结果，并不是限制 Kp 或 Kd 参数本身。",
+  },
+  meowMitFactorUnavailable: {
+    en: "Initialize the motor to read the MIT Kp/Kd scale factor from 0x4102:07.",
+    zh: "请先初始化电机，以从 0x4102:07 读取 MIT Kp/Kd 尺度因子。",
+  },
   meowPpRangeWarning: {
     en: "PP uses signed Q8.24 and only represents [-128, 128) rev. Use PV with host-side accumulation for many turns.",
     zh: "PP 使用有符号 Q8.24，只能表示 [-128, 128) 圈。多圈运动请使用 PV，并在上位机累计位置。",
@@ -339,6 +352,9 @@ const STRINGS = {
   meowApplyProfile: { en: "Apply profile limits", zh: "应用规划限制" },
   meowRawPosition: { en: "Raw Q8.24 position", zh: "原始 Q8.24 位置" },
   meowAccumulatedPosition: { en: "Host accumulated position", zh: "上位机累计位置" },
+  meowVelocityRev: { en: "Velocity (Rev/s)", zh: "速度 (Rev/s)" },
+  meowVelocityRad: { en: "Velocity (rad/s)", zh: "速度 (rad/s)" },
+  meowTorqueFeedback: { en: "Torque (N·m)", zh: "力矩 (N·m)" },
   meowTemperatures: { en: "Driver / motor temperature", zh: "驱动器 / 电机温度" },
   meowDetailedError: { en: "Detailed error", zh: "详细错误码" },
   meowTimestamp: { en: "Motor timestamp", zh: "电机时间戳" },

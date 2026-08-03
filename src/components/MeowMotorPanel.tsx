@@ -9,6 +9,7 @@ import {
   InputNumber,
   Segmented,
   Select,
+  Slider,
   Space,
   Switch,
   Tooltip,
@@ -17,6 +18,17 @@ import {
 import { api, errMsg } from "../api";
 import { nid2hex } from "../format";
 import { useI18n } from "../i18n";
+import {
+  clampToRange,
+  formatMeowDetailedError,
+  formatMeowModeDisplay,
+  meowMitGainLimitSi,
+  meowMitTargetFromSi,
+  meowVelocityLimit,
+  RADIANS_PER_REVOLUTION,
+  torquePermilleToNm,
+  torqueNmToPermille,
+} from "../meowMotorUi";
 import type {
   MeowCanSettingsRequest,
   MeowMotorSnapshot,
@@ -64,14 +76,14 @@ export function MeowMotorPanel({
 
   const [position, setPosition] = useState(0);
   const [velocity, setVelocity] = useState(0);
-  const [torquePermille, setTorquePermille] = useState(0);
+  const [torqueNm, setTorqueNm] = useState(0);
   const [mit, setMit] = useState({
-    position_rev: 0,
-    velocity_rev_per_s: 0,
+    position_rad: 0,
+    velocity_rad_per_s: 0,
     torque_nm: 0,
-    kp: 0,
-    kd: 0,
-    kp_kd_limit_permille: 0,
+    kp_nm_per_rad: 0,
+    kd_nm_s_per_rad: 1,
+    kp_kd_limit_permille: 150,
   });
   const [maxTorque, setMaxTorque] = useState(50);
   const [profile, setProfile] = useState({
@@ -80,6 +92,41 @@ export function MeowMotorPanel({
     deceleration_rev_per_s2: 0.2,
   });
   const [settings, setSettings] = useState<MeowCanSettingsRequest | null>(null);
+  const velocityLimit = meowVelocityLimit(info.identity?.product_code);
+  const peakTorqueNm =
+    snapshot?.peak_torque_nm != null &&
+    Number.isFinite(snapshot.peak_torque_nm) &&
+    snapshot.peak_torque_nm > 0
+      ? snapshot.peak_torque_nm
+      : null;
+  const torqueStepNm = peakTorqueNm == null ? 0.001 : peakTorqueNm / 1000;
+  const mitKpKdFactor =
+    snapshot?.mit_kp_kd_factor != null &&
+    Number.isFinite(snapshot.mit_kp_kd_factor) &&
+    snapshot.mit_kp_kd_factor > 0
+      ? snapshot.mit_kp_kd_factor
+      : null;
+  const mitGainMaxSi = mitKpKdFactor == null ? null : meowMitGainLimitSi(mitKpKdFactor);
+
+  useEffect(() => {
+    setVelocity((current) => clampToRange(current, -velocityLimit, velocityLimit));
+  }, [velocityLimit]);
+
+  useEffect(() => {
+    if (peakTorqueNm != null) {
+      setTorqueNm((current) => clampToRange(current, -peakTorqueNm, peakTorqueNm));
+    }
+  }, [peakTorqueNm]);
+
+  useEffect(() => {
+    if (mitGainMaxSi != null) {
+      setMit((current) => ({
+        ...current,
+        kp_nm_per_rad: clampToRange(current.kp_nm_per_rad, 0, mitGainMaxSi),
+        kd_nm_s_per_rad: clampToRange(current.kd_nm_s_per_rad, 0, mitGainMaxSi),
+      }));
+    }
+  }, [mitGainMaxSi]);
 
   const acceptSnapshot = (next: MeowMotorSnapshot) => {
     setSnapshot(next);
@@ -421,9 +468,25 @@ export function MeowMotorPanel({
                 <Field label={t("meowVelocityTarget")}>
                   <InputNumber
                     value={velocity}
+                    min={-velocityLimit}
+                    max={velocityLimit}
                     step={0.1}
                     onChange={(value) => setVelocity(value ?? 0)}
+                    addonAfter="Rev/s"
                     style={{ width: "100%" }}
+                  />
+                  <Slider
+                    value={velocity}
+                    min={-velocityLimit}
+                    max={velocityLimit}
+                    step={0.1}
+                    onChange={setVelocity}
+                    marks={{
+                      [-velocityLimit]: `-${velocityLimit}`,
+                      0: "0",
+                      [velocityLimit]: `${velocityLimit}`,
+                    }}
+                    tooltip={{ formatter: (value) => `${value?.toFixed(1) ?? "—"} Rev/s` }}
                   />
                 </Field>
                 <SendTargetButton
@@ -438,55 +501,100 @@ export function MeowMotorPanel({
               <ModeCard title={t("mode_Torque")} active={activeMode === "Torque"}>
                 <Field label={t("meowTorqueTarget")}>
                   <InputNumber
-                    value={torquePermille}
-                    min={-1000}
-                    max={1000}
-                    step={10}
-                    onChange={(value) => setTorquePermille(value ?? 0)}
+                    value={torqueNm}
+                    min={peakTorqueNm == null ? undefined : -peakTorqueNm}
+                    max={peakTorqueNm ?? undefined}
+                    step={torqueStepNm}
+                    precision={4}
+                    disabled={peakTorqueNm == null}
+                    onChange={(value) => setTorqueNm(value ?? 0)}
+                    addonAfter="N·m"
                     style={{ width: "100%" }}
                   />
+                  {peakTorqueNm == null ? (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {t("meowTorquePeakUnavailable")}
+                    </Typography.Text>
+                  ) : (
+                    <Slider
+                      value={torqueNm}
+                      min={-peakTorqueNm}
+                      max={peakTorqueNm}
+                      step={torqueStepNm}
+                      onChange={setTorqueNm}
+                      marks={{
+                        [-peakTorqueNm]: `-${peakTorqueNm.toFixed(2)}`,
+                        0: "0",
+                        [peakTorqueNm]: peakTorqueNm.toFixed(2),
+                      }}
+                      tooltip={{ formatter: (value) => `${value?.toFixed(3) ?? "—"} N·m` }}
+                    />
+                  )}
                 </Field>
                 <SendTargetButton
                   busy={busy}
-                  ready={snapshot?.is_ready === true}
-                  onClick={() =>
-                    activate({ kind: "Torque", torque_permille: Math.round(torquePermille) })
-                  }
+                  ready={snapshot?.is_ready === true && peakTorqueNm != null}
+                  onClick={() => {
+                    if (peakTorqueNm == null) return;
+                    activate({
+                      kind: "Torque",
+                      torque_permille: torqueNmToPermille(torqueNm, peakTorqueNm),
+                    });
+                  }}
                 />
               </ModeCard>
 
               <ModeCard title={t("mode_Mit")} active={activeMode === "Mit"}>
                 <NumericField
-                  label="Pdes (Rev)"
-                  value={mit.position_rev}
-                  set={(value) => setMit({ ...mit, position_rev: value })}
+                  label={t("mitPos")}
+                  value={mit.position_rad}
+                  step={0.05}
+                  set={(value) => setMit({ ...mit, position_rad: value })}
                 />
                 <NumericField
-                  label="Vdes (Rev/s)"
-                  value={mit.velocity_rev_per_s}
-                  set={(value) => setMit({ ...mit, velocity_rev_per_s: value })}
+                  label={t("mitVel")}
+                  value={mit.velocity_rad_per_s}
+                  step={0.5}
+                  set={(value) => setMit({ ...mit, velocity_rad_per_s: value })}
                 />
                 <NumericField
-                  label="Tff (Nm)"
+                  label={t("mitTor")}
                   value={mit.torque_nm}
+                  step={0.01}
                   set={(value) => setMit({ ...mit, torque_nm: value })}
                 />
                 <NumericField
-                  label="Kp (u16)"
-                  value={mit.kp}
+                  label={t("mitKp")}
+                  value={mit.kp_nm_per_rad}
                   min={0}
-                  max={65535}
-                  set={(value) => setMit({ ...mit, kp: Math.round(value) })}
+                  max={mitGainMaxSi ?? undefined}
+                  step={0.1}
+                  disabled={mitKpKdFactor == null}
+                  set={(value) => setMit({ ...mit, kp_nm_per_rad: value })}
                 />
                 <NumericField
-                  label="Kd (u16)"
-                  value={mit.kd}
+                  label={t("mitKd")}
+                  value={mit.kd_nm_s_per_rad}
                   min={0}
-                  max={65535}
-                  set={(value) => setMit({ ...mit, kd: Math.round(value) })}
+                  max={mitGainMaxSi ?? undefined}
+                  step={0.05}
+                  disabled={mitKpKdFactor == null}
+                  set={(value) => setMit({ ...mit, kd_nm_s_per_rad: value })}
                 />
+                {mitKpKdFactor == null && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {t("meowMitFactorUnavailable")}
+                  </Typography.Text>
+                )}
                 <NumericField
-                  label="Kp/Kd limit (‰)"
+                  label={
+                    <Space size={4}>
+                      <span>{t("meowMitKpKdLimit")}</span>
+                      <Tooltip title={t("meowMitKpKdLimitHint")}>
+                        <QuestionCircleOutlined />
+                      </Tooltip>
+                    </Space>
+                  }
                   value={mit.kp_kd_limit_permille}
                   min={0}
                   max={1000}
@@ -494,8 +602,18 @@ export function MeowMotorPanel({
                 />
                 <SendTargetButton
                   busy={busy}
-                  ready={snapshot?.is_ready === true}
-                  onClick={() => activate({ kind: "Mit", ...mit })}
+                  ready={snapshot?.is_ready === true && mitKpKdFactor != null}
+                  onClick={() => {
+                    if (mitKpKdFactor == null) return;
+                    try {
+                      void activate({
+                        kind: "Mit",
+                        ...meowMitTargetFromSi(mit, mitKpKdFactor),
+                      });
+                    } catch (error) {
+                      message.error(errMsg(error));
+                    }
+                  }}
                 />
               </ModeCard>
             </div>
@@ -606,10 +724,21 @@ function SendTargetButton({
 }
 
 function TelemetryPanel({ snapshot }: { snapshot: MeowMotorSnapshot | null }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const measurements = snapshot?.measurements;
   const format = (value: number | null | undefined, digits = 6) =>
     value == null ? "—" : value.toFixed(digits);
+  const velocityRadPerS =
+    measurements?.velocity_rev_per_s == null
+      ? null
+      : measurements.velocity_rev_per_s * RADIANS_PER_REVOLUTION;
+  const torqueNm =
+    measurements?.torque_permille == null ||
+    snapshot?.peak_torque_nm == null ||
+    !Number.isFinite(snapshot.peak_torque_nm) ||
+    snapshot.peak_torque_nm <= 0
+      ? null
+      : torquePermilleToNm(measurements.torque_permille, snapshot.peak_torque_nm);
   return (
     <Descriptions size="small" column={3} bordered>
       <Descriptions.Item label={t("meowRawPosition")}>
@@ -620,30 +749,30 @@ function TelemetryPanel({ snapshot }: { snapshot: MeowMotorSnapshot | null }) {
           ? t("meowAccumulationValid")
           : t("meowAccumulationInvalid")})
       </Descriptions.Item>
-      <Descriptions.Item label={t("velocity")}>
+      <Descriptions.Item label={t("meowVelocityRev")}>
         {format(measurements?.velocity_rev_per_s)} Rev/s
       </Descriptions.Item>
-      <Descriptions.Item label={t("torque")}>
-        {measurements?.torque_permille ?? "—"} ‰
+      <Descriptions.Item label={t("meowVelocityRad")}>
+        {format(velocityRadPerS)} rad/s
       </Descriptions.Item>
-      <Descriptions.Item label={t("meowTemperatures")}>
-        {format(measurements?.driver_temp_c, 1)} / {format(measurements?.motor_temp_c, 1)} ℃
+      <Descriptions.Item label={t("meowTorqueFeedback")}>
+        {format(torqueNm, 3)} N·m ({measurements?.torque_permille ?? "—"} ‰)
       </Descriptions.Item>
       <Descriptions.Item label={t("mode")}>
-        {measurements?.mode_display ?? "—"}
+        {measurements?.mode_display == null
+          ? "—"
+          : formatMeowModeDisplay(measurements.mode_display, lang)}
       </Descriptions.Item>
       <Descriptions.Item label={t("meowDetailedError")}>
         {measurements?.detailed_error == null
           ? "—"
-          : `0x${measurements.detailed_error.toString(16).toUpperCase().padStart(4, "0")}`}
+          : formatMeowDetailedError(measurements.detailed_error, lang)}
       </Descriptions.Item>
-      <Descriptions.Item label={t("meowTimestamp")}>
-        {measurements?.timestamp_us ?? "—"} µs
+      <Descriptions.Item label={t("driverTemp")}>
+        {format(measurements?.driver_temp_c, 1)}
       </Descriptions.Item>
-      <Descriptions.Item label={t("meowTpdoGenerations")}>
-        {measurements
-          ? `${measurements.tpdo1_generation} / ${measurements.tpdo2_generation}`
-          : "—"}
+      <Descriptions.Item label={t("motorTemp")}>
+        {format(measurements?.motor_temp_c, 1)}
       </Descriptions.Item>
     </Descriptions>
   );
@@ -735,12 +864,16 @@ function NumericField({
   set,
   min,
   max,
+  step = 0.1,
+  disabled = false,
 }: {
-  label: string;
+  label: ReactNode;
   value: number;
   set: (value: number) => void;
   min?: number;
   max?: number;
+  step?: number;
+  disabled?: boolean;
 }) {
   return (
     <Field label={label}>
@@ -748,7 +881,8 @@ function NumericField({
         value={value}
         min={min}
         max={max}
-        step={0.1}
+        step={step}
+        disabled={disabled}
         onChange={(next) => set(next ?? 0)}
         style={{ width: "100%" }}
       />
@@ -756,7 +890,7 @@ function NumericField({
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
     <div style={{ width: "100%" }}>
       <div style={{ fontSize: 12, color: "#8a93a3", marginBottom: 2 }}>{label}</div>

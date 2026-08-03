@@ -200,24 +200,43 @@ pub async fn initialize(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
 #[tauri::command]
 pub async fn initialize_all(state: State<'_, AppState>) -> CmdResult<Vec<(u8, Option<String>)>> {
     let mgr = manager(&state).await?;
+    let meow_mgr = meow_manager(&state).await?;
     let motor_nodes = mgr
         .list()
         .into_iter()
         .filter_map(|device| {
             let identity = device.identity.as_ref()?;
-            crate::device_registry::classify(identity.vendor_id, identity.product_code)
-                .supports_cia402_controls()
-                .then_some(device.node_id)
+            motor_initialization_kind(identity.vendor_id, identity.product_code)
+                .map(|kind| (device.node_id, kind))
         })
         .collect::<Vec<_>>();
     let mut results = Vec::with_capacity(motor_nodes.len());
-    for nid in motor_nodes {
-        results.push((nid, mgr.initialize(nid).await));
+    for (nid, kind) in motor_nodes {
+        let result = match kind {
+            crate::device_registry::DeviceKind::Cia402Motor => mgr.initialize(nid).await,
+            crate::device_registry::DeviceKind::MeowMotor => match meow_mgr.identify(nid).await {
+                Ok(_) => meow_mgr.initialize(nid, Tpdo1Rate::Hz1000).await,
+                Err(error) => Err(error),
+            },
+            _ => unreachable!("initialize_all filters non-motor device kinds"),
+        };
+        results.push((nid, result));
     }
     Ok(results
         .into_iter()
         .map(|(nid, r)| (nid, r.err().map(|e| e.to_string())))
         .collect())
+}
+
+fn motor_initialization_kind(
+    vendor_id: u32,
+    product_code: u32,
+) -> Option<crate::device_registry::DeviceKind> {
+    match crate::device_registry::classify(vendor_id, product_code) {
+        kind @ (crate::device_registry::DeviceKind::Cia402Motor
+        | crate::device_registry::DeviceKind::MeowMotor) => Some(kind),
+        _ => None,
+    }
 }
 
 #[tauri::command]
@@ -349,6 +368,27 @@ fn meow_target(target: MeowMotorTargetDto) -> CmdResult<MeowMotorTarget> {
 #[cfg(test)]
 mod meow_command_tests {
     use super::*;
+    use crate::device_registry::{
+        DeviceKind, MEOW_MOTOR_4310_PRODUCT_CODE, MEOW_MOTOR_4342_PRODUCT_CODE,
+        MEOW_MOTOR_VENDOR_ID,
+    };
+
+    #[test]
+    fn initialize_all_routes_both_motor_protocols() {
+        assert_eq!(
+            motor_initialization_kind(MEOW_MOTOR_VENDOR_ID, MEOW_MOTOR_4310_PRODUCT_CODE),
+            Some(DeviceKind::MeowMotor)
+        );
+        assert_eq!(
+            motor_initialization_kind(MEOW_MOTOR_VENDOR_ID, MEOW_MOTOR_4342_PRODUCT_CODE),
+            Some(DeviceKind::MeowMotor)
+        );
+        assert_eq!(
+            motor_initialization_kind(0x4859_444C, 0xAAAA_0001),
+            Some(DeviceKind::Cia402Motor)
+        );
+        assert_eq!(motor_initialization_kind(0xDEAD_BEEF, 1), None);
+    }
 
     #[test]
     fn pp_target_accepts_negative_endpoint_and_rejects_positive_endpoint() {
