@@ -306,6 +306,22 @@ export interface LiftFactoryCalibrationResult {
 }
 
 // ── Lift raw-CAN application (mirrors lift::LiftState) ──
+export interface LiftInaDiagnosticsView {
+  ina_error: number;
+  ina_transport_error: number;
+  diag_alert: number;
+  fault_count: number;
+  fingerprint_mismatch: number;
+  last_attempt_age_ms: number;
+  last_success_age_ms: number;
+  consecutive_good: number;
+  consecutive_errors: number;
+  last_error: number;
+  last_transport_error: number;
+  last_fingerprint_mismatch: number;
+  last_error_age_ms: number;
+}
+
 export interface LiftState {
   running: boolean;
   node_id: number;
@@ -333,6 +349,7 @@ export interface LiftState {
   encoder_count: number;
   duty_command_permille: number;
   sensor_status: number;
+  ina_diagnostics: LiftInaDiagnosticsView;
   // 0x4600 effective parameters (v0.4: firmware-derived soft limits + scale).
   counts_per_meter: number;
   position_min_m: number;

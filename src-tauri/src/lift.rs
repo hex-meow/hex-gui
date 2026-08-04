@@ -26,6 +26,7 @@ const TARGET_POSITION: u16 = 0x457A;
 const TARGET_VELOCITY: u16 = 0x45FF;
 const EFFECTIVE_PARAMS: u16 = 0x4600;
 const DIAGNOSTICS: u16 = 0x4601;
+const INA_DIAGNOSTICS_HIGHEST_SUBINDEX: u8 = 18;
 const FACTORY_CALIBRATION: u16 = 0x4700;
 const SAMPLE_TIMESTAMP: u16 = 0x4713;
 
@@ -107,6 +108,23 @@ pub struct FactoryCalibrationResult {
     pub crc32: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct InaDiagnosticsView {
+    pub ina_error: u8,
+    pub ina_transport_error: u8,
+    pub diag_alert: u16,
+    pub fault_count: u32,
+    pub fingerprint_mismatch: u16,
+    pub last_attempt_age_ms: u32,
+    pub last_success_age_ms: u32,
+    pub consecutive_good: u16,
+    pub consecutive_errors: u16,
+    pub last_error: u8,
+    pub last_transport_error: u8,
+    pub last_fingerprint_mismatch: u16,
+    pub last_error_age_ms: u32,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LiftState {
     pub running: bool,
@@ -138,6 +156,7 @@ pub struct LiftState {
     pub encoder_count: i32,
     pub duty_command_permille: i16,
     pub sensor_status: u8,
+    pub ina_diagnostics: InaDiagnosticsView,
 
     // 0x4600 effective parameters (v0.4: firmware-derived soft limits + scale).
     pub counts_per_meter: f32,
@@ -181,6 +200,7 @@ impl Default for LiftState {
             encoder_count: 0,
             duty_command_permille: 0,
             sensor_status: 0,
+            ina_diagnostics: InaDiagnosticsView::default(),
             counts_per_meter: 0.0,
             position_min_m: 0.0,
             position_max_m: 0.0,
@@ -1478,15 +1498,35 @@ impl LiftSession {
         let actual_position_m = read_f32(bus, nid, ACTUAL_POSITION, 0, timeout).await?;
         let actual_velocity_mps = read_f32(bus, nid, ACTUAL_VELOCITY, 0, timeout).await?;
         let sample_timestamp_us = read_u16(bus, nid, SAMPLE_TIMESTAMP, 0, timeout).await?;
-        // v0.4 0x4601 is five subs (§8): 1 bus_voltage f32, 2 bus_current f32,
-        // 3 encoder_count i32, 4 duty_command i16, 5 sensor_status u8. These are
-        // read separately from TPDO2 because a fresh TPDO2 can legally repeat the
-        // last successful INA values after the sensor task has failed/gone stale.
+        // 0x4601:01-05 are live telemetry/status. Sub 06-18 are the mandatory
+        // field-diagnostic ABI: current and latched INA causes remain readable
+        // after a short failure has recovered and RTT is unavailable under RDP.
+        let diagnostics_highest_subindex = read_u8(bus, nid, DIAGNOSTICS, 0, timeout).await?;
+        if diagnostics_highest_subindex < INA_DIAGNOSTICS_HIGHEST_SUBINDEX {
+            anyhow::bail!(
+                "lift INA diagnostics ABI mismatch: 0x4601:00={diagnostics_highest_subindex}, require at least {INA_DIAGNOSTICS_HIGHEST_SUBINDEX}"
+            );
+        }
         let bus_voltage_v = read_f32(bus, nid, DIAGNOSTICS, 1, timeout).await?;
         let bus_current_a = read_f32(bus, nid, DIAGNOSTICS, 2, timeout).await?;
         let encoder_count = read_i32(bus, nid, DIAGNOSTICS, 3, timeout).await?;
         let duty_command_permille = read_i16(bus, nid, DIAGNOSTICS, 4, timeout).await?;
         let sensor_status = read_u8(bus, nid, DIAGNOSTICS, 5, timeout).await?;
+        let ina_diagnostics = InaDiagnosticsView {
+            ina_error: read_u8(bus, nid, DIAGNOSTICS, 6, timeout).await?,
+            ina_transport_error: read_u8(bus, nid, DIAGNOSTICS, 7, timeout).await?,
+            diag_alert: read_u16(bus, nid, DIAGNOSTICS, 8, timeout).await?,
+            fault_count: read_u32(bus, nid, DIAGNOSTICS, 9, timeout).await?,
+            fingerprint_mismatch: read_u16(bus, nid, DIAGNOSTICS, 10, timeout).await?,
+            last_attempt_age_ms: read_u32(bus, nid, DIAGNOSTICS, 11, timeout).await?,
+            last_success_age_ms: read_u32(bus, nid, DIAGNOSTICS, 12, timeout).await?,
+            consecutive_good: read_u16(bus, nid, DIAGNOSTICS, 13, timeout).await?,
+            consecutive_errors: read_u16(bus, nid, DIAGNOSTICS, 14, timeout).await?,
+            last_error: read_u8(bus, nid, DIAGNOSTICS, 15, timeout).await?,
+            last_transport_error: read_u8(bus, nid, DIAGNOSTICS, 16, timeout).await?,
+            last_fingerprint_mismatch: read_u16(bus, nid, DIAGNOSTICS, 17, timeout).await?,
+            last_error_age_ms: read_u32(bus, nid, DIAGNOSTICS, 18, timeout).await?,
+        };
         let factory_available = self.state.lock().unwrap().factory_calibration.available;
         let factory_live = if factory_available {
             Some(FactoryCalibrationView {
@@ -1515,6 +1555,7 @@ impl LiftSession {
             state.encoder_count = encoder_count;
             state.duty_command_permille = duty_command_permille;
             state.sensor_status = sensor_status;
+            state.ina_diagnostics = ina_diagnostics;
             if let Some(factory_live) = factory_live {
                 state.factory_calibration = factory_live;
             }

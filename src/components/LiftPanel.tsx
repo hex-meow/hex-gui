@@ -63,6 +63,55 @@ function hex(value: number, width: number): string {
   return "0x" + (Math.trunc(value) >>> 0).toString(16).toUpperCase().padStart(width, "0");
 }
 
+function inaErrorName(value: number): string {
+  const names = [
+    "None",
+    "Transport",
+    "Manufacturer ID",
+    "Device ID",
+    "Calibration",
+    "Safety configuration",
+    "Conversion stalled",
+  ];
+  return `${names[value] ?? "Unknown"} (${value})`;
+}
+
+function inaTransportErrorName(value: number): string {
+  const names = [
+    "None",
+    "Bus",
+    "Arbitration",
+    "NACK",
+    "Timeout",
+    "CRC",
+    "Overrun",
+    "Zero-length transfer",
+  ];
+  return `${names[value] ?? "Unknown"} (${value})`;
+}
+
+function inaMismatchName(value: number): string {
+  const names = [
+    "CONFIG",
+    "ADC_CONFIG",
+    "SHUNT_CAL",
+    "SHUNT_OVER",
+    "SHUNT_UNDER",
+    "BUS_OVER",
+    "BUS_UNDER",
+    "DIAG_STATIC",
+    "MEMSTAT",
+    "MATH_OVERFLOW",
+    "CONVERSION_STALLED",
+  ];
+  const active = names.filter((_, bit) => (value & (1 << bit)) !== 0);
+  return `${hex(value, 4)}${active.length > 0 ? " · " + active.join(" | ") : " · none"}`;
+}
+
+function ageMs(value: number, never: string): string {
+  return value >= 0xffff_ffff ? never : `${integer(value)} ms`;
+}
+
 function isOperational(nmt: number): boolean {
   return nmt === 0x05;
 }
@@ -993,9 +1042,21 @@ export function LiftPanel({ connected }: { connected: boolean }) {
                       type={inaFresh ? "warning" : "error"}
                       showIcon
                       message={t(inaFresh ? "liftSensorUnhealthyTitle" : "liftInaStaleTitle")}
-                      description={t(
-                        inaFresh ? "liftSensorUnhealthyDescription" : "liftInaStaleDescription"
-                      )}
+                      description={
+                        <Space direction="vertical" size={2}>
+                          <span>
+                            {t(
+                              inaFresh
+                                ? "liftSensorUnhealthyDescription"
+                                : "liftInaStaleDescription"
+                            )}
+                          </span>
+                          <Typography.Text code>
+                            {t("liftInaCurrentError")}: {inaErrorName(state.ina_diagnostics.ina_error)} ·{" "}
+                            {t("liftInaTransportError")}: {inaTransportErrorName(state.ina_diagnostics.ina_transport_error)}
+                          </Typography.Text>
+                        </Space>
+                      }
                     />
                   )}
                   <MetricGrid
@@ -1025,6 +1086,60 @@ export function LiftPanel({ connected }: { connected: boolean }) {
                       );
                     })}
                   </div>
+                  <Typography.Text strong>{t("liftInaDiagnostics")}</Typography.Text>
+                  <div className="lift-status-bits">
+                    <Tag color={state.ina_diagnostics.ina_error === 0 ? "green" : "red"}>
+                      {t("liftInaCurrentError")}: {inaErrorName(state.ina_diagnostics.ina_error)}
+                    </Tag>
+                    <Tag color={state.ina_diagnostics.last_error === 0 ? "default" : "orange"}>
+                      {t("liftInaLastError")}: {inaErrorName(state.ina_diagnostics.last_error)}
+                    </Tag>
+                  </div>
+                  <MetricGrid
+                    items={[
+                      [
+                        t("liftInaTransportError"),
+                        inaTransportErrorName(state.ina_diagnostics.ina_transport_error),
+                      ],
+                      [
+                        t("liftInaLastTransportError"),
+                        inaTransportErrorName(state.ina_diagnostics.last_transport_error),
+                      ],
+                      [t("liftInaDiag"), hex(state.ina_diagnostics.diag_alert, 4)],
+                      [t("liftInaFaultCount"), integer(state.ina_diagnostics.fault_count)],
+                      [
+                        t("liftInaLastAttemptAge"),
+                        ageMs(state.ina_diagnostics.last_attempt_age_ms, t("liftNever")),
+                      ],
+                      [
+                        t("liftInaLastSuccessAge"),
+                        ageMs(
+                          state.ina_diagnostics.last_success_age_ms,
+                          t("liftNoSuccessfulSample")
+                        ),
+                      ],
+                      [
+                        t("liftInaConsecutiveGood"),
+                        integer(state.ina_diagnostics.consecutive_good),
+                      ],
+                      [
+                        t("liftInaConsecutiveErrors"),
+                        integer(state.ina_diagnostics.consecutive_errors),
+                      ],
+                      [
+                        t("liftInaFingerprintMismatch"),
+                        inaMismatchName(state.ina_diagnostics.fingerprint_mismatch),
+                      ],
+                      [
+                        t("liftInaLastFingerprintMismatch"),
+                        inaMismatchName(state.ina_diagnostics.last_fingerprint_mismatch),
+                      ],
+                      [
+                        t("liftInaLastErrorAge"),
+                        ageMs(state.ina_diagnostics.last_error_age_ms, t("liftNever")),
+                      ],
+                    ]}
+                  />
                 </div>
               </Card>
 
