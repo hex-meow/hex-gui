@@ -268,6 +268,7 @@ pub fn run() {
             stm32_can_dfu::stm32_can_dfu_discover,
             stm32_can_dfu::stm32_can_dfu_select,
             stm32_can_dfu::stm32_can_dfu_prepare,
+            stm32_can_dfu::stm32_can_dfu_prepare_latest,
             stm32_can_dfu::stm32_can_dfu_start,
             stm32_can_dfu::stm32_can_dfu_cancel,
             stm32_can_dfu::stm32_can_dfu_leave,

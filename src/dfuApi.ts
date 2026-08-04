@@ -120,6 +120,8 @@ export interface CanDfuPrepared {
   plaintext_size: number | null;
   wire_size: number;
   version_warning: "unknown" | "none" | "reinstall" | "downgrade";
+  artifact_source: "local" | "r2";
+  release_version: string | null;
 }
 
 export type CanDfuStage =
@@ -188,6 +190,11 @@ export const canDfuApi = {
   // WebView JSON.
   prepare: (bytes: Uint8Array) =>
     invoke<CanDfuPrepared>("stm32_can_dfu_prepare", bytes),
+
+  // The Rust session owns the selected identity and constructs the one fixed
+  // HTTPS R2 path. The WebView cannot supply an identity or arbitrary URL.
+  prepareLatest: () =>
+    invoke<CanDfuPrepared>("stm32_can_dfu_prepare_latest"),
 
   start: (
     token: string,

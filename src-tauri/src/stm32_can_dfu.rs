@@ -32,7 +32,7 @@ use hexmeow_stm32_can_dfu::{
     IdentitySnapshot, PackageLimits, PreparedUpgrade, Stm32ImageMode, SupportPolicy,
     TargetClassification, TargetRegistry,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::ipc::{Channel, InvokeBody, Request};
 use tauri::State;
@@ -53,8 +53,73 @@ const HEARTBEAT_BASE: u16 = 0x700;
 const HEARTBEAT_MASK: u16 = 0x780;
 const MAX_DISCOVERY_NODES: usize = 32;
 const MAX_ARTIFACT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_LATEST_BYTES: usize = 16 * 1024;
+const MAX_RELEASE_BYTES: usize = 64 * 1024;
+const R2_ORIGIN: &str = "https://downloads.hexmeow.com";
+const LATEST_FORMAT: &str = "hexmeow-dfu-latest/1";
+const RELEASE_FORMAT: &str = "hexmeow-dfu-release/1";
+const R2_CHANNEL: &str = "stable";
+const R2_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const R2_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const TSDO_BASE: u32 = 0x580;
 const TSDO_FAMILY_MASK: u32 = 0x780;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LatestDocument {
+    format: String,
+    profile_id: String,
+    vendor_id: String,
+    product_code: String,
+    channel: String,
+    version: String,
+    release: LatestReleaseRef,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LatestReleaseRef {
+    path: String,
+    sha256: String,
+    bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseDocument {
+    format: String,
+    profile_id: String,
+    vendor_id: String,
+    product_code: String,
+    version: String,
+    tag: String,
+    candidate_source_commit: String,
+    artifact: ReleaseArtifactRef,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseArtifactRef {
+    path: String,
+    sha256: String,
+    bytes: u64,
+}
+
+#[derive(Debug)]
+struct ValidatedLatest {
+    version: String,
+    firmware_version: u32,
+    release_path: String,
+    release_sha256: String,
+    release_bytes: usize,
+}
+
+#[derive(Debug)]
+struct ValidatedRelease {
+    artifact_path: String,
+    artifact_sha256: String,
+    artifact_bytes: usize,
+}
 
 #[derive(Default)]
 struct CanDfuInner {
@@ -218,6 +283,8 @@ pub struct PreparedDto {
     plaintext_size: Option<usize>,
     wire_size: usize,
     version_warning: &'static str,
+    artifact_source: &'static str,
+    release_version: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -340,21 +407,146 @@ pub async fn stm32_can_dfu_prepare(
             return Err("firmware must be sent as a raw Uint8Array IPC body".into())
         }
     };
-    let (target, device) = {
-        let mut inner = state.inner.lock().unwrap();
-        inner.staged = None;
-        let target = inner
-            .selected
-            .clone()
-            .ok_or_else(|| "select an authorized CAN target before choosing firmware".to_owned())?;
-        let device = inner
-            .discovered
-            .get(&target.node_id())
-            .map(|record| record.dto.clone())
-            .ok_or_else(|| "the selected discovery session is stale".to_owned())?;
-        (target, device)
-    };
+    let (target, device) = selected_context(&state)?;
+    let (staged, dto) = prepare_artifact_bytes(target, device, bytes, "local", None)?;
+    state.inner.lock().unwrap().staged = Some(staged);
+    Ok(dto)
+}
 
+/// Download and stage the stable R2 release for the selected standard target.
+///
+/// The command accepts no URL or identity input. The complete identity and
+/// exact local profile were captured by discovery/selection; those values
+/// mechanically choose the sole allowed HTTPS path. Compatible and USB
+/// backends deliberately remain local-file only.
+#[tauri::command]
+pub async fn stm32_can_dfu_prepare_latest(state: State<'_, CanDfuState>) -> CmdResult<PreparedDto> {
+    let _session = state.session_lock.lock().await;
+    if state.is_active() {
+        return Err("an upgrade is already running".into());
+    }
+    let (target, device) = selected_context(&state)?;
+    let SelectedTarget::Stm32(authorized) = &target else {
+        return Err("online releases are not enabled for this compatible CAN backend".into());
+    };
+    let identity = *authorized.identity();
+    let profile_id = authorized.target().profile_id().to_owned();
+    let identity_root = format!(
+        "{R2_ORIGIN}/dfu/v1/releases/{:08x}/{:08x}",
+        identity.vendor_id(),
+        identity.product_code()
+    );
+
+    let client = r2_client()?;
+
+    let latest_url = format!("{identity_root}/latest.json");
+    let latest_bytes =
+        fetch_bounded(&client, &latest_url, MAX_LATEST_BYTES, "latest pointer").await?;
+    let latest = parse_latest_document(
+        &latest_bytes,
+        &profile_id,
+        identity.vendor_id(),
+        identity.product_code(),
+    )?;
+
+    let release_url = format!("{identity_root}/{}", latest.release_path);
+    let release_bytes =
+        fetch_bounded(&client, &release_url, MAX_RELEASE_BYTES, "release binding").await?;
+    verify_bound_bytes(
+        "release binding",
+        &release_bytes,
+        latest.release_bytes,
+        &latest.release_sha256,
+    )?;
+    let release = parse_release_document(
+        &release_bytes,
+        &latest,
+        &profile_id,
+        identity.vendor_id(),
+        identity.product_code(),
+    )?;
+
+    let artifact_url = format!(
+        "{identity_root}/{}/{}",
+        latest.version, release.artifact_path
+    );
+    let artifact_bytes =
+        fetch_bounded(&client, &artifact_url, MAX_ARTIFACT_BYTES, "DFU package").await?;
+    verify_bound_bytes(
+        "DFU package",
+        &artifact_bytes,
+        release.artifact_bytes,
+        &release.artifact_sha256,
+    )?;
+
+    // This is intentionally the exact same native staging path as a manually
+    // selected file. Remote metadata can select bytes, but cannot widen the
+    // local identity, hardware, MCU, firmware-ID, encryption, or key policy.
+    let (staged, dto) = prepare_artifact_bytes(
+        target,
+        device,
+        artifact_bytes,
+        "r2",
+        Some(latest.version.clone()),
+    )?;
+    if dto.firmware_version != latest.firmware_version {
+        return Err(format!(
+            "native package firmware version {} does not match online release {}",
+            dto.firmware_version_hex, latest.version
+        ));
+    }
+    if dto.artifact_size != release.artifact_bytes || dto.artifact_sha256 != release.artifact_sha256
+    {
+        return Err("validated package no longer matches its release binding".into());
+    }
+    state.inner.lock().unwrap().staged = Some(staged);
+    Ok(dto)
+}
+
+fn r2_client() -> CmdResult<reqwest::Client> {
+    // reqwest's no-provider mode avoids pulling in AWS-LC/CMake. The rest of
+    // this application already uses rustls with ring, so explicitly install
+    // that provider before constructing this client. A concurrently installed
+    // process-wide provider is equally valid and wins the one-time race.
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        return Err("cannot install the rustls crypto provider".into());
+    }
+
+    reqwest::Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(R2_CONNECT_TIMEOUT)
+        .timeout(R2_REQUEST_TIMEOUT)
+        .user_agent(concat!("hex-motor-gui/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|error| format!("building the R2 HTTPS client: {error}"))
+}
+
+fn selected_context(state: &CanDfuState) -> CmdResult<(SelectedTarget, DeviceDto)> {
+    let mut inner = state.inner.lock().unwrap();
+    inner.staged = None;
+    let target = inner
+        .selected
+        .clone()
+        .ok_or_else(|| "select an authorized CAN target before choosing firmware".to_owned())?;
+    let device = inner
+        .discovered
+        .get(&target.node_id())
+        .map(|record| record.dto.clone())
+        .ok_or_else(|| "the selected discovery session is stale".to_owned())?;
+    Ok((target, device))
+}
+
+fn prepare_artifact_bytes(
+    target: SelectedTarget,
+    device: DeviceDto,
+    bytes: Vec<u8>,
+    artifact_source: &'static str,
+    release_version: Option<String>,
+) -> CmdResult<(StagedArtifact, PreparedDto)> {
     let token = format!(
         "{:016x}",
         getrandom::u64().map_err(|error| format!("cannot create artifact token: {error}"))?
@@ -363,6 +555,7 @@ pub async fn stm32_can_dfu_prepare(
     let source_sha256 = hex_sha256(&bytes);
     let (staged, dto) = match target {
         SelectedTarget::Stm32(target) => {
+            let current_revision = device.software_revision;
             let package = read_package_bytes(
                 &bytes,
                 PackageLimits {
@@ -398,7 +591,9 @@ pub async fn stm32_can_dfu_prepare(
                 firmware_version_hex: format!("0x{:08X}", manifest.firmware_version),
                 plaintext_size: Some(summary.plaintext_size()),
                 wire_size: summary.wire_size(),
-                version_warning: "unknown",
+                version_warning: version_warning(manifest.firmware_version, current_revision),
+                artifact_source,
+                release_version,
             };
             (
                 StagedArtifact::Stm32 {
@@ -439,7 +634,11 @@ pub async fn stm32_can_dfu_prepare(
                 firmware_version_hex: format!("0x{:08X}", artifact.firmware_version()),
                 plaintext_size: None,
                 wire_size: artifact.bin_size(),
+                // This protocol's raw IMG version is not proven to use the
+                // same ordering/encoding as CANopen 0x1018:03.
                 version_warning: "unknown",
+                artifact_source,
+                release_version,
             };
             (
                 StagedArtifact::CobsIap {
@@ -450,8 +649,263 @@ pub async fn stm32_can_dfu_prepare(
             )
         }
     };
-    state.inner.lock().unwrap().staged = Some(staged);
-    Ok(dto)
+    Ok((staged, dto))
+}
+
+fn version_warning(target: u32, installed: u32) -> &'static str {
+    match target.cmp(&installed) {
+        std::cmp::Ordering::Less => "downgrade",
+        std::cmp::Ordering::Equal => "reinstall",
+        std::cmp::Ordering::Greater => "none",
+    }
+}
+
+async fn fetch_bounded(
+    client: &reqwest::Client,
+    url: &str,
+    max_bytes: usize,
+    label: &str,
+) -> CmdResult<Vec<u8>> {
+    let mut response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| format!("downloading {label} from R2: {error}"))?;
+    if response.url().as_str() != url {
+        return Err(format!("{label} response changed the fixed R2 URL"));
+    }
+    if !response.status().is_success() {
+        return Err(format!(
+            "{label} is unavailable at the fixed R2 path (HTTP {})",
+            response.status()
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return Err(format!(
+            "{label} Content-Length exceeds the {max_bytes}-byte limit"
+        ));
+    }
+
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("reading {label} from R2: {error}"))?
+    {
+        let next_len = bytes
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| format!("{label} length overflow"))?;
+        if next_len > max_bytes {
+            return Err(format!("{label} exceeds the {max_bytes}-byte limit"));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.is_empty() {
+        return Err(format!("{label} is empty"));
+    }
+    Ok(bytes)
+}
+
+fn parse_latest_document(
+    bytes: &[u8],
+    expected_profile: &str,
+    expected_vendor: u32,
+    expected_product: u32,
+) -> CmdResult<ValidatedLatest> {
+    let document: LatestDocument = serde_json::from_slice(bytes)
+        .map_err(|error| format!("invalid latest pointer JSON: {error}"))?;
+    if document.format != LATEST_FORMAT {
+        return Err(format!(
+            "unsupported latest pointer format {:?}",
+            document.format
+        ));
+    }
+    validate_release_identity(
+        "latest pointer",
+        &document.profile_id,
+        &document.vendor_id,
+        &document.product_code,
+        expected_profile,
+        expected_vendor,
+        expected_product,
+    )?;
+    if document.channel != R2_CHANNEL {
+        return Err(format!(
+            "unsupported release channel {:?}",
+            document.channel
+        ));
+    }
+    let firmware_version = parse_release_version(&document.version)?;
+    let expected_release_path = format!("{}/release.json", document.version);
+    if document.release.path != expected_release_path {
+        return Err(format!(
+            "latest release path must be {expected_release_path:?}"
+        ));
+    }
+    validate_lower_sha256("latest release SHA-256", &document.release.sha256)?;
+    let release_bytes = bounded_declared_size(
+        "latest release binding",
+        document.release.bytes,
+        MAX_RELEASE_BYTES,
+    )?;
+    Ok(ValidatedLatest {
+        version: document.version,
+        firmware_version,
+        release_path: document.release.path,
+        release_sha256: document.release.sha256,
+        release_bytes,
+    })
+}
+
+fn parse_release_document(
+    bytes: &[u8],
+    latest: &ValidatedLatest,
+    expected_profile: &str,
+    expected_vendor: u32,
+    expected_product: u32,
+) -> CmdResult<ValidatedRelease> {
+    let document: ReleaseDocument = serde_json::from_slice(bytes)
+        .map_err(|error| format!("invalid release binding JSON: {error}"))?;
+    if document.format != RELEASE_FORMAT {
+        return Err(format!(
+            "unsupported release binding format {:?}",
+            document.format
+        ));
+    }
+    validate_release_identity(
+        "release binding",
+        &document.profile_id,
+        &document.vendor_id,
+        &document.product_code,
+        expected_profile,
+        expected_vendor,
+        expected_product,
+    )?;
+    if document.version != latest.version {
+        return Err("release binding version does not match latest pointer".into());
+    }
+    if parse_release_version(&document.version)? != latest.firmware_version {
+        return Err("release binding version encoding changed after pointer validation".into());
+    }
+    if document.tag != format!("v{}", latest.version) {
+        return Err("release binding tag does not match its canonical version".into());
+    }
+    if !matches!(document.candidate_source_commit.len(), 40 | 64)
+        || !document
+            .candidate_source_commit
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("release binding contains an invalid source commit".into());
+    }
+    validate_lower_sha256("release artifact SHA-256", &document.artifact.sha256)?;
+    let expected_artifact_path = format!("{}.meowpkg", document.artifact.sha256);
+    if document.artifact.path != expected_artifact_path {
+        return Err(format!(
+            "release artifact path must be the single filename {expected_artifact_path:?}"
+        ));
+    }
+    let artifact_bytes = bounded_declared_size(
+        "release artifact",
+        document.artifact.bytes,
+        MAX_ARTIFACT_BYTES,
+    )?;
+    Ok(ValidatedRelease {
+        artifact_path: document.artifact.path,
+        artifact_sha256: document.artifact.sha256,
+        artifact_bytes,
+    })
+}
+
+fn validate_release_identity(
+    label: &str,
+    profile_id: &str,
+    vendor_id: &str,
+    product_code: &str,
+    expected_profile: &str,
+    expected_vendor: u32,
+    expected_product: u32,
+) -> CmdResult<()> {
+    if profile_id != expected_profile {
+        return Err(format!(
+            "{label} profile does not match the selected local profile"
+        ));
+    }
+    if vendor_id != format!("0x{expected_vendor:08X}")
+        || product_code != format!("0x{expected_product:08X}")
+    {
+        return Err(format!(
+            "{label} identity does not match the selected device"
+        ));
+    }
+    Ok(())
+}
+
+fn parse_release_version(version: &str) -> CmdResult<u32> {
+    if version.contains('-') || version.contains('+') {
+        return Err("release version must not contain pre-release or build metadata".into());
+    }
+    let parts = version.split('.').collect::<Vec<_>>();
+    if parts.len() != 3
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || !part.bytes().all(|byte| byte.is_ascii_digit())
+                || (part.len() > 1 && part.starts_with('0'))
+        })
+        || parts[2] != "0"
+    {
+        return Err("release version must be canonical M.m.0 SemVer".into());
+    }
+    let major = parts[0]
+        .parse::<u16>()
+        .map_err(|_| "release major version exceeds u16".to_owned())?;
+    let minor = parts[1]
+        .parse::<u16>()
+        .map_err(|_| "release minor version exceeds u16".to_owned())?;
+    Ok((u32::from(major) << 16) | u32::from(minor))
+}
+
+fn validate_lower_sha256(label: &str, value: &str) -> CmdResult<()> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!(
+            "{label} must be 64 lowercase hexadecimal characters"
+        ));
+    }
+    Ok(())
+}
+
+fn bounded_declared_size(label: &str, value: u64, limit: usize) -> CmdResult<usize> {
+    let value = usize::try_from(value).map_err(|_| format!("{label} size exceeds usize"))?;
+    if value == 0 || value > limit {
+        return Err(format!("{label} size must be within 1..={limit} bytes"));
+    }
+    Ok(value)
+}
+
+fn verify_bound_bytes(
+    label: &str,
+    bytes: &[u8],
+    expected_size: usize,
+    expected_sha256: &str,
+) -> CmdResult<()> {
+    if bytes.len() != expected_size {
+        return Err(format!(
+            "{label} size mismatch: expected {expected_size}, got {}",
+            bytes.len()
+        ));
+    }
+    if hex_sha256(bytes) != expected_sha256 {
+        return Err(format!("{label} SHA-256 does not match its binding"));
+    }
+    Ok(())
 }
 
 struct ActiveReset<'a> {
@@ -1236,5 +1690,141 @@ mod tests {
         let standard = target_registry().unwrap();
         let compatible = cobs_target_registry().unwrap();
         ensure_disjoint_backend_routes(&standard, &compatible).unwrap();
+    }
+
+    #[test]
+    fn r2_https_client_uses_the_process_crypto_provider() {
+        // Building the client catches a missing or ambiguous process-wide
+        // provider without making a network-dependent test.
+        r2_client().expect("fixed HTTPS client");
+    }
+
+    const TEST_PROFILE: &str = "lift-g0b1-v1";
+    const TEST_VENDOR: u32 = 0x6865_786D;
+    const TEST_PRODUCT: u32 = 0x006C_6674;
+    const RELEASE_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const ARTIFACT_SHA: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn latest_bytes(path: &str, version: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "format": LATEST_FORMAT,
+            "profile_id": TEST_PROFILE,
+            "vendor_id": "0x6865786D",
+            "product_code": "0x006C6674",
+            "channel": R2_CHANNEL,
+            "version": version,
+            "release": {
+                "path": path,
+                "sha256": RELEASE_SHA,
+                "bytes": 321
+            }
+        }))
+        .unwrap()
+    }
+
+    fn release_bytes(path: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "format": RELEASE_FORMAT,
+            "profile_id": TEST_PROFILE,
+            "vendor_id": "0x6865786D",
+            "product_code": "0x006C6674",
+            "version": "1.2.0",
+            "tag": "v1.2.0",
+            "candidate_source_commit":
+                "cccccccccccccccccccccccccccccccccccccccc",
+            "artifact": {
+                "path": path,
+                "sha256": ARTIFACT_SHA,
+                "bytes": 1024
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn online_documents_accept_only_the_literal_identity_and_canonical_paths() {
+        let latest = parse_latest_document(
+            &latest_bytes("1.2.0/release.json", "1.2.0"),
+            TEST_PROFILE,
+            TEST_VENDOR,
+            TEST_PRODUCT,
+        )
+        .unwrap();
+        assert_eq!(latest.version, "1.2.0");
+        assert_eq!(latest.firmware_version, 0x0001_0002);
+
+        let release = parse_release_document(
+            &release_bytes(&format!("{ARTIFACT_SHA}.meowpkg")),
+            &latest,
+            TEST_PROFILE,
+            TEST_VENDOR,
+            TEST_PRODUCT,
+        )
+        .unwrap();
+        assert_eq!(release.artifact_path, format!("{ARTIFACT_SHA}.meowpkg"));
+        assert_eq!(release.artifact_bytes, 1024);
+    }
+
+    #[test]
+    fn latest_rejects_noncanonical_version_traversal_and_unknown_fields() {
+        assert!(parse_latest_document(
+            &latest_bytes("01.2.0/release.json", "01.2.0"),
+            TEST_PROFILE,
+            TEST_VENDOR,
+            TEST_PRODUCT,
+        )
+        .is_err());
+        assert!(parse_latest_document(
+            &latest_bytes("../1.2.0/release.json", "1.2.0"),
+            TEST_PROFILE,
+            TEST_VENDOR,
+            TEST_PRODUCT,
+        )
+        .is_err());
+
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&latest_bytes("1.2.0/release.json", "1.2.0")).unwrap();
+        document["url"] = serde_json::Value::String("https://example.invalid/fw".into());
+        assert!(parse_latest_document(
+            &serde_json::to_vec(&document).unwrap(),
+            TEST_PROFILE,
+            TEST_VENDOR,
+            TEST_PRODUCT,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn release_rejects_nested_or_sha_unbound_artifact_names() {
+        let latest = parse_latest_document(
+            &latest_bytes("1.2.0/release.json", "1.2.0"),
+            TEST_PROFILE,
+            TEST_VENDOR,
+            TEST_PRODUCT,
+        )
+        .unwrap();
+        for path in [
+            format!("nested/{ARTIFACT_SHA}.meowpkg"),
+            format!("{RELEASE_SHA}.meowpkg"),
+            format!("{ARTIFACT_SHA}.bin"),
+        ] {
+            assert!(parse_release_document(
+                &release_bytes(&path),
+                &latest,
+                TEST_PROFILE,
+                TEST_VENDOR,
+                TEST_PRODUCT,
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn bound_download_requires_exact_size_and_sha256() {
+        let bytes = b"exact release bytes";
+        let sha = hex_sha256(bytes);
+        verify_bound_bytes("test", bytes, bytes.len(), &sha).unwrap();
+        assert!(verify_bound_bytes("test", bytes, bytes.len() + 1, &sha).is_err());
+        assert!(verify_bound_bytes("test", bytes, bytes.len(), RELEASE_SHA).is_err());
     }
 }

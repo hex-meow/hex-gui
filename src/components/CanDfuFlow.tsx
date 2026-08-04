@@ -46,6 +46,7 @@ export function CanDfuFlow({
   const [selected, setSelected] = useState<CanDfuDevice | null>(null);
   const [selecting, setSelecting] = useState(false);
   const [preparing, setPreparing] = useState(false);
+  const [fetchingLatest, setFetchingLatest] = useState(false);
   const [prepared, setPrepared] = useState<CanDfuPrepared | null>(null);
   const [fileName, setFileName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -53,11 +54,12 @@ export function CanDfuFlow({
   const [progress, setProgress] = useState<CanDfuProgress | null>(null);
   const [outcome, setOutcome] = useState<CanDfuOutcome | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [onlineError, setOnlineError] = useState<string | null>(null);
 
   useEffect(() => {
-    onBusyChange(busy || discovering || selecting || preparing);
+    onBusyChange(busy || discovering || selecting || preparing || fetchingLatest);
     return () => onBusyChange(false);
-  }, [busy, discovering, onBusyChange, preparing, selecting]);
+  }, [busy, discovering, fetchingLatest, onBusyChange, preparing, selecting]);
 
   useEffect(() => {
     return () => {
@@ -70,10 +72,18 @@ export function CanDfuFlow({
     setFileName("");
     setProgress(null);
     setOutcome(null);
+    setOnlineError(null);
     if (inputRef.current) inputRef.current.value = "";
   };
 
   const discover = async () => {
+    if (
+      discovering ||
+      busy ||
+      selecting ||
+      preparing ||
+      fetchingLatest
+    ) return;
     const trimmed = spec.trim();
     if (!trimmed) {
       setError(copy.interfaceRequired);
@@ -101,14 +111,44 @@ export function CanDfuFlow({
     }
   };
 
+  const loadLatest = async () => {
+    setFetchingLatest(true);
+    setError(null);
+    setOnlineError(null);
+    setOutcome(null);
+    setPrepared(null);
+    setFileName("");
+    try {
+      const staged = await canDfuApi.prepareLatest();
+      setPrepared(staged);
+      setSelected(staged.device);
+      message.success(copy.onlineValidationPassed);
+    } catch (caught) {
+      // An online-discovery/network failure must not revoke the selected local
+      // authorization. The manual file path remains available below.
+      setOnlineError(dfuError(caught));
+    } finally {
+      setFetchingLatest(false);
+    }
+  };
+
   const selectDevice = async (device: CanDfuDevice) => {
-    if (device.authorization !== "enabled" || busy || selecting || preparing) return;
+    if (
+      device.authorization !== "enabled" ||
+      busy ||
+      selecting ||
+      preparing ||
+      fetchingLatest
+    ) return;
     setSelecting(true);
     setError(null);
     resetArtifact();
     try {
       await canDfuApi.select(device.node_id);
       setSelected(device);
+      if (device.backend === "stm32_canopen") {
+        await loadLatest();
+      }
     } catch (caught) {
       setSelected(null);
       setError(dfuError(caught));
@@ -128,6 +168,7 @@ export function CanDfuFlow({
   const fileSelected = async (file: File | undefined) => {
     if (!file) return;
     setError(null);
+    setOnlineError(null);
     setOutcome(null);
     setPrepared(null);
     setFileName(file.name);
@@ -220,6 +261,7 @@ export function CanDfuFlow({
     (device) => device.authorization === "enabled"
   );
   const compatibleSelected = selected?.backend === "cobs_can_iap_v1";
+  const standardSelected = selected?.backend === "stm32_canopen";
 
   return (
     <div className="dfu-panel__grid">
@@ -240,7 +282,9 @@ export function CanDfuFlow({
           <Space.Compact block>
             <Input
               value={spec}
-              disabled={discovering || busy}
+              disabled={
+                discovering || busy || selecting || preparing || fetchingLatest
+              }
               placeholder="can0 / gs_usb0"
               onChange={(event) => setSpec(event.currentTarget.value)}
               onPressEnter={() => void discover()}
@@ -248,7 +292,7 @@ export function CanDfuFlow({
             <Button
               type="primary"
               loading={discovering}
-              disabled={busy}
+              disabled={busy || selecting || preparing || fetchingLatest}
               onClick={() => void discover()}
             >
               {discovering ? copy.discovering : copy.discover}
@@ -291,30 +335,53 @@ export function CanDfuFlow({
             title={compatibleSelected ? copy.compatibleArtifactStep : copy.artifactStep}
           >
             <Space direction="vertical" size="middle" className="dfu-stack">
-              <Alert
-                type="warning"
-                showIcon
-                message={copy.remoteUnavailable}
-                description={
-                  compatibleSelected
-                    ? copy.compatibleLocalStillValidated
-                    : copy.localStillValidated
-                }
-              />
+              {compatibleSelected ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={copy.remoteUnavailable}
+                  description={copy.compatibleLocalStillValidated}
+                />
+              ) : (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={copy.onlineSource}
+                  description={copy.onlineSourceDetail}
+                />
+              )}
+              {standardSelected && onlineError && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={copy.onlineUnavailable}
+                  description={`${onlineError} ${copy.localFallback}`}
+                />
+              )}
               <input
                 ref={inputRef}
                 className="dfu-panel__file-input"
                 type="file"
                 accept={compatibleSelected ? ".img" : ".meowpkg"}
-                disabled={busy || preparing}
+                disabled={busy || preparing || fetchingLatest}
                 onChange={(event) => {
                   void fileSelected(event.currentTarget.files?.[0]);
                 }}
               />
               <Space wrap>
+                {standardSelected && (
+                  <Button
+                    type="primary"
+                    loading={fetchingLatest}
+                    disabled={busy || selecting || preparing}
+                    onClick={() => void loadLatest()}
+                  >
+                    {fetchingLatest ? copy.fetchingLatest : copy.getLatest}
+                  </Button>
+                )}
                 <Button
                   loading={preparing}
-                  disabled={!selected || busy || selecting}
+                  disabled={!selected || busy || selecting || fetchingLatest}
                   onClick={chooseFile}
                 >
                   {compatibleSelected ? copy.chooseCompatibleFile : copy.chooseFile}
@@ -481,6 +548,13 @@ function ArtifactDetails({
         </Tag>
       </Space>
       <Descriptions size="small" column={1} className="dfu-descriptions">
+        <Descriptions.Item label={copy.artifactSource}>
+          {prepared.artifact_source === "r2"
+            ? prepared.release_version
+              ? `${copy.onlineArtifact} · v${prepared.release_version}`
+              : copy.onlineArtifact
+            : copy.localArtifact}
+        </Descriptions.Item>
         <Descriptions.Item label={copy.fileSha}>
           <Typography.Text copyable={{ text: prepared.artifact_sha256 }}>
             {shortHash(prepared.artifact_sha256)}
@@ -603,9 +677,15 @@ function textFor(lang: Lang) {
         "HPM 当前只有 USB 升级经过真机验证；CAN 设计不会从任何已启用后端推断或复用。",
       artifactStep: "2 · 校验 .meowpkg",
       compatibleArtifactStep: "2 · 校验兼容 IMG",
-      remoteUnavailable: "在线 R2 制品源尚未接入",
-      localStillValidated:
-        "当前请手动选择 .meowpkg。手动选择不会跳过校验：包必须匹配设备、MCU、firmware-ID、固定 P-256 公钥、key ID 与 security epoch，并且必须是 encrypted-v2。",
+      remoteUnavailable: "此兼容后端暂未接入线上制品源",
+      onlineSource: "线上 stable 发布",
+      onlineSourceDetail:
+        "选择标准设备后会默认从固定 R2 HTTPS 地址获取最新版本。下载包与手选包经过完全相同的设备、MCU、firmware-ID、P-256、公钥指纹、key ID、security epoch 与 encrypted-v2 校验。",
+      onlineUnavailable: "线上版本不可用",
+      localFallback: "仍可手动选择本地包，并执行相同的完整校验。",
+      getLatest: "获取线上最新版本",
+      fetchingLatest: "正在获取线上版本…",
+      onlineValidationPassed: "线上版本下载并通过全部校验",
       compatibleLocalStillValidated:
         "当前请手动选择 .img。手动选择不会跳过校验：文件必须匹配本地固定的 0x1018 产品、IAP device/firmware ID、起始地址、大小与加密策略；SHA-256 只证明文件内部一致。",
       selectFirst: "请先选择一个已授权的设备。",
@@ -647,6 +727,9 @@ function textFor(lang: Lang) {
       encrypted: "加密传输",
       plaintext: "明文 / 开发",
       fileSha: "包 SHA-256",
+      artifactSource: "来源",
+      onlineArtifact: "R2 stable",
+      localArtifact: "本地文件",
       container: "Container / Firmware ID",
       targetVersion: "目标 SW revision",
       rawTargetVersion: "目标版本（协议原始值）",
@@ -704,9 +787,15 @@ function textFor(lang: Lang) {
       "Only HPM USB has hardware evidence. No enabled backend infers or reuses the untested HPM CAN design.",
     artifactStep: "2 · Validate .meowpkg",
     compatibleArtifactStep: "2 · Validate compatible IMG",
-    remoteUnavailable: "The online R2 artifact source is not connected yet",
-    localStillValidated:
-      "Choose a local .meowpkg for now. Manual selection does not bypass validation: the package must match the device, MCU, firmware-ID, pinned P-256 key, key IDs and security epoch, and it must use encrypted-v2.",
+    remoteUnavailable: "Online releases are not available for this compatible backend",
+    onlineSource: "Online stable release",
+    onlineSourceDetail:
+      "Selecting a standard target automatically downloads the latest release from the fixed R2 HTTPS origin. Online and local packages pass the same device, MCU, firmware-ID, P-256 key, fingerprint, key-ID, security-epoch, and encrypted-v2 checks.",
+    onlineUnavailable: "The online release is unavailable",
+    localFallback: "You can still choose a local package; it receives the same complete validation.",
+    getLatest: "Get latest online release",
+    fetchingLatest: "Fetching online release…",
+    onlineValidationPassed: "Online release downloaded and fully validated",
     compatibleLocalStillValidated:
       "Choose a local .img for now. Manual selection does not bypass the fixed 0x1018 product, IAP device/firmware ID, start-address, size, encryption, and internal SHA-256 checks.",
     selectFirst: "Select an authorized device first.",
@@ -750,6 +839,9 @@ function textFor(lang: Lang) {
     encrypted: "Encrypted wire",
     plaintext: "Plaintext / development",
     fileSha: "Package SHA-256",
+    artifactSource: "Source",
+    onlineArtifact: "R2 stable",
+    localArtifact: "Local file",
     container: "Container / Firmware ID",
     targetVersion: "Target SW revision",
     rawTargetVersion: "Target version (raw protocol value)",
