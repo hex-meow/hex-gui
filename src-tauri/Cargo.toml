@@ -41,9 +41,8 @@ env_logger = "0.11"
 anyhow = "1"
 getrandom = "0.3"
 chrono = "0.4"
-# Local integration against the newly committed driver. Keep the version bound so this can be
-# switched back to the registry without source changes after 0.2.1 is published.
-hex-motor = { version = "0.2.1", path = "../../hex-motor" }
+# Published Meow Motor driver and host services.
+hex-motor = "0.2.2"
 
 # Public, secret-free runtime for the current HPM USB Bootloader. It owns the
 # strict legacy profile/package parser and flash state machine; the Tauri
