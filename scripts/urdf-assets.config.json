@@ -1,0 +1,16 @@
+{
+  "legacyMeshAliases": {
+    "xpkg_urdf_firefly_y6": {
+      "meshes/base_link.STL": "meshes/visual/base_link.STL",
+      "meshes/link_1.STL": "meshes/visual/link_1.STL",
+      "meshes/link_2.STL": "meshes/visual/link_2.STL",
+      "meshes/link_3.STL": "meshes/visual/link_3.STL",
+      "meshes/link_4.STL": "meshes/visual/link_4.STL",
+      "meshes/link_5.STL": "meshes/visual/link_5.STL",
+      "meshes/link_6.STL": "meshes/visual/link_6.STL"
+    },
+    "hex_gp80_description": {
+      "meshes/visual/base_link.STL": "meshes/visual/base_link.stl"
+    }
+  }
+}

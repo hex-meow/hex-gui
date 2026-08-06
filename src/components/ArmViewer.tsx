@@ -2,12 +2,17 @@
 // previewQ 非空时叠加一个半透明“幽灵臂”到目标位姿(预设悬浮预览,先看后动)。
 // urdfXml 给了就用它(从机器人级 <prefix>/urdf 取的整机 arm+EE,或臂-only 回退);否则退到
 // 捆在前端 public/urdf/ 的 firefly。整机时在装配面(link_6 / ee_base_link)画坐标轴,肉眼核对夹爪原点贴合法兰。
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { STLLoader } from "three/addons/loaders/STLLoader.js";
-import URDFLoader from "urdf-loader";
 import type { URDFRobot } from "urdf-loader";
+import {
+  beginUrdfLoad,
+  DEFAULT_ARM_URDF_URL,
+  disposeObject3D,
+  isUrdfAbort,
+  type UrdfLoadJob,
+} from "../urdfModelLoader";
 
 interface Props {
   q: number[];
@@ -18,13 +23,96 @@ interface Props {
   urdfXml?: string | null; // 机器人级 URDF(整机 arm+EE 或臂-only);给了就渲它,否则退到捆的 firefly
 }
 
+function createArmPlaceholder(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = "arm-loading-placeholder";
+  const material = new THREE.MeshPhongMaterial({
+    color: 0x718096,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.5,
+  });
+  const addPart = (geometry: THREE.BufferGeometry, position: [number, number, number], rotationY = 0) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(...position);
+    mesh.rotation.y = rotationY;
+    group.add(mesh);
+  };
+  const baseGeometry = new THREE.CylinderGeometry(0.12, 0.14, 0.07, 20);
+  baseGeometry.rotateX(Math.PI / 2);
+  addPart(baseGeometry, [0, 0, 0.035]);
+  addPart(new THREE.BoxGeometry(0.07, 0.08, 0.28), [0, 0, 0.2]);
+  addPart(new THREE.BoxGeometry(0.07, 0.07, 0.3), [0.1, 0, 0.45], Math.PI / 4);
+  addPart(new THREE.SphereGeometry(0.065, 16, 10), [0.205, 0, 0.555]);
+  return group;
+}
+
+function automaticJointNames(robot: URDFRobot): string[] {
+  return Object.keys(robot.joints).filter((name) => (robot.joints[name] as { jointType?: string }).jointType !== "fixed");
+}
+
+function applyJointValues(robot: URDFRobot, values: readonly number[], jointNames: readonly string[], automaticNames: readonly string[]) {
+  const names = jointNames.length ? jointNames : automaticNames;
+  names.forEach((name, index) => {
+    if (robot.joints[name]) robot.setJointValue(name, values[index] ?? 0);
+  });
+}
+
+function makeGhost(robot: URDFRobot): URDFRobot {
+  const ghost = robot.clone(true) as URDFRobot;
+  ghost.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const configure = (source: THREE.Material) => {
+      const material = source.clone();
+      const colorMaterial = material as THREE.Material & { color?: THREE.Color };
+      colorMaterial.color?.setHex(0x44dd88);
+      material.transparent = true;
+      material.opacity = 0.35;
+      material.depthWrite = false;
+      return material;
+    };
+    mesh.material = Array.isArray(mesh.material)
+      ? mesh.material.map(configure)
+      : configure(mesh.material);
+  });
+  return ghost;
+}
+
+function disposeArmModels(robot: URDFRobot | null, ghost: URDFRobot | null) {
+  // AxesHelper 不是 Mesh，通用 disposeObject3D 不会处理它的 line geometry/material。
+  robot?.traverse((object) => {
+    if (object instanceof THREE.AxesHelper) object.dispose();
+  });
+  disposeObject3D(robot, ghost);
+}
+
+function loadErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try { return JSON.stringify(error); } catch { return String(error); }
+}
+
 export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const robotRef = useRef<URDFRobot | null>(null);
   const ghostRef = useRef<URDFRobot | null>(null);
+  const placeholderRef = useRef<THREE.Group | null>(null);
   const arrowRef = useRef<THREE.ArrowHelper | null>(null);
   const armRootRef = useRef<THREE.Group | null>(null); // 整臂根:改重力向量时旋转它(臂倾斜、重力始终朝下=人眼所见)
   const autoJointsRef = useRef<string[]>([]);
+  const loadGenerationRef = useRef(0);
+  const loadJobRef = useRef<UrdfLoadJob | null>(null);
+  const latestQRef = useRef(q);
+  const latestJointNamesRef = useRef(jointNames);
+  const latestPreviewQRef = useRef(previewQ);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [retryGeneration, setRetryGeneration] = useState(0);
+
+  latestQRef.current = q;
+  latestJointNamesRef.current = jointNames;
+  latestPreviewQRef.current = previewQ;
 
   useEffect(() => {
     const mount = mountRef.current!;
@@ -64,6 +152,9 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }
     const armRoot = new THREE.Group();
     scene.add(armRoot);
     armRootRef.current = armRoot;
+    const placeholder = createArmPlaceholder();
+    armRoot.add(placeholder);
+    placeholderRef.current = placeholder;
 
     let raf = 0;
     const animate = () => { controls.update(); renderer.render(scene, camera); raf = requestAnimationFrame(animate); };
@@ -74,97 +165,114 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }
     };
     window.addEventListener("resize", onResize);
     return () => {
+      loadGenerationRef.current += 1;
+      loadJobRef.current?.cancel();
+      loadJobRef.current = null;
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", onResize);
+      controls.dispose();
+      disposeArmModels(robotRef.current, ghostRef.current);
+      robotRef.current = null;
+      ghostRef.current = null;
+      disposeObject3D(placeholderRef.current);
+      placeholderRef.current = null;
+      autoJointsRef.current = [];
+      arrow.dispose();
+      grid.dispose();
+      arrowRef.current = null;
+      armRootRef.current = null;
       renderer.dispose();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
     };
   }, []);
 
-  // 加载 robot + ghost(urdfXml 变了就重载)。整机时在装配面画坐标轴核对夹爪原点。
+  // 先在场景外等待 URDF 和全部 STL；只有候选模型完整成功后才原子替换。
   useEffect(() => {
     const armRoot = armRootRef.current;
     if (!armRoot) return;
-    let cancelled = false;
+    let active = true;
+    const generation = ++loadGenerationRef.current;
+    setLoading(true);
+    setLoadError(null);
 
-    // 先拆旧 robot/ghost 释放几何/材质,避免泄漏(切臂/切装配态时)。
-    const dispose = (obj: URDFRobot | null) => {
-      if (!obj) return;
-      armRoot.remove(obj);
-      obj.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (m.isMesh) {
-          m.geometry?.dispose();
-          const mat = m.material;
-          if (Array.isArray(mat)) mat.forEach((x) => x.dispose()); else mat?.dispose();
+    const job = beginUrdfLoad({
+      source: urdfXml
+        ? { kind: "xml", xml: urdfXml, label: "controller://inline-robot.urdf" }
+        : { kind: "url", url: DEFAULT_ARM_URDF_URL },
+    });
+    loadJobRef.current = job;
+
+    job.promise.then(({ robot }) => {
+      let ghost: URDFRobot | null = null;
+      let automaticNames: string[];
+      try {
+        ghost = makeGhost(robot);
+        automaticNames = automaticJointNames(robot);
+        applyJointValues(robot, latestQRef.current, latestJointNamesRef.current, automaticNames);
+        const target = latestPreviewQRef.current;
+        if (target?.length) {
+          applyJointValues(ghost, target, latestJointNamesRef.current, automaticNames);
+          ghost.visible = true;
+        } else {
+          ghost.visible = false;
         }
-      });
-    };
-    dispose(robotRef.current); robotRef.current = null;
-    dispose(ghostRef.current); ghostRef.current = null;
 
-    const loader = new URDFLoader();
-    // package:// 解析:firefly(捆的)+ gp80 夹爪(整机 URDF 里 EE 网格用 hex_gp80_description)。
-    loader.packages = { xpkg_urdf_firefly_y6: "/urdf", hex_gp80_description: "/urdf/gp80", hex_gr80_description: "/urdf/gr80" };
-    // ⚠️ 真实签名是 (path, manager, material, onComplete) —— 4 个参数(.d.ts 漏了 material)。
-    (loader as any).loadMeshCb = (
-      url: string,
-      manager: THREE.LoadingManager,
-      _material: THREE.Material,
-      onComplete: (obj: THREE.Object3D | null, err?: Error) => void,
-    ) => {
-      new STLLoader(manager).load(
-        url,
-        (geom) => onComplete(new THREE.Mesh(geom, new THREE.MeshPhongMaterial({ color: 0xbfc4cc }))),
-        undefined,
-        (err) => onComplete(null, err as Error),
-      );
-    };
-
-    // urdfXml 给了就用 loader.parse(公开方法,0.13 支持;package:// 仍走 loader.packages);否则退到捆的文件。
-    const load = (): Promise<URDFRobot> =>
-      urdfXml ? Promise.resolve(loader.parse(urdfXml)) : loader.loadAsync("/urdf/firefly.urdf");
-
-    load().then((robot) => {
-      if (cancelled) { dispose(robot); return; }
-      robotRef.current = robot;
-      autoJointsRef.current = Object.keys(robot.joints).filter((n) => (robot.joints[n] as any).jointType !== "fixed");
-      armRoot.add(robot);
-      // 装配面坐标轴:核对夹爪 base_link 原点是否贴在臂法兰。attach 到臂 tip(link_6)+ EE 根(ee_base_link,整机才有)。
-      // depthTest=false + 高 renderOrder → 不被网格遮挡,始终可见(仿重力箭头)。仅主臂加,不加幽灵臂。
-      for (const link of ["link_6", "ee_base_link"]) {
-        const obj = robot.links[link];
-        if (!obj) continue;
-        const axes = new THREE.AxesHelper(0.06);
-        axes.renderOrder = 998;
-        (axes.material as THREE.Material).depthTest = false;
-        (axes.material as THREE.Material).transparent = true;
-        obj.add(axes);
+        // 装配面坐标轴:核对夹爪 base_link 原点是否贴在臂法兰。attach 到臂 tip(link_6)+ EE 根(ee_base_link,整机才有)。
+        // depthTest=false + 高 renderOrder → 不被网格遮挡,始终可见(仿重力箭头)。仅主臂加,不加幽灵臂。
+        for (const link of ["link_6", "ee_base_link"]) {
+          const obj = robot.links[link];
+          if (!obj) continue;
+          const axes = new THREE.AxesHelper(0.06);
+          axes.renderOrder = 998;
+          (axes.material as THREE.Material).depthTest = false;
+          (axes.material as THREE.Material).transparent = true;
+          obj.add(axes);
+        }
+      } catch (error) {
+        disposeArmModels(robot, ghost);
+        throw error;
       }
-    }).catch((e) => console.error("URDF load failed", e));
 
-    // 幽灵臂(预设预览):半透明绿色,默认隐藏。与主臂同源。
-    load().then((ghost) => {
-      if (cancelled) { dispose(ghost); return; }
-      ghost.traverse((o) => {
-        if ((o as THREE.Mesh).isMesh) {
-          (o as THREE.Mesh).material = new THREE.MeshPhongMaterial({ color: 0x44dd88, transparent: true, opacity: 0.35, depthWrite: false });
-        }
-      });
-      ghost.visible = false;
+      if (!active || generation !== loadGenerationRef.current || armRootRef.current !== armRoot) {
+        disposeArmModels(robot, ghost);
+        return;
+      }
+
+      const oldRobot = robotRef.current;
+      const oldGhost = ghostRef.current;
+      armRoot.add(robot, ghost);
+      robotRef.current = robot;
       ghostRef.current = ghost;
-      armRoot.add(ghost);
-    }).catch(() => {});
+      autoJointsRef.current = automaticNames;
 
-    return () => { cancelled = true; };
-  }, [urdfXml]);
+      if (placeholderRef.current) {
+        disposeObject3D(placeholderRef.current);
+        placeholderRef.current = null;
+      }
+      disposeArmModels(oldRobot, oldGhost);
+      setLoadError(null);
+      setLoading(false);
+    }).catch((error: unknown) => {
+      if (!active || generation !== loadGenerationRef.current || isUrdfAbort(error)) return;
+      console.error("URDF load failed", error);
+      setLoadError(loadErrorMessage(error));
+      setLoading(false);
+    }).finally(() => {
+      if (loadJobRef.current === job) loadJobRef.current = null;
+    });
+
+    return () => {
+      active = false;
+      job.cancel();
+      if (loadJobRef.current === job) loadJobRef.current = null;
+    };
+  }, [urdfXml, retryGeneration]);
 
   // 实时关节角
   useEffect(() => {
     const robot = robotRef.current;
     if (!robot) return;
-    const names = jointNames.length ? jointNames : autoJointsRef.current;
-    names.forEach((n, i) => { if (robot.joints[n]) robot.setJointValue(n, q[i] ?? 0); });
+    applyJointValues(robot, q, jointNames, autoJointsRef.current);
   }, [q, jointNames]);
 
   // 幽灵臂:预设悬浮预览
@@ -172,8 +280,7 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }
     const ghost = ghostRef.current;
     if (!ghost) return;
     if (previewQ && previewQ.length) {
-      const names = jointNames.length ? jointNames : autoJointsRef.current;
-      names.forEach((n, i) => { if (ghost.joints[n]) ghost.setJointValue(n, previewQ[i] ?? 0); });
+      applyJointValues(ghost, previewQ, jointNames, autoJointsRef.current);
       ghost.visible = true;
     } else {
       ghost.visible = false;
@@ -200,5 +307,45 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }
     }
   }, [gravity, armQuat]);
 
-  return <div ref={mountRef} style={{ width: "100%", height: 440, borderRadius: 8, overflow: "hidden" }} />;
+  return (
+    <div style={{ position: "relative", width: "100%", height: 440, borderRadius: 8, overflow: "hidden" }}>
+      <div ref={mountRef} style={{ position: "absolute", inset: 0 }} />
+      {loadError && (
+        <div
+          role="alert"
+          style={{
+            position: "absolute",
+            left: 12,
+            right: 12,
+            bottom: 12,
+            zIndex: 2,
+            padding: "10px 12px",
+            border: "1px solid rgba(255, 99, 99, 0.7)",
+            borderRadius: 6,
+            background: "rgba(43, 17, 20, 0.94)",
+            color: "#ffd7d7",
+            fontSize: 12,
+            boxShadow: "0 4px 14px rgba(0, 0, 0, 0.35)",
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>
+            {robotRef.current
+              ? "3D 模型加载失败（继续显示上一版可用模型）"
+              : "3D 模型加载失败（已保留线框占位，不显示透明骨架）"}
+          </div>
+          <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 130, overflowY: "auto" }}>
+            {loadError}
+          </div>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => setRetryGeneration((value) => value + 1)}
+            style={{ marginTop: 8, padding: "4px 10px", cursor: loading ? "wait" : "pointer" }}
+          >
+            {loading ? "重新加载中…" : "重试"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }

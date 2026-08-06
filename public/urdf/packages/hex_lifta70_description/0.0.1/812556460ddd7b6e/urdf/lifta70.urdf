@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LiftA70 trial 0.0.1 (2026-07-25)
+
+  正典关节 lift_joint 的 q 是平台相对最低位的总升高：[0, 0.70] m。
+  中间段相对最低位升高 0.5q：[0, 0.35] m，由 mimic 表达。因此本模型有两个
+  prismatic joint，但只有 lift_joint 一个独立自由度。
+
+  为使公开关节坐标直接等于平台高度，URDF 使用运动学等效的并联树：
+      base_link → lift_joint → platform_link
+                → intermediate_stage_joint → intermediate_link (0.5 × lift_joint)
+  这不同于 CAD 的物理串联装配树，但三个刚体在所有 q 下的位姿都正确，也让
+  lift_joint 位于 base_link 到 arm_mount 的规划链上。
+
+  visual mesh、质量、质心和惯量来自原始 xpkg_urdf_lift 导出。原文件的每级
+  upper=0.336 是错误值，已按结构确认改为总行程 0.70 / 中间段 0.35。
+
+  TRIAL 限制：
+  - arm_mount 从现有 mesh 的安装板平面估算为 (-0.0225, 0, 0.514)，待 CAD 确认；
+  - effort=6 沿用原始导出且未验证，不代表真实推力；
+  - collision 是 visual mesh 的单凸包，正式版需人工检查/拆分。
+-->
+<robot name="lifta70">
+  <material name="lifta70_gray">
+    <color rgba="0.7921568627 0.8196078431 0.9333333333 1"/>
+  </material>
+
+  <link name="base_link">
+    <inertial>
+      <origin xyz="-0.141195996757471 -3.81639164714898e-16 0.0593984274758254"
+              rpy="0 0 0"/>
+      <mass value="6.56288388074385"/>
+      <inertia ixx="0.0943359706409112"
+               ixy="-1.0296796830812e-16"
+               ixz="-0.00856068651807894"
+               iyy="0.117849951848771"
+               iyz="2.98727344672909e-18"
+               izz="0.0599458120266869"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_lifta70_description/meshes/visual/base_link.stl"/>
+      </geometry>
+      <material name="lifta70_gray"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_lifta70_description/meshes/collision/base_link.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="intermediate_link">
+    <inertial>
+      <origin xyz="-0.0225 5.55111512312578e-17 0.2505" rpy="0 0 0"/>
+      <mass value="0.288075"/>
+      <inertia ixx="0.00624538041249998"
+               ixy="-1.00085829223089e-19"
+               ixz="-1.62630325872826e-19"
+               iyy="0.00612388791249998"
+               iyz="-2.57226694371643e-19"
+               izz="0.0003180828125"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_lifta70_description/meshes/visual/intermediate_link.stl"/>
+      </geometry>
+      <material name="lifta70_gray"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_lifta70_description/meshes/collision/intermediate_link.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="platform_link">
+    <inertial>
+      <origin xyz="-0.0271038344601449 -2.08166817117217e-16 0.484802260831046"
+              rpy="0 0 0"/>
+      <mass value="2.32996944569277"/>
+      <inertia ixx="0.0222393791200089"
+               ixy="-4.864809373804e-18"
+               ixz="-2.06676800108141e-05"
+               iyy="0.0135336725415671"
+               iyz="6.14191186119239e-18"
+               izz="0.0112043155328518"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_lifta70_description/meshes/visual/platform_link.stl"/>
+      </geometry>
+      <material name="lifta70_gray"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_lifta70_description/meshes/collision/platform_link.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- 纯安装坐标系；没有 visual/collision，因此允许零质量。 -->
+  <link name="arm_mount"/>
+
+  <!-- 唯一 driver：q 直接等于平台相对最低位的总升高。 -->
+  <joint name="lift_joint" type="prismatic">
+    <parent link="base_link"/>
+    <child link="platform_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="0.70" effort="6" velocity="0.035"/>
+  </joint>
+
+  <!-- 中间段的绝对升高恒为平台的一半；有限 limit 也保留，兼容要求严格的消费者。 -->
+  <joint name="intermediate_stage_joint" type="prismatic">
+    <parent link="base_link"/>
+    <child link="intermediate_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="0.35" effort="6" velocity="0.0175"/>
+    <mimic joint="lift_joint" multiplier="0.5" offset="0"/>
+  </joint>
+
+  <!-- trial 估算值：正式导出必须以 CAD 机械臂安装坐标系替换。 -->
+  <joint name="arm_mount_joint" type="fixed">
+    <parent link="platform_link"/>
+    <child link="arm_mount"/>
+    <origin xyz="-0.0225 0 0.514" rpy="0 0 0"/>
+  </joint>
+</robot>

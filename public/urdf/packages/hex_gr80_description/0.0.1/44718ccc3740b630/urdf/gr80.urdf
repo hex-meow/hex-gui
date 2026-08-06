@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  【trial 0.0.1】手改试验版先行入库(用户批准 2026-07-12):mesh 为全精度直接复用作 collision、
+  惯量为占位、tcp 为估计——全部随结构同事正式导出替换(导出契约见下)。
+
+  GR80 试验 URDF,按 robot-overall-design/11-ee-api.md §9 约定改造(2026-07-12)。
+  给结构工程师的导出契约(重新导出时请复现以下几点):
+
+  1. 正典坐标:driver 关节 = jaw_joint1(单爪角)。**0 = 全闭,正方向 = 张开**,行程 [0, 0.6] rad。
+     导出零位姿态若是"全开"(本次就是),需把两爪/齿轮关节的 origin 各补一个"闭合角"旋转,
+     把关节零位挪到全闭(本文件的 rpy 就是这么算的:R_new = R_old · Rz(闭合角))。
+  2. 从动侧用 <mimic>:jaw_joint2 镜像(multiplier 省略 = +1,反向由 axis 取反实现,两关节限位一致);
+     gear_joint(电机齿轮,纯显示)multiplier = (π/2)/0.6 = 2.6179939(齿轮 1/4 圈 ↔ 爪 0.6 rad)。
+     mimic 关节也必须给有限 limit(Isaac Sim 要求)。
+  3. tcp link:抓取中心参考系(host IK 目标 / MoveIt end_effector 用),fixed joint 挂 base_link。
+     下方 z=0.13 是占位,请按 CAD 抓取中心(两爪尖连线中点)填。
+  4. 齿轮方向:闭合旋向是假设(+1/4 圈)。可视化若齿轮转反:把 gear_joint 的 origin rpy 换成
+     "2.35619449 1.57079633 0.78539816"(= R_old·Rz(-π/2))且 axis 改回 "0 0 1",multiplier 不变。
+  5. 正式导出还需:每个 link 的 <inertial>(质量/质心/惯量,重力补偿要用)、
+     visual 全精度 + collision 简化网格分离、mesh 路径 package://hex_gr80_description/(06 规范)。
+
+  验证方法(ROS2;注意要用 robot_rviz.urdf——RViz 的 mesh 只认 file://或 package:// URI,
+  本文件的相对路径是给网页 viewer 用的;robot_rviz.urdf 由 sed 生成,仅 mesh 路径不同):
+    ros2 launch urdf_tutorial display.launch.py model:=<本文件绝对路径>(mesh 需 ROS 包环境解析 package://)
+  joint_state_publisher_gui 只会出现 jaw_joint1 一根滑条;拖它应看到双爪对称开合、齿轮同步转动;
+  滑条 0 = 全闭,0.6 = 全开。
+-->
+<robot name="gr80">
+  <link name="base_link">
+    <!-- 占位惯量(trial):质量/质心未实测——正式值随结构重导出 + 铭牌单台标定(11 §7) -->
+    <inertial>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <mass value="0.30"/>
+      <inertia ixx="2.0e-4" ixy="0" ixz="0" iyy="2.0e-4" iyz="0" izz="2.0e-4"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gr80_description/meshes/visual/base_link.stl"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gr80_description/meshes/collision/base_link.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="jaw_link1">
+    <!-- 占位惯量(trial):质量/质心未实测——正式值随结构重导出 + 铭牌单台标定(11 §7) -->
+    <inertial>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="2.0e-5" ixy="0" ixz="0" iyy="2.0e-5" iyz="0" izz="2.0e-5"/>
+    </inertial><!-- 原 Link_1 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gr80_description/meshes/visual/Link_1.stl"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gr80_description/meshes/collision/Link_1.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="jaw_link2">
+    <!-- 占位惯量(trial):质量/质心未实测——正式值随结构重导出 + 铭牌单台标定(11 §7) -->
+    <inertial>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="2.0e-5" ixy="0" ixz="0" iyy="2.0e-5" iyz="0" izz="2.0e-5"/>
+    </inertial><!-- 原 Link_4 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gr80_description/meshes/visual/Link_4.stl"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gr80_description/meshes/collision/Link_4.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="gear_link">
+    <!-- 占位惯量(trial):质量/质心未实测——正式值随结构重导出 + 铭牌单台标定(11 §7) -->
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.01"/>
+      <inertia ixx="2.0e-6" ixy="0" ixz="0" iyy="2.0e-6" iyz="0" izz="2.0e-6"/>
+    </inertial><!-- 原 Link_5(电机齿轮,纯显示随动)-->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gr80_description/meshes/visual/Link_5.stl"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gr80_description/meshes/collision/Link_5.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="tcp"/><!-- 抓取中心(TCP):EeDescription/UrdfResource.tip_link 指向它 -->
+
+  <!-- driver:单爪角,0=全闭(origin = 原 origin·Rz(-0.6),把零位从"全开"挪到"全闭")-->
+  <joint name="jaw_joint1" type="revolute">
+    <parent link="base_link"/>
+    <child link="jaw_link1"/>
+    <origin xyz="-0.01525 -0.0149 0.07679888" rpy="1.57079633 -0.97079633 1.57079633"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="0.6" effort="10" velocity="3"/><!-- effort=2×单爪矩(功率共轭,11 §3);数值待定型 -->
+  </joint>
+  <!-- 镜像爪:axis 取反 ⇒ multiplier 保持 +1、限位与 driver 完全一致(行业惯例,11 §9)-->
+  <joint name="jaw_joint2" type="revolute">
+    <parent link="base_link"/>
+    <child link="jaw_link2"/>
+    <origin xyz="-0.01525 0.0151 0.07679888" rpy="-1.57079633 -0.97079633 -1.57079633"/>
+    <axis xyz="0 0 -1"/>
+    <limit lower="0" upper="0.6" effort="10" velocity="3"/>
+    <mimic joint="jaw_joint1"/>
+  </joint>
+  <!-- 电机齿轮(显示随动):1/4 圈 ↔ 爪 0.6 rad;闭合旋向为假设,反了按文件头第 4 条修正 -->
+  <joint name="gear_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="gear_link"/>
+    <origin xyz="-0.02045 0.0001 0.0365" rpy="0.78539816 -1.57079633 2.35619449"/>
+    <axis xyz="0 0 -1"/>
+    <limit lower="0" upper="1.5708" effort="10" velocity="8"/>
+    <mimic joint="jaw_joint1" multiplier="2.6179939"/>
+  </joint>
+  <joint name="tcp_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="tcp"/>
+    <origin xyz="0 0 0.13" rpy="0 0 0"/><!-- 占位:按 CAD 抓取中心(爪尖连线中点)修正 -->
+  </joint>
+</robot>

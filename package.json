@@ -7,6 +7,10 @@
   "scripts": {
     "test": "node --test test/*.test.ts",
     "dev": "vite",
+    "urdf:sync": "node scripts/urdf-assets.mjs sync --source ../hex-descriptions",
+    "urdf:check-upstream": "node scripts/urdf-assets.mjs check-upstream --source ../hex-descriptions",
+    "urdf:verify": "node scripts/urdf-assets.mjs verify",
+    "prebuild": "npm run urdf:verify",
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri"

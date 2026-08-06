@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  GP80 articulated URDF 0.2.0 (2026-08-03)
+
+  原始 GP-80_urdf.zip 以齿轮 joint3 为 driver：齿条位移 = ±0.007 m/rad × 齿轮角。
+  本仓库按 EE API 的正典坐标改造为：
+
+    finger_joint1 = driver，q = 单指位移 [0, 0.03825] m；0=全闭，正=张开
+    finger_joint2 = mimic(finger_joint1)，反向 axis 实现镜像
+    gear_joint    = mimic(finger_joint1, multiplier=1/0.007)，纯显示随动
+
+  因此只有一个独立 DOF；开口宽度变化 width(q)=2q，最大 0.0765 m。
+  原始齿轮上限 5.4643 rad 与 0.03825/0.007=5.4642857 rad 一致。
+
+  试验项：
+  - tcp z=0.13 m 是依据现有指尖几何估计的抓取中心，须由 CAD/实物确认；
+  - driver effort=20 N 由原始每指 10 N 折算，尚不是实测夹持力；
+  - collision 是 visual mesh 的单凸包，正式规划前须人工检查。
+-->
+<robot name="gp80">
+  <material name="gp80_base_color">
+    <color rgba="1 1 1 1"/>
+  </material>
+  <material name="gp80_finger1_color">
+    <color rgba="0.64705882 0.61960784 0.58823529 1"/>
+  </material>
+  <material name="gp80_moving_color">
+    <color rgba="0.89803922 0.91764706 0.92941176 1"/>
+  </material>
+
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0.0000035 -0.0000356 0.0349956" rpy="0 0 0"/>
+      <mass value="0.44214515"/>
+      <inertia ixx="0.00026073" ixy="0.00000233" ixz="5e-8"
+               iyy="0.00023276" iyz="-4.2e-7" izz="0.00021669"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gp80_description/meshes/visual/base_link.stl"/>
+      </geometry>
+      <material name="gp80_base_color"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gp80_description/meshes/collision/base_link.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="finger_link1">
+    <inertial>
+      <origin xyz="-0.00854431 0.07696459 0.01787225" rpy="0 0 0"/>
+      <mass value="0.03752313"/>
+      <inertia ixx="0.00002952" ixy="-0.00000298" ixz="-0.0000034"
+               iyy="0.00001673" iyz="-0.00000227" izz="0.0000232"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gp80_description/meshes/visual/finger_link1.stl"/>
+      </geometry>
+      <material name="gp80_finger1_color"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gp80_description/meshes/collision/finger_link1.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="finger_link2">
+    <inertial>
+      <origin xyz="0.00854431 0.06103541 0.01787225" rpy="0 0 0"/>
+      <mass value="0.03752313"/>
+      <inertia ixx="0.00002952" ixy="-0.00000298" ixz="0.0000034"
+               iyy="0.00001673" iyz="0.00000227" izz="0.0000232"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gp80_description/meshes/visual/finger_link2.stl"/>
+      </geometry>
+      <material name="gp80_moving_color"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gp80_description/meshes/collision/finger_link2.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="gear_link">
+    <inertial>
+      <origin xyz="0.00001226 0.0000518 0.00874999" rpy="0 0 0"/>
+      <mass value="0.00138205"/>
+      <inertia ixx="3e-8" ixy="0" ixz="0" iyy="3e-8" iyz="0" izz="4e-8"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gp80_description/meshes/visual/gear_link.stl"/>
+      </geometry>
+      <material name="gp80_moving_color"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hex_gp80_description/meshes/collision/gear_link.stl"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- 抓取中心坐标系；trial z 值待 CAD/实物确认。 -->
+  <link name="tcp"/>
+
+  <!-- 唯一 driver：单指位移，0=全闭。effort=两侧单指力之和。 -->
+  <joint name="finger_joint1" type="prismatic">
+    <parent link="base_link"/>
+    <child link="finger_link1"/>
+    <origin xyz="0 -0.069 0.0615" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="0" upper="0.03825" effort="20" velocity="0.021"/>
+  </joint>
+
+  <!-- 镜像手指：用反向 axis 保持 mimic multiplier=+1、限位与 driver 一致。 -->
+  <joint name="finger_joint2" type="prismatic">
+    <parent link="base_link"/>
+    <child link="finger_link2"/>
+    <origin xyz="0 -0.069 0.0615" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
+    <limit lower="0" upper="0.03825" effort="20" velocity="0.021"/>
+    <mimic joint="finger_joint1" multiplier="1" offset="0"/>
+  </joint>
+
+  <!-- 齿轮显示随动：齿条比 0.007 m/rad，所以 theta=q/0.007。 -->
+  <joint name="gear_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="gear_link"/>
+    <origin xyz="0 0 0.057" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="5.4643" effort="10" velocity="3"/>
+    <mimic joint="finger_joint1" multiplier="142.857142857" offset="0"/>
+  </joint>
+
+  <joint name="tcp_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="tcp"/>
+    <origin xyz="0 0 0.13" rpy="0 0 0"/>
+  </joint>
+</robot>

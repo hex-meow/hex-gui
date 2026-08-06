@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 2,
+  "products": {
+    "firefly_y6": {
+      "kind": "arm",
+      "version": "1.1.0",
+      "package": "xpkg_urdf_firefly_y6",
+      "contentSha256": "7a14c706b9ad102dd27f2b3cd9319aea33d2d74728caabaed6ff84b835a329b9",
+      "packageRoot": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d",
+      "urdfUrl": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/urdf/xpkg_urdf_firefly_y6.urdf",
+      "files": [
+        {
+          "path": "meshes/visual/base_link.STL",
+          "bytes": 124584,
+          "sha256": "e26d9e29e7de2ccaf3e6f10e71d384c686fa6024bd642fb4845e49503cfbbb54"
+        },
+        {
+          "path": "meshes/visual/link_1.STL",
+          "bytes": 85984,
+          "sha256": "ca07c27ee2fb21e15f06cd6a3ce15cea7fc31daa73250af31cff748da722c847"
+        },
+        {
+          "path": "meshes/visual/link_2.STL",
+          "bytes": 179384,
+          "sha256": "053927fcfa76c5da9bbf90768951371b2f9ff69016a8697b009fc930e783c1ef"
+        },
+        {
+          "path": "meshes/visual/link_3.STL",
+          "bytes": 392384,
+          "sha256": "43a3acaa8e0ccbecbfae6416bc3f4e5a63142cdcdd3f66fc79445e093e36c2bf"
+        },
+        {
+          "path": "meshes/visual/link_4.STL",
+          "bytes": 239784,
+          "sha256": "8353d696833ed17576fde1321cda21400a553005b7559a9f3eb57e78f3c88db5"
+        },
+        {
+          "path": "meshes/visual/link_5.STL",
+          "bytes": 203984,
+          "sha256": "d623d318bda26550f37a492328d0f3c50e6dc678d7712fb2b4e9bf4b83371581"
+        },
+        {
+          "path": "meshes/visual/link_6.STL",
+          "bytes": 53284,
+          "sha256": "c42cfc6e8a03308357d3fb7d810239272af468f2514adecbedcd4665b5afd8be"
+        },
+        {
+          "path": "urdf/xpkg_urdf_firefly_y6.urdf",
+          "bytes": 7720,
+          "sha256": "f923d1f790ffc3bd7561cf9bdf43d749515a6e157961ea7cb013bd186f550291"
+        }
+      ]
+    },
+    "gp80": {
+      "kind": "ee",
+      "version": "0.2.0",
+      "package": "hex_gp80_description",
+      "contentSha256": "2f7948bfb2e0dd3781e6352348241d84e13b8b434f1d504cd1b91a6b6b9de2dd",
+      "packageRoot": "/urdf/packages/hex_gp80_description/0.2.0/2f7948bfb2e0dd37",
+      "urdfUrl": "/urdf/packages/hex_gp80_description/0.2.0/2f7948bfb2e0dd37/urdf/gp80.urdf",
+      "files": [
+        {
+          "path": "meshes/visual/base_link.stl",
+          "bytes": 3528984,
+          "sha256": "ef70842f9ae4447340d11b525f18e899a23a03a63e3a47313dfa7836947ea946"
+        },
+        {
+          "path": "meshes/visual/finger_link1.stl",
+          "bytes": 672284,
+          "sha256": "72a5de2beb96547806de902ae1ab1fe4585c1817c72802f25ceb528affa46af0"
+        },
+        {
+          "path": "meshes/visual/finger_link2.stl",
+          "bytes": 672084,
+          "sha256": "47eb720913dd768e42a4f4744ca8b7c13307f65df1e7f809021b036f6923e186"
+        },
+        {
+          "path": "meshes/visual/gear_link.stl",
+          "bytes": 98784,
+          "sha256": "c2604db5bfd2aac6dc1dc7f6f6db461befb8bf0e2aec76284b931b057059263f"
+        },
+        {
+          "path": "urdf/gp80.urdf",
+          "bytes": 5504,
+          "sha256": "8a92cec86441e9920d73dc0d66b4b45acf0cc09700d441017bc31ad863801435"
+        }
+      ]
+    },
+    "gr80": {
+      "kind": "ee",
+      "version": "0.0.1",
+      "package": "hex_gr80_description",
+      "contentSha256": "44718ccc3740b6302355316a49b959d1ba7748adf02dd74bc3935bbb69a4396f",
+      "packageRoot": "/urdf/packages/hex_gr80_description/0.0.1/44718ccc3740b630",
+      "urdfUrl": "/urdf/packages/hex_gr80_description/0.0.1/44718ccc3740b630/urdf/gr80.urdf",
+      "files": [
+        {
+          "path": "meshes/visual/Link_1.stl",
+          "bytes": 366884,
+          "sha256": "068ffdc9d7033f11b69e733d700e300a93b4b92554231a62b1dbf8260cf35902"
+        },
+        {
+          "path": "meshes/visual/Link_4.stl",
+          "bytes": 366884,
+          "sha256": "b7d97a8212a5442fc3d85ca8b9891abfc57d6d4245f994dc36d58b0d7cbd0721"
+        },
+        {
+          "path": "meshes/visual/Link_5.stl",
+          "bytes": 8884,
+          "sha256": "5e44794f9e4665e758b5e00bbf0556e582071b872ed3517ad00d5b0bf7a00939"
+        },
+        {
+          "path": "meshes/visual/base_link.stl",
+          "bytes": 1033684,
+          "sha256": "0056f3fdf230d12a660e8e1e8ac5695587fd7c0be4ced5b9f51d4653c12bf482"
+        },
+        {
+          "path": "urdf/gr80.urdf",
+          "bytes": 6791,
+          "sha256": "f74b3e76b14175c788c5ef70dd0c1941958d229a8461da6f20e17543e4ba1114"
+        }
+      ]
+    },
+    "lifta70": {
+      "kind": "lift",
+      "version": "0.0.1",
+      "package": "hex_lifta70_description",
+      "contentSha256": "812556460ddd7b6e1d511bfdd593ffd79cb7307cb6ba51566ecf5cf902f74734",
+      "packageRoot": "/urdf/packages/hex_lifta70_description/0.0.1/812556460ddd7b6e",
+      "urdfUrl": "/urdf/packages/hex_lifta70_description/0.0.1/812556460ddd7b6e/urdf/lifta70.urdf",
+      "files": [
+        {
+          "path": "meshes/visual/base_link.stl",
+          "bytes": 308684,
+          "sha256": "d79aafb768aa23bc1d9dc2805b718a10b16ea2488f5e86f7e17729e3e8754bba"
+        },
+        {
+          "path": "meshes/visual/intermediate_link.stl",
+          "bytes": 1684,
+          "sha256": "cdd18ae7a51bf66c799e684e4639db786badc4f40d1ccea656c6f5f76d2f295f"
+        },
+        {
+          "path": "meshes/visual/platform_link.stl",
+          "bytes": 347784,
+          "sha256": "6871c035c5fcb2fe911ec9cf8bca2a1b397cd67e73150118cdbeca35b7727940"
+        },
+        {
+          "path": "urdf/lifta70.urdf",
+          "bytes": 5134,
+          "sha256": "8c7bae1ef0b2994b4942ec5f250138531e82823fad301ffc1d77c577b1240771"
+        }
+      ]
+    }
+  },
+  "packageRoots": {
+    "xpkg_urdf_firefly_y6": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d",
+    "hex_gp80_description": "/urdf/packages/hex_gp80_description/0.2.0/2f7948bfb2e0dd37",
+    "hex_gr80_description": "/urdf/packages/hex_gr80_description/0.0.1/44718ccc3740b630",
+    "hex_lifta70_description": "/urdf/packages/hex_lifta70_description/0.0.1/812556460ddd7b6e"
+  },
+  "legacyMeshAliases": {
+    "/urdf/packages/hex_gp80_description/0.2.0/2f7948bfb2e0dd37/meshes/visual/base_link.STL": "/urdf/packages/hex_gp80_description/0.2.0/2f7948bfb2e0dd37/meshes/visual/base_link.stl",
+    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/base_link.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/visual/base_link.STL",
+    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/link_1.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/visual/link_1.STL",
+    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/link_2.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/visual/link_2.STL",
+    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/link_3.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/visual/link_3.STL",
+    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/link_4.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/visual/link_4.STL",
+    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/link_5.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/visual/link_5.STL",
+    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/link_6.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/visual/link_6.STL"
+  },
+  "assetSetSha256": "32696c79664cdfffd01a6cd9ed0f6bd46c83d7a11da50af1de3be0754444ec05"
+}

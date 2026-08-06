@@ -6,14 +6,20 @@
 // M3:machine 段拼接(MountEdge:child 挂 parent 的 mount link + offset;parent URDF/link 缺失 →
 // 告警 + 该分支散装,不拼错不猜,13 §3)、选中聚焦(其余 ghost 半透明/隐藏可切)、3D 点击选中。
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { STLLoader } from "three/addons/loaders/STLLoader.js";
-import URDFLoader from "urdf-loader";
 import type { URDFRobot } from "urdf-loader";
 import { api } from "../api";
 import type { MountEdge, SceneRobot } from "../types";
+import {
+  beginUrdfLoad,
+  disposeObject3D,
+  isUrdfAbort,
+  urdfRetryDelayMs,
+  UrdfLoadError,
+  type UrdfLoadJob,
+} from "../urdfModelLoader";
 
 interface Props {
   robots: SceneRobot[];       // ee_scene 轮询(~30Hz)
@@ -33,13 +39,29 @@ type Slot = {
   placeholder: THREE.Mesh | null;
   loading: boolean;
   lastFetch: number;                // 上次 URDF 拉取时刻(ms;臂未拼装时周期重拉)
+  sourceXml: string | null;         // 当前成功模型的精确 XML(同 assembled 但 XML 变化也重载)
+  loadGeneration: number;           // 丢弃 Tauri/STL 迟到结果
+  loadJob: UrdfLoadJob | null;      // 当前可取消的 STL 作业(Tauri invoke 本身不可取消)
+  error: UrdfLoadError | null;
+  failureCount: number;
+  nextRetryAt: number | null;
+  missingSince: number | null;
   hlMode: "off" | "full" | "ee";    // 高亮:整机 / 仅 ee_ 子树(被绑 EE 选中时)
   mountedTo: string | null;         // 已挂到的 "parentPrefix/link"(M3 拼接;null=散装在地面)
   dimMode: "none" | "all" | "body"; // 聚焦淡化:全部 / 仅臂身(ee_ 子树保亮)
+  selfHidden: boolean;              // hide 聚焦时仅隐藏 ancestor 自有 mesh，保留其 child transform
   warned: boolean;                  // 挂载失败告警只打一次
 };
 
 const HIGHLIGHT = new THREE.Color(0x2a6fbb);
+
+type LoadIssue = {
+  prefix: string;
+  message: string;
+  failureCount: number;
+  retrying: boolean;
+  keepingOldModel: boolean;
+};
 
 export function MachineViewer({ robots, selected, spacing, machines, focusMode, onSelect, height = 340 }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -51,6 +73,52 @@ export function MachineViewer({ robots, selected, spacing, machines, focusMode, 
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const [loadIssues, setLoadIssues] = useState<LoadIssue[]>([]);
+
+  function publishLoadIssues() {
+    const issues: LoadIssue[] = [];
+    slotsRef.current.forEach((slot, prefix) => {
+      if (!slot.error) return;
+      issues.push({
+        prefix,
+        message: slot.error.message,
+        failureCount: slot.failureCount,
+        retrying: slot.loading || slot.nextRetryAt != null,
+        keepingOldModel: slot.robot != null,
+      });
+    });
+    issues.sort((a, b) => a.prefix.localeCompare(b.prefix));
+    setLoadIssues(issues);
+  }
+
+  function setPlaceholderFailed(slot: Slot, failed: boolean) {
+    if (!slot.placeholder || Array.isArray(slot.placeholder.material)) return;
+    (slot.placeholder.material as THREE.MeshPhongMaterial).color.set(failed ? 0x8b4545 : 0x555c66);
+  }
+
+  /** Parent 模型替换/删除前，把挂在其 link 下的外部 slot 所有权移回 world。 */
+  function detachMountedChildren(parentPrefix: string) {
+    const world = worldRef.current;
+    if (!world) return;
+    slotsRef.current.forEach((child, childPrefix) => {
+      if (childPrefix === parentPrefix || !child.mountedTo?.startsWith(`${parentPrefix}/`)) return;
+      world.add(child.group);
+      child.mountedTo = null;
+    });
+  }
+
+  function forEachOwnedMesh(slot: Slot, callback: (mesh: THREE.Mesh) => void) {
+    const visit = (object: THREE.Object3D) => {
+      if (object !== slot.group && typeof object.userData.prefix === "string") return;
+      if ((object as THREE.Mesh).isMesh) callback(object as THREE.Mesh);
+      object.children.forEach(visit);
+    };
+    visit(slot.group);
+  }
+
+  function setOwnedMeshesVisible(slot: Slot, visible: boolean) {
+    forEachOwnedMesh(slot, (mesh) => { mesh.visible = visible; });
+  }
 
   useEffect(() => {
     const mount = mountRef.current!;
@@ -141,72 +209,125 @@ export function MachineViewer({ robots, selected, spacing, machines, focusMode, 
       window.removeEventListener("resize", onResize);
       renderer.domElement.removeEventListener("pointerdown", onDown);
       renderer.domElement.removeEventListener("pointerup", onUp);
+      controls.dispose();
+      grid.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
+      // 先拆开所有 slot ownership，避免 parent robot traverse 到 mounted child 后重复释放。
+      slotsRef.current.forEach((slot) => {
+        slot.loadGeneration += 1;
+        slot.loadJob?.cancel();
+        slot.group.removeFromParent();
+      });
       slotsRef.current.forEach((s) => disposeSlot(s));
       slotsRef.current.clear();
+      controlsRef.current = null;
+      cameraRef.current = null;
+      worldRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [height]);
 
   function disposeSlot(s: Slot) {
-    worldRef.current?.remove(s.group);
-    s.group.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (m.isMesh) {
-        m.geometry?.dispose();
-        const mat = m.material;
-        if (Array.isArray(mat)) mat.forEach((x) => x.dispose()); else (mat as THREE.Material)?.dispose();
-      }
-    });
+    s.loadGeneration += 1;
+    s.loadJob?.cancel();
+    s.loadJob = null;
+    disposeObject3D(s.group);
+    s.robot = null;
+    s.placeholder = null;
   }
 
-  function disposeRobot(slot: Slot) {
-    if (!slot.robot) return;
-    slot.group.remove(slot.robot);
-    slot.robot.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (m.isMesh) {
-        m.geometry?.dispose();
-        const mat = m.material;
-        if (Array.isArray(mat)) mat.forEach((x) => x.dispose()); else (mat as THREE.Material)?.dispose();
-      }
-    });
-    slot.robot = null;
-  }
-
-  function loadUrdfInto(slot: Slot, prefix: string, kindName: string) {
+  async function loadUrdfInto(slot: Slot, prefix: string, kindName: string, manual = false) {
+    if (slot.loading && !manual) return;
+    if (manual) {
+      slot.failureCount = 0;
+      slot.nextRetryAt = null;
+      slot.error = null;
+      setPlaceholderFailed(slot, false);
+    }
+    const generation = ++slot.loadGeneration;
+    slot.loadJob?.cancel();
+    slot.loadJob = null;
     slot.loading = true;
     slot.lastFetch = performance.now();
-    api.consoleGetUrdf(prefix, kindName).then((u) => {
-      slot.loading = false;
-      if (!u || !u.xml) return; // 无 URDF:保留占位盒
-      if (slot.robot && slot.assembled === u.assembled) return; // 已有同形态模型,不重建
-      const loader = new URDFLoader();
-      loader.packages = { xpkg_urdf_firefly_y6: "/urdf", hex_gp80_description: "/urdf/gp80", hex_gr80_description: "/urdf/gr80" };
-      (loader as any).loadMeshCb = (
-        url: string, manager: THREE.LoadingManager, _material: THREE.Material,
-        onComplete: (obj: THREE.Object3D | null, err?: Error) => void,
-      ) => {
-        new STLLoader(manager).load(
-          url,
-          (geom) => onComplete(new THREE.Mesh(geom, new THREE.MeshPhongMaterial({ color: 0xbfc4cc }))),
-          undefined,
-          (err) => onComplete(null, err as Error),
-        );
-      };
-      try {
-        const robot = loader.parse(u.xml);
-        disposeRobot(slot); // 拼装形态升级(臂-only → 整机):替换旧模型
-        slot.robot = robot;
-        slot.hlMode = "off"; slot.dimMode = "none"; // 新模型新材质,重走着色
-        slot.assembled = u.assembled;
-        if (slot.placeholder) { slot.group.remove(slot.placeholder); slot.placeholder = null; }
-        slot.group.add(robot);
-      } catch (e) {
-        console.warn("URDF parse failed", prefix, e);
+    publishLoadIssues();
+
+    try {
+      const u = await api.consoleGetUrdf(prefix, kindName);
+      if (generation !== slot.loadGeneration) return;
+      if (!u || !u.xml) {
+        // base 可以是纯占位节点；其余可视 robot 的 URDF 短暂未发布也必须进入
+        // 统一重试，不能第一次返回 null 后永远停在灰盒。
+        if (kindName === "base") {
+          slot.loading = false;
+          slot.error = null;
+          slot.failureCount = 0;
+          slot.nextRetryAt = null;
+          setPlaceholderFailed(slot, false);
+          publishLoadIssues();
+          return;
+        }
+        throw new UrdfLoadError([
+          { stage: "urdf-fetch", url: `${prefix}/urdf`, cause: new Error("controller 未返回 URDF resource") },
+          { stage: "urdf-fetch", url: `${prefix}/${kindName}/urdf`, cause: new Error("controller 未返回 fallback URDF resource") },
+        ]);
       }
-    }).catch(() => { slot.loading = false; });
+      if (slot.robot && slot.assembled === u.assembled && slot.sourceXml === u.xml) {
+        slot.loading = false;
+        slot.error = null;
+        slot.failureCount = 0;
+        slot.nextRetryAt = null;
+        publishLoadIssues();
+        return;
+      }
+
+      const job = beginUrdfLoad({ source: { kind: "xml", xml: u.xml, label: `${prefix}/urdf` } });
+      slot.loadJob = job;
+      const { robot } = await job.promise;
+      if (generation !== slot.loadGeneration) {
+        disposeObject3D(robot);
+        return;
+      }
+
+      // 直到所有 STL 成功才在同一 tick 里换模型；assembled 升级失败时旧 arm-only 仍可见。
+      const oldRobot = slot.robot;
+      if (oldRobot) detachMountedChildren(prefix);
+      slot.group.add(robot);
+      slot.robot = robot;
+      slot.sourceXml = u.xml;
+      slot.assembled = u.assembled;
+      slot.hlMode = "off";
+      slot.dimMode = "none";
+      slot.selfHidden = false;
+      if (oldRobot) disposeObject3D(oldRobot);
+      if (slot.placeholder) {
+        disposeObject3D(slot.placeholder);
+        slot.placeholder = null;
+      }
+      slot.loading = false;
+      slot.loadJob = null;
+      slot.error = null;
+      slot.failureCount = 0;
+      slot.nextRetryAt = null;
+      publishLoadIssues();
+    } catch (error) {
+      if (generation !== slot.loadGeneration || isUrdfAbort(error)) return;
+      slot.loading = false;
+      slot.loadJob = null;
+      slot.failureCount += 1;
+      slot.error = error instanceof UrdfLoadError
+        ? error
+        : new UrdfLoadError([{
+            stage: "urdf-fetch",
+            url: `${prefix}/urdf`,
+            cause: error,
+          }]);
+      const delay = urdfRetryDelayMs(slot.failureCount);
+      slot.nextRetryAt = delay == null ? null : performance.now() + delay;
+      setPlaceholderFailed(slot, true);
+      console.warn(`URDF load failed: ${prefix}`, slot.error);
+      publishLoadIssues();
+    }
   }
 
   /** o 是否在某 URDF 模型的 ee_ 子树里(被绑 EE 的可视化长在宿主臂的整机模型内)。 */
@@ -224,6 +345,25 @@ export function MachineViewer({ robots, selected, spacing, machines, focusMode, 
     if (!world) return;
     const { robots, selected, spacing, machines, focusMode } = propsRef.current;
     const slots = slotsRef.current;
+    const now = performance.now();
+
+    // 短暂发现抖动保留 5s；真正离场后清理 slot。assembled 后被吸收的 EE 仍在
+    // robots 中，因此不会被误删。
+    const presentPrefixes = new Set(robots.map((robot) => robot.prefix));
+    let removedIssue = false;
+    slots.forEach((slot, prefix) => {
+      if (presentPrefixes.has(prefix)) {
+        slot.missingSince = null;
+      } else if (slot.missingSince == null) {
+        slot.missingSince = now;
+      } else if (now - slot.missingSince >= 5000) {
+        detachMountedChildren(prefix);
+        disposeSlot(slot);
+        slots.delete(prefix);
+        removedIssue ||= slot.error != null;
+      }
+    });
+    if (removedIssue) publishLoadIssues();
 
     // 被绑 EE 隐藏:同 cid 存在 assembled 臂 ⇒ 该 cid 的 ee 不单独摆(13 §1;精确映射 TODO)。
     const assembledCids = new Set<string>();
@@ -249,7 +389,27 @@ export function MachineViewer({ robots, selected, spacing, machines, focusMode, 
         box.position.z = 0.125;
         group.add(box);
         world.add(group);
-        const slot: Slot = { group, robot: null, assembled: false, kind: r.kind_name, placeholder: box, loading: false, lastFetch: 0, hlMode: "off", mountedTo: null, dimMode: "none", warned: false };
+        const slot: Slot = {
+          group,
+          robot: null,
+          assembled: false,
+          kind: r.kind_name,
+          placeholder: box,
+          loading: false,
+          lastFetch: 0,
+          sourceXml: null,
+          loadGeneration: 0,
+          loadJob: null,
+          error: null,
+          failureCount: 0,
+          nextRetryAt: null,
+          missingSince: null,
+          hlMode: "off",
+          mountedTo: null,
+          dimMode: "none",
+          selfHidden: false,
+          warned: false,
+        };
         group.userData.prefix = r.prefix; // 3D 点击选中:命中网格向上找到 slot 组
         slots.set(r.prefix, slot);
         loadUrdfInto(slot, r.prefix, r.kind_name);
@@ -268,11 +428,35 @@ export function MachineViewer({ robots, selected, spacing, machines, focusMode, 
       }
     }
 
+    // hide 模式下 selected 可能挂在另一个 slot 的 link 下。Three 的 ancestor
+    // visible=false 会连 selected 一起藏掉，所以保留 ancestor group，仅隐藏它自有 mesh。
+    const focusAncestors = new Set<string>();
+    if (focusMode === "hide" && visualSelected) {
+      let cursor = robots.find((robot) => robot.prefix === visualSelected);
+      const visited = new Set<string>();
+      while (cursor && !visited.has(cursor.prefix)) {
+        visited.add(cursor.prefix);
+        const edge = (machines[cursor.cid] ?? []).find(
+          (candidate) => `hexmeow/${cursor!.cid}/${candidate.child}` === cursor!.prefix,
+        );
+        if (!edge) break;
+        const parentPrefix = `hexmeow/${cursor.cid}/${edge.parent}`;
+        focusAncestors.add(parentPrefix);
+        cursor = robots.find((robot) => robot.prefix === parentPrefix);
+      }
+    }
+
     slots.forEach((s, prefix) => {
       const inScene = seen.has(prefix);
       // 聚焦-隐藏:非"视觉载体"隐藏(被绑 EE 选中时宿主臂 = 载体,保住不藏)
-      const focusHidden = focusMode === "hide" && !!visualSelected && prefix !== visualSelected;
+      const focusHidden = focusMode === "hide" && !!visualSelected
+        && prefix !== visualSelected && !focusAncestors.has(prefix);
       s.group.visible = inScene && !focusHidden; // 被绑 EE / 消失的 robot:隐藏但保留(再现时秒回)
+      const hideSelf = focusMode === "hide" && focusAncestors.has(prefix) && prefix !== visualSelected;
+      if (hideSelf !== s.selfHidden) {
+        s.selfHidden = hideSelf;
+        setOwnedMeshesVisible(s, !hideSelf);
+      }
     });
 
     // ── M3 拼接:machine 边把 child 挂到 parent 的 mount link 下(offset = xyz+rpy,URDF 语义)。
@@ -286,15 +470,20 @@ export function MachineViewer({ robots, selected, spacing, machines, focusMode, 
       let parentLinkObj: THREE.Object3D | null = null;
       if (edge) {
         const parentPrefix = `hexmeow/${r.cid}/${edge.parent}`;
-        const ps = slots.get(parentPrefix);
+        const ps = visible.some((candidate) => candidate.prefix === parentPrefix) ? slots.get(parentPrefix) : undefined;
         const linkObj = ps?.robot?.links?.[edge.parent_link];
-        if (linkObj) { want = `${parentPrefix}/${edge.parent_link}`; parentLinkObj = linkObj; }
+        if (linkObj) {
+          want = `${parentPrefix}/${edge.parent_link}`;
+          parentLinkObj = linkObj;
+          s.warned = false;
+        }
         else if (!s.warned && ps?.robot) {
           s.warned = true;
           console.warn(`machine: ${r.prefix} 挂载点 ${edge.parent_link} 不在 ${parentPrefix} 的 URDF 里 → 散装回退(13 §3)`);
         }
       }
-      if (s.mountedTo !== want) {
+      const desiredParent = parentLinkObj ?? world;
+      if (s.mountedTo !== want || s.group.parent !== desiredParent) {
         s.mountedTo = want;
         if (want && parentLinkObj) {
           parentLinkObj.add(s.group);
@@ -339,10 +528,13 @@ export function MachineViewer({ robots, selected, spacing, machines, focusMode, 
     });
 
     // 臂未拼装(EE 拼装比 GUI 首查晚就绪)→ 每 5s 重拉 URDF,拼好即替换成整机模型
-    const now = performance.now();
     visible.forEach((r) => {
       const s = slots.get(r.prefix);
-      if (s && s.kind === "arm" && !s.assembled && !s.loading && now - s.lastFetch > 5000) {
+      if (!s || s.loading) return;
+      if (s.error && s.nextRetryAt != null && now >= s.nextRetryAt) {
+        s.nextRetryAt = null;
+        void loadUrdfInto(s, r.prefix, r.kind_name);
+      } else if (!s.error && s.kind === "arm" && !s.assembled && now - s.lastFetch > 5000) {
         loadUrdfInto(s, r.prefix, r.kind_name);
       }
     });
@@ -368,12 +560,13 @@ export function MachineViewer({ robots, selected, spacing, machines, focusMode, 
         if (mat.userData.origOpacity === undefined) {
           mat.userData.origOpacity = mat.opacity;
           mat.userData.origTransparent = mat.transparent;
+          mat.userData.origDepthWrite = mat.depthWrite;
         }
         mat.transparent = true; mat.opacity = 0.22; mat.depthWrite = false;
       } else if (mat.userData.origOpacity !== undefined) {
         mat.opacity = mat.userData.origOpacity as number;
         mat.transparent = mat.userData.origTransparent as boolean;
-        mat.depthWrite = true;
+        mat.depthWrite = mat.userData.origDepthWrite as boolean;
       }
     };
     slots.forEach((s, prefix) => {
@@ -384,11 +577,10 @@ export function MachineViewer({ robots, selected, spacing, machines, focusMode, 
       }
       if (mode === s.dimMode) return;
       s.dimMode = mode;
-      s.group.traverse((o) => {
-        const m = o as THREE.Mesh;
+      forEachOwnedMesh(s, (m) => {
         if (m.isMesh && !Array.isArray(m.material)) {
           const mat = m.material as THREE.MeshPhongMaterial;
-          const dim = mode === "all" || (mode === "body" && !inEeSubtree(o, s.group));
+          const dim = mode === "all" || (mode === "body" && !inEeSubtree(m, s.group));
           setDim(mat, dim);
         }
       });
@@ -400,16 +592,60 @@ export function MachineViewer({ robots, selected, spacing, machines, focusMode, 
       if (prefix === visualSelected) mode = eeSubtree ? "ee" : "full";
       if (mode === s.hlMode) return;
       s.hlMode = mode;
-      s.group.traverse((o) => {
-        const m = o as THREE.Mesh;
+      forEachOwnedMesh(s, (m) => {
         if (m.isMesh && !Array.isArray(m.material)) {
           const mat = m.material as THREE.MeshPhongMaterial;
-          const lit = mode === "full" || (mode === "ee" && inEeSubtree(o, s.group));
+          const lit = mode === "full" || (mode === "ee" && inEeSubtree(m, s.group));
           if (mat.emissive) mat.emissive.set(lit ? HIGHLIGHT : 0x000000);
         }
       });
     });
   }
 
-  return <div ref={mountRef} style={{ width: "100%", height, borderRadius: 8, overflow: "hidden" }} />;
+  const retry = (prefix: string) => {
+    const slot = slotsRef.current.get(prefix);
+    const robot = propsRef.current.robots.find((candidate) => candidate.prefix === prefix);
+    if (slot && robot) void loadUrdfInto(slot, prefix, robot.kind_name, true);
+  };
+
+  return (
+    <div style={{ position: "relative", width: "100%", height }}>
+      <div ref={mountRef} style={{ width: "100%", height, borderRadius: 8, overflow: "hidden" }} />
+      {loadIssues.length > 0 && (
+        <div style={{
+          position: "absolute",
+          top: 8,
+          left: 8,
+          maxWidth: "min(620px, calc(100% - 16px))",
+          maxHeight: Math.max(100, height - 16),
+          overflow: "auto",
+          display: "grid",
+          gap: 6,
+          pointerEvents: "none",
+          zIndex: 4,
+        }}>
+          {loadIssues.map((issue) => (
+            <div key={issue.prefix} style={{
+              padding: "8px 10px",
+              border: "1px solid #a85d5d",
+              borderRadius: 6,
+              color: "#ffe5e5",
+              background: "rgba(73, 26, 30, 0.94)",
+              boxShadow: "0 2px 8px rgba(0,0,0,.35)",
+              fontSize: 12,
+              lineHeight: 1.45,
+              pointerEvents: "auto",
+            }}>
+              <div style={{ fontWeight: 700 }}>{issue.prefix}：3D 模型加载失败</div>
+              <div>{issue.keepingOldModel ? "继续显示上一版可用模型。" : "已保留占位模型，不会显示透明骨架。"}</div>
+              <pre style={{ margin: "5px 0", whiteSpace: "pre-wrap", overflowWrap: "anywhere", font: "inherit" }}>{issue.message}</pre>
+              <button type="button" onClick={() => retry(issue.prefix)} disabled={issue.retrying}>
+                {issue.retrying ? `自动重试中（失败 ${issue.failureCount} 次）` : "重试"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
