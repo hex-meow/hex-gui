@@ -12,6 +12,7 @@ mod device_registry;
 mod dfu_gate;
 mod diag;
 mod dto;
+mod friction_calibration;
 mod hopea3;
 mod hpm_dfu;
 mod imu;
@@ -72,6 +73,7 @@ fn request_safe_close(window: tauri::Window) {
 
     tauri::async_runtime::spawn(async move {
         let state = handle.state::<AppState>();
+        commands::stop_friction_calibration(&state).await;
         match tokio::time::timeout(LIFT_CLOSE_STOP_BUDGET, commands::stop_lift_session(&state))
             .await
         {
@@ -132,6 +134,9 @@ pub fn run() {
             commands::meow_clear_error,
             commands::meow_start_log,
             commands::meow_apply_can_settings,
+            commands::friction_calibration_start,
+            commands::friction_calibration_get,
+            commands::friction_calibration_stop,
             commands::apply_device_settings,
             commands::forget_offline,
             commands::set_position_preset,

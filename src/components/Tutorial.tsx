@@ -168,6 +168,37 @@ const CONTROL_SLIDES: Slide[] = [
   },
 ];
 
+const CALIBRATION_SLIDES: Slide[] = [
+  {
+    title: { en: "1 · Prepare the unloaded motor", zh: "1 · 准备空载电机" },
+    body: {
+      en: "Place the motor case stably on a flat surface. Remove every shaft load, clear the rotation envelope, and keep physical power removal ready.",
+      zh: "将电机外壳平稳放在水平桌面上，卸除输出轴负载并清空旋转范围，同时准备好物理断电。",
+    },
+  },
+  {
+    title: { en: "2 · Run bounded static passes", zh: "2 · 执行有限静摩擦测试" },
+    body: {
+      en: "The Rust worker increases the SDO torque target one bounded step at a time in each direction. Effective motion requires both displacement and velocity thresholds; detection immediately commands zero and Disabled.",
+      zh: "Rust 后端沿正反方向逐步增加 SDO 力矩目标。位移和速度必须同时超过阈值才算有效运动；检测后立即归零并失能。",
+    },
+  },
+  {
+    title: { en: "3 · Measure kinetic drag at 1 rad/s", zh: "3 · 在 1 rad/s 测量动摩擦" },
+    body: {
+      en: "The app runs unloaded Profile Velocity at +1 and -1 rad/s, waits for settled speed, then robustly averages raw actual torque and motor temperature. No friction or torque-factor compensation is active.",
+      zh: "APP 以 +1、-1 rad/s 执行空载 Profile Velocity，速度稳定后对原始实际力矩和电机温度做稳健平均。过程中不启用摩擦或力矩系数补偿。",
+    },
+  },
+  {
+    title: { en: "4 · Review and export", zh: "4 · 验收并导出" },
+    body: {
+      en: "Review the four raw command-domain Nm values and copy the JSON audit record. This measurement app does not write 0x4001; torque factor, CRC and HMAC are issued together in the later provisioning flow.",
+      zh: "检查四个修正前原始命令域 Nm 值并复制 JSON 审计记录。本测量 APP 不写 0x4001；力矩系数、CRC 和 HMAC 将在后续写入流程中统一签发。",
+    },
+  },
+];
+
 const DFU_SLIDES: Slide[] = [
   {
     title: { en: "1 · Choose transport", zh: "1 · 选择传输方式" },
@@ -292,6 +323,7 @@ export const TUTORIALS: Record<string, Slide[]> = {
   config: placeholderSlides("config"),
   canalyzer: CANALYZER_SLIDES,
   dfu: DFU_SLIDES,
+  calibration: CALIBRATION_SLIDES,
 };
 
 // Renders the slide's image/video, falling back to the placeholder caption if

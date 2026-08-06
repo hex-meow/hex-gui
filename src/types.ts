@@ -172,6 +172,58 @@ export interface MeowCanSettingsRequest {
   transmit_pdo_brs: boolean;
 }
 
+export interface FrictionCalibrationRequest {
+  node_id: number;
+  expected_vendor_id: number;
+  expected_product_code: number;
+  expected_revision_number: number;
+  expected_serial_number: number;
+  torque_step_permille: number;
+  max_torque_permille: number;
+  step_dwell_ms: number;
+  movement_position_threshold_rad: number;
+  movement_velocity_threshold_rad_per_s: number;
+  kinetic_sample_ms: number;
+}
+
+export interface FrictionCalibrationResult {
+  node_id: number;
+  vendor_id: number;
+  product_code: number;
+  revision_number: number;
+  serial_number: number;
+  peak_torque_nm: number;
+  static_pos_raw_nm: number;
+  static_neg_raw_nm: number;
+  kinetic_pos_raw_nm: number;
+  kinetic_neg_raw_nm: number;
+  static_pos_permille: number;
+  static_neg_permille: number;
+  kinetic_pos_mean_permille: number;
+  kinetic_neg_mean_permille: number;
+  kinetic_pos_stddev_permille: number;
+  kinetic_neg_stddev_permille: number;
+  kinetic_reference_speed_rad_per_s: number;
+  kinetic_pos_mean_speed_rad_per_s: number;
+  kinetic_neg_mean_speed_rad_per_s: number;
+  calibration_temperature_c: number;
+}
+
+export interface FrictionCalibrationView {
+  running: boolean;
+  phase: string;
+  progress_percent: number;
+  node_id: number | null;
+  current_command_permille: number;
+  position_rad: number | null;
+  velocity_rad_per_s: number | null;
+  actual_torque_permille: number | null;
+  motor_temperature_c: number | null;
+  result: FrictionCalibrationResult | null;
+  error: string | null;
+  cleanup_warning: string | null;
+}
+
 // ── IMU (mirrors imu::ImuState) ──
 export interface ImuState {
   node_id: number;

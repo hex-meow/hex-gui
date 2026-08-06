@@ -24,6 +24,9 @@ use crate::dto::{
     MeowCanSettingsRequestDto, MeowMotorSnapshotDto, MeowMotorTargetDto, MeowProfileLimitsDto,
     MotorInfoDto, MotorModeDto, MotorTargetDto,
 };
+use crate::friction_calibration::{
+    FrictionCalibrationRequest, FrictionCalibrationView,
+};
 use crate::state::AppState;
 use crate::zenoh_arm::{ArmInfo, ArmUrdf, ZenohArmConn, ZenohArmState};
 use crate::zenoh_base::{BaseInfo, ZenohBaseState, ZenohConn};
@@ -87,6 +90,13 @@ pub(crate) async fn stop_lift_session(state: &AppState) -> CmdResult<()> {
     Ok(())
 }
 
+/// Cancel and await the Rust-owned friction job before dropping its CAN
+/// manager. Cleanup failures remain visible in the final view but never trap
+/// the application in a connected state.
+pub(crate) async fn stop_friction_calibration(state: &AppState) {
+    let _ = state.friction_calibration.stop().await;
+}
+
 #[tauri::command]
 pub async fn connect(
     state: State<'_, AppState>,
@@ -126,9 +136,11 @@ pub async fn connect(
         ..Default::default()
     };
     let meow_mgr = MeowMotorManager::new(bus.clone(), meow_opts).map_err(err)?;
+    let calibration_bus = bus.clone();
     let mgr = Cia402Manager::new(bus, opts).map_err(err)?;
     log::info!("connected to {iface} as nid 0x{our_nid:02X}");
     *state.meow_manager.lock().await = Some(Arc::new(meow_mgr));
+    *state.calibration_bus.lock().await = Some(calibration_bus);
     *guard = Some(Arc::new(mgr));
     Ok(ConnectionInfoDto::new(
         backend_name,
@@ -143,6 +155,7 @@ pub async fn disconnect(state: State<'_, AppState>) -> CmdResult<()> {
     // touching the manager. An external disconnect therefore waits for the
     // in-flight transaction, while later transactions wait for teardown.
     let _operation = state.device_settings_operation.acquire().await;
+    stop_friction_calibration(&state).await;
     // Stop any running Robot Application first (disables its motors cleanly).
     stop_lift_session(&state).await?;
     if let (Some(app), Some(mgr)) = (state.hopea3.lock().await.take(), state.manager().await) {
@@ -166,10 +179,41 @@ pub async fn disconnect(state: State<'_, AppState>) -> CmdResult<()> {
     let mut guard = state.manager.lock().await;
     let was = guard.take().is_some();
     state.meow_manager.lock().await.take();
+    state.calibration_bus.lock().await.take();
     if was {
         log::info!("disconnected");
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn friction_calibration_start(
+    state: State<'_, AppState>,
+    request: FrictionCalibrationRequest,
+) -> CmdResult<FrictionCalibrationView> {
+    let manager = meow_manager(&state).await?;
+    let bus = state
+        .calibration_bus()
+        .await
+        .ok_or_else(|| "calibration CAN transport is unavailable".to_string())?;
+    state
+        .friction_calibration
+        .start(manager, bus, request)
+        .await
+}
+
+#[tauri::command]
+pub async fn friction_calibration_get(
+    state: State<'_, AppState>,
+) -> CmdResult<FrictionCalibrationView> {
+    Ok(state.friction_calibration.view().await)
+}
+
+#[tauri::command]
+pub async fn friction_calibration_stop(
+    state: State<'_, AppState>,
+) -> CmdResult<FrictionCalibrationView> {
+    Ok(state.friction_calibration.stop().await)
 }
 
 #[tauri::command]

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Alert, App as AntdApp, Button, Empty, Layout, Tooltip, Typography } from "antd";
 import { listen } from "@tauri-apps/api/event";
 import { api, errMsg } from "./api";
@@ -9,6 +9,7 @@ import { MotorDetail } from "./components/MotorDetail";
 import { MeowMotorPanel } from "./components/MeowMotorPanel";
 import { ImuPanel } from "./components/ImuPanel";
 import { DeviceSettingsTool } from "./components/DeviceSettingsTool";
+import { MotorFrictionCalibrationPanel } from "./components/MotorFrictionCalibrationPanel";
 import { Hopea3Panel } from "./components/Hopea3Panel";
 import { LiftPanel } from "./components/LiftPanel";
 import { SmartKnobPanel } from "./components/SmartKnobPanel";
@@ -34,6 +35,7 @@ type Tool =
   | "config"
   | "canalyzer"
   | "dfu"
+  | "calibration"
   | "console";
 
 const DEVICE_POLL_MS = 700;
@@ -57,6 +59,7 @@ export default function App() {
   // the one-shot automatic position reads. Keep navigation and disconnect
   // locked until the backend command has actually returned.
   const [settingsBusy, setSettingsBusy] = useState(false);
+  const [calibrationBusy, setCalibrationBusy] = useState(false);
 
   useEffect(() => {
     let disposed = false;
@@ -129,9 +132,16 @@ export default function App() {
       message.warning(t("settingsBusyLeave"));
       return;
     }
+    if (tool === "calibration" && calibrationBusy) {
+      message.warning(t("calibrationBusyLeave"));
+      return;
+    }
     try {
       if (tool === "dfu") {
         await Promise.all([hpmDfuApi.leave(), canDfuApi.leave()]);
+      } else if (tool === "calibration") {
+        await api.frictionCalibrationStop();
+        await api.disconnect();
       } else {
         await api.disconnect();
       }
@@ -145,7 +155,7 @@ export default function App() {
     setDevices([]);
     setTutorialOpen(false);
     setTool(null);
-  }, [dfuBusy, message, settingsBusy, t, tool]);
+  }, [calibrationBusy, dfuBusy, message, settingsBusy, t, tool]);
 
   const onToggleLog = useCallback(
     async (nid: number, on: boolean, meowMotor = false) => {
@@ -186,10 +196,15 @@ export default function App() {
     config: { title: t("toolConfig"), desc: t("toolConfigDesc") },
     canalyzer: { title: t("toolCanalyzer"), desc: t("toolCanalyzerDesc") },
     dfu: { title: t("toolDfu"), desc: t("toolDfuDesc") },
+    calibration: { title: t("toolCalibration"), desc: t("toolCalibrationDesc") },
     console: { title: t("toolConsole"), desc: t("toolConsoleDesc") },
   } satisfies Record<Tool, { title: string; desc: string }>;
   const { title: toolTitle, desc: toolDesc } = toolMeta[tool];
-  const needsHeartbeat = tool === "control" || tool === "hopea3" || tool === "smartknob";
+  const needsHeartbeat =
+    tool === "control" ||
+    tool === "hopea3" ||
+    tool === "smartknob" ||
+    tool === "calibration";
   // hopea3 / smartknob / zenoh / arm / canalyzer 都是整屏面板;zenoh/arm 走 Zenoh,
   // canalyzer 自带总线连接,都不使用顶栏的电机 ConnectBar。
   const showSidebar =
@@ -201,7 +216,8 @@ export default function App() {
     tool !== "arm" &&
     tool !== "config" &&
     tool !== "canalyzer" &&
-    tool !== "dfu";
+    tool !== "dfu" &&
+    tool !== "calibration";
   const showConnectBar =
     tool !== "console" &&
     tool !== "zenoh" &&
@@ -219,7 +235,8 @@ export default function App() {
             size="small"
             disabled={
               (tool === "dfu" && dfuBusy) ||
-              (tool === "settings" && settingsBusy)
+              (tool === "settings" && settingsBusy) ||
+              (tool === "calibration" && calibrationBusy)
             }
             onClick={switchTool}
           >
@@ -249,7 +266,10 @@ export default function App() {
               onChange={onConnChange}
               broadcastHeartbeat={needsHeartbeat}
               devices={devices}
-              disconnectDisabled={tool === "settings" && settingsBusy}
+              disconnectDisabled={
+                (tool === "settings" && settingsBusy) ||
+                (tool === "calibration" && calibrationBusy)
+              }
             />
           </section>
         )}
@@ -291,6 +311,12 @@ export default function App() {
             <CanAnalyzerPanel />
           ) : tool === "dfu" ? (
             <DfuPanel onBusyChange={setDfuBusy} />
+          ) : tool === "calibration" ? (
+            <MotorFrictionCalibrationPanel
+              connected={connected}
+              devices={devices}
+              onRunningChange={setCalibrationBusy}
+            />
           ) : tool === "settings" ? (
             selected?.device_type === "meow_motor" ? (
               <MeowMotorPanel
@@ -355,7 +381,38 @@ export default function App() {
 }
 
 function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
+  const { message } = AntdApp.useApp();
   const { t, lang, toggle } = useI18n();
+  const [developerMode, setDeveloperMode] = useState(() => {
+    try {
+      return window.localStorage.getItem("hex-motor-gui.developer-tools") === "enabled";
+    } catch {
+      return false;
+    }
+  });
+  const titleTap = useRef({ count: 0, lastAt: 0 });
+
+  const unlockDeveloperTools = () => {
+    if (developerMode) return;
+    const now = Date.now();
+    if (now - titleTap.current.lastAt > 1_500) titleTap.current.count = 0;
+    titleTap.current.lastAt = now;
+    titleTap.current.count += 1;
+    const remaining = 7 - titleTap.current.count;
+    if (remaining <= 0) {
+      try {
+        window.localStorage.setItem("hex-motor-gui.developer-tools", "enabled");
+      } catch {
+        // The mode remains enabled for this WebView session.
+      }
+      setDeveloperMode(true);
+      message.success(t("developerModeEnabled"));
+      return;
+    }
+    if (remaining <= 3) {
+      message.info(t("developerModeRemaining").replace("{count}", String(remaining)));
+    }
+  };
   return (
     <div className="tool-picker">
       <div className="tool-picker__actions">
@@ -369,7 +426,12 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
       <div className="tool-picker__inner">
         <header className="tool-picker__hero">
           <p className="tool-picker__eyebrow">{t("toolPickerEyebrow")}</p>
-          <h1>{t("toolPickerTitle")}</h1>
+          <h1
+            onClick={unlockDeveloperTools}
+            style={{ cursor: developerMode ? "default" : "pointer", userSelect: "none" }}
+          >
+            {t("toolPickerTitle")}
+          </h1>
           <p>{t("toolPickerLead")}</p>
         </header>
 
@@ -433,6 +495,15 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
         </ToolSection>
 
         <ToolSection title={t("catTools")} hint={t("catToolsHint")}>
+          {developerMode && (
+            <ToolCard
+              title={t("toolCalibration")}
+              desc={t("toolCalibrationDesc")}
+              tag={t("tagCalibration")}
+              accent="pink"
+              onClick={() => onPick("calibration")}
+            />
+          )}
           <ToolCard
             title={t("toolSettings")}
             desc={t("toolSettingsDesc")}

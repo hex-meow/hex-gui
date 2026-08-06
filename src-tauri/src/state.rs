@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
+use can_transport::CanBus;
 use hex_motor::cia402::Cia402Manager;
 use hex_motor::meow_motor::MeowMotorManager;
 use tokio::sync::{Mutex, MutexGuard};
@@ -69,6 +70,12 @@ pub struct AppState {
     /// Independent manager for the new protocol, sharing the same CAN transport. It never
     /// broadcasts a second host heartbeat and performs identification only on explicit GUI use.
     pub meow_manager: Mutex<Option<Arc<MeowMotorManager>>>,
+    /// Shared transport retained for the calibration worker's strictly
+    /// serialized raw SDO snapshot/restore of 0x1016 and runtime limits.
+    pub calibration_bus: Mutex<Option<Arc<dyn CanBus>>>,
+    /// Developer-only unloaded friction calibration. Its Rust task owns the
+    /// complete bounded motion sequence and safe cleanup.
+    pub friction_calibration: crate::friction_calibration::FrictionCalibrationState,
     /// Global settings/position/disconnect lock. Commands always acquire this
     /// before cloning or locking the manager to keep lock ordering acyclic.
     pub(crate) device_settings_operation: DeviceSettingsOperationGate,
@@ -118,6 +125,10 @@ impl AppState {
 
     pub async fn meow_manager(&self) -> Option<Arc<MeowMotorManager>> {
         self.meow_manager.lock().await.clone()
+    }
+
+    pub async fn calibration_bus(&self) -> Option<Arc<dyn CanBus>> {
+        self.calibration_bus.lock().await.clone()
     }
 
     /// Take a log handle out of the map (for stopping), if present.

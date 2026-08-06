@@ -111,6 +111,10 @@ const STRINGS = {
     en: "A device-settings transaction is still running. Wait for it to finish, then close the window again.",
     zh: "设备设置事务仍在执行。请等待完成后再次关闭窗口。",
   },
+  calibrationBusyLeave: {
+    en: "Abort the calibration and wait for Disabled before leaving this tool.",
+    zh: "请先中止标定并等待电机确认 Disabled，再离开此工具。",
+  },
 
   // Sidebar
   motors: { en: "Motors", zh: "电机" },
@@ -393,12 +397,25 @@ const STRINGS = {
   // Tool selector
   toolControl: { en: "Motor Control", zh: "电机控制" },
   toolSettings: { en: "Device Settings", zh: "设备设置" },
+  toolCalibration: { en: "Motor Calibration", zh: "电机校准" },
+  toolCalibrationDesc: {
+    en: "Developer-only unloaded static/kinetic friction measurement for new-protocol motors.",
+    zh: "开发者专用：测量新协议电机空载时的静摩擦与动摩擦。",
+  },
   pickTool: { en: "Pick a tool", zh: "选择工具" },
   toolPickerEyebrow: { en: "Tool launcher", zh: "工具启动器" },
   toolPickerTitle: { en: "Pick a workspace", zh: "选择工作区" },
   toolPickerLead: {
     en: "Choose a motor-control workflow, a raw CAN bus or robot application, or a utility for setup and diagnostics.",
     zh: "选择电机控制工作流、原始 CAN 总线或机器人应用，或用于配置与诊断的工具。",
+  },
+  developerModeEnabled: {
+    en: "Developer tools enabled",
+    zh: "开发者工具已启用",
+  },
+  developerModeRemaining: {
+    en: "{count} more taps to enable developer tools",
+    zh: "再点击 {count} 次即可启用开发者工具",
   },
   toolControlDesc: { en: "Discover, drive, chart & log motors.", zh: "发现、控制、绘图、记录电机。" },
   toolSettingsDesc: {
