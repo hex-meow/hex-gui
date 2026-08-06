@@ -397,8 +397,8 @@ const STRINGS = {
   toolPickerEyebrow: { en: "Tool launcher", zh: "工具启动器" },
   toolPickerTitle: { en: "Pick a workspace", zh: "选择工作区" },
   toolPickerLead: {
-    en: "Choose a motor-control workflow, a robot application, or a utility for setup and diagnostics.",
-    zh: "选择电机控制工作流、机器人应用，或用于配置与诊断的工具。",
+    en: "Choose a motor-control workflow, a raw CAN bus or robot application, or a utility for setup and diagnostics.",
+    zh: "选择电机控制工作流、原始 CAN 总线或机器人应用，或用于配置与诊断的工具。",
   },
   toolControlDesc: { en: "Discover, drive, chart & log motors.", zh: "发现、控制、绘图、记录电机。" },
   toolSettingsDesc: {
@@ -410,6 +410,8 @@ const STRINGS = {
   // Tool categories + Robot Application
   catMotorControl: { en: "Motor Control", zh: "电机控制" },
   catMotorControlHint: { en: "Single-motor workflows", zh: "单电机工作流" },
+  catRawCanApp: { en: "Raw CAN Bus Application", zh: "原始 CAN 总线应用" },
+  catRawCanAppHint: { en: "Applications that control devices directly over CAN", zh: "通过 CAN 直接控制设备的应用" },
   catTools: { en: "Tools", zh: "工具" },
   catToolsHint: { en: "Setup, calibration and bus inspection", zh: "配置、标定与总线检查" },
   catDirectControl: { en: "Direct Control", zh: "直接控制" },

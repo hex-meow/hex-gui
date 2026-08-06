@@ -381,36 +381,15 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
             accent="blue"
             onClick={() => onPick("control")}
           />
+        </ToolSection>
+
+        <ToolSection title={t("catRawCanApp")} hint={t("catRawCanAppHint")}>
           <ToolCard
             title={t("toolSmartKnob")}
             desc={t("toolSmartKnobDesc")}
             tag={t("tagHaptics")}
             accent="lime"
             onClick={() => onPick("smartknob")}
-          />
-        </ToolSection>
-
-        <ToolSection title={t("catRobotApp")} hint={t("catRobotAppHint")}>
-          <ToolCard
-            title={t("toolConsole")}
-            desc={t("toolConsoleDesc")}
-            tag={t("tagRobotApi")}
-            accent="cyan"
-            onClick={() => onPick("console")}
-          />
-          <ToolCard
-            title={t("toolBaseZenoh")}
-            desc={t("toolBaseZenohDesc")}
-            tag={t("tagRobotApi")}
-            accent="purple"
-            onClick={() => onPick("zenoh")}
-          />
-          <ToolCard
-            title={t("toolArmZenoh")}
-            desc={t("toolArmZenohDesc")}
-            tag={t("tagManipulator")}
-            accent="pink"
-            onClick={() => onPick("arm")}
           />
           <ToolCard
             title={t("toolHopeA3")}
@@ -425,6 +404,24 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
             tag={t("tagLift")}
             accent="green"
             onClick={() => onPick("lift")}
+          />
+        </ToolSection>
+
+        <ToolSection title={t("catRobotApp")} hint={t("catRobotAppHint")}>
+          {/* TODO: Robot Console is unfinished; keep it hidden from the launcher. */}
+          <ToolCard
+            title={t("toolBaseZenoh")}
+            desc={t("toolBaseZenohDesc")}
+            tag={t("tagRobotApi")}
+            accent="purple"
+            onClick={() => onPick("zenoh")}
+          />
+          <ToolCard
+            title={t("toolArmZenoh")}
+            desc={t("toolArmZenohDesc")}
+            tag={t("tagManipulator")}
+            accent="pink"
+            onClick={() => onPick("arm")}
           />
           <ToolCard
             title={t("toolConfig")}
