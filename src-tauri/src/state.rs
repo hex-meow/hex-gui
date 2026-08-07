@@ -73,9 +73,17 @@ pub struct AppState {
     /// Shared transport retained for the calibration worker's strictly
     /// serialized raw SDO snapshot/restore of 0x1016 and runtime limits.
     pub calibration_bus: Mutex<Option<Arc<dyn CanBus>>>,
+    /// Host NID selected in the connection bar. Calibration workers use it
+    /// for operation-scoped heartbeat traffic and stop it before becoming
+    /// ready for motor hot-swap.
+    pub calibration_host_node_id: Mutex<Option<u8>>,
+    /// Serializes the cross-tool check/start transition so friction and torque
+    /// calibration cannot race into concurrent ownership of one motor bus.
+    pub calibration_start_gate: Mutex<()>,
     /// Developer-only unloaded friction calibration. Its Rust task owns the
     /// complete bounded motion sequence and safe cleanup.
     pub friction_calibration: crate::friction_calibration::FrictionCalibrationState,
+    pub torque_calibration: crate::torque_calibration::TorqueCalibrationState,
     /// Global settings/position/disconnect lock. Commands always acquire this
     /// before cloning or locking the manager to keep lock ordering acyclic.
     pub(crate) device_settings_operation: DeviceSettingsOperationGate,
@@ -129,6 +137,10 @@ impl AppState {
 
     pub async fn calibration_bus(&self) -> Option<Arc<dyn CanBus>> {
         self.calibration_bus.lock().await.clone()
+    }
+
+    pub async fn calibration_host_node_id(&self) -> Option<u8> {
+        *self.calibration_host_node_id.lock().await
     }
 
     /// Take a log handle out of the map (for stopping), if present.

@@ -5,6 +5,7 @@
 
 mod analyzer;
 mod backend;
+mod calibration_transport;
 mod can_lease;
 mod cobs_can_iap_profiles;
 mod commands;
@@ -24,6 +25,7 @@ mod smartknob;
 mod state;
 mod stm32_can_dfu;
 mod stm32_can_profiles;
+mod torque_calibration;
 mod zenoh_arm;
 mod zenoh_base;
 mod zenoh_config;
@@ -74,6 +76,7 @@ fn request_safe_close(window: tauri::Window) {
     tauri::async_runtime::spawn(async move {
         let state = handle.state::<AppState>();
         commands::stop_friction_calibration(&state).await;
+        commands::stop_torque_calibration(&state).await;
         match tokio::time::timeout(LIFT_CLOSE_STOP_BUDGET, commands::stop_lift_session(&state))
             .await
         {
@@ -137,6 +140,10 @@ pub fn run() {
             commands::friction_calibration_start,
             commands::friction_calibration_get,
             commands::friction_calibration_stop,
+            commands::torque_calibration_start,
+            commands::torque_calibration_acceptance_start,
+            commands::torque_calibration_get,
+            commands::torque_calibration_stop,
             commands::apply_device_settings,
             commands::forget_offline,
             commands::set_position_preset,

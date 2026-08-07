@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
+use crate::calibration_transport::CalibrationHeartbeat;
+
 const KINETIC_REFERENCE_SPEED_RAD_PER_S: f64 = 1.0;
 const KINETIC_MEAN_SPEED_TOLERANCE_RAD_PER_S: f64 = 0.15;
 const KINETIC_SPEED_STDDEV_LIMIT_RAD_PER_S: f64 = 0.25;
@@ -162,6 +164,7 @@ impl FrictionCalibrationState {
         &self,
         manager: Arc<MeowMotorManager>,
         bus: Arc<dyn CanBus>,
+        host_node_id: u8,
         request: FrictionCalibrationRequest,
     ) -> Result<FrictionCalibrationView, String> {
         request.validate()?;
@@ -192,7 +195,14 @@ impl FrictionCalibrationState {
 
         let shared = self.inner.clone();
         let task = tokio::spawn(async move {
-            let outcome = run_and_cleanup(&shared, &manager, &bus, request, &cancel).await;
+            let outcome = match CalibrationHeartbeat::start(bus.clone(), host_node_id) {
+                Ok(heartbeat) => {
+                    let outcome = run_and_cleanup(&shared, &manager, &bus, request, &cancel).await;
+                    heartbeat.stop().await;
+                    outcome
+                }
+                Err(error) => Err(error),
+            };
             let mut session = shared.lock().await;
             session.view.running = false;
             session.view.current_command_permille = 0;
@@ -233,14 +243,14 @@ impl FrictionCalibrationState {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct RuntimeSettings {
+pub(crate) struct RuntimeSettings {
     consumer_heartbeat: u32,
     max_torque_permille: u16,
     profile_limits: MeowProfileLimits,
 }
 
 impl RuntimeSettings {
-    async fn read(bus: &dyn CanBus, node_id: u8) -> Result<Self, String> {
+    pub(crate) async fn read(bus: &dyn CanBus, node_id: u8) -> Result<Self, String> {
         let timeout = Some(Duration::from_millis(500));
         let consumer_heartbeat = sdo::upload_u32(bus, node_id, 0x1016, 1, timeout)
             .await
@@ -715,7 +725,7 @@ async fn stop_current_mode(
     manager.disable(node_id).await.map_err(to_string)
 }
 
-async fn safe_cleanup(
+pub(crate) async fn safe_cleanup(
     manager: &MeowMotorManager,
     bus: &dyn CanBus,
     node_id: u8,
@@ -1004,6 +1014,7 @@ mod tests {
             .start(
                 manager,
                 bus,
+                10,
                 FrictionCalibrationRequest {
                     expected_vendor_id: 0x0068_6578,
                     expected_product_code: 0x6C64_BC78,

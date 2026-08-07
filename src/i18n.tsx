@@ -397,10 +397,18 @@ const STRINGS = {
   // Tool selector
   toolControl: { en: "Motor Control", zh: "电机控制" },
   toolSettings: { en: "Device Settings", zh: "设备设置" },
-  toolCalibration: { en: "Motor Calibration", zh: "电机校准" },
+  toolCalibration: { en: "Motor Friction Calibration", zh: "电机摩擦力标定" },
   toolCalibrationDesc: {
     en: "Developer-only unloaded static/kinetic friction measurement for new-protocol motors.",
     zh: "开发者专用：测量新协议电机空载时的静摩擦与动摩擦。",
+  },
+  toolTorqueCalibration: {
+    en: "Motor Torque-Factor Calibration",
+    zh: "电机力矩系数标定",
+  },
+  toolTorqueCalibrationDesc: {
+    en: "Developer-only 1000 Hz host-controlled MIT sweep and no-friction acceptance mode.",
+    zh: "开发者专用：重力工装 1000 Hz 主机 MIT 双向扫掠与无摩擦补偿验收。",
   },
   pickTool: { en: "Pick a tool", zh: "选择工具" },
   toolPickerEyebrow: { en: "Tool launcher", zh: "工具启动器" },

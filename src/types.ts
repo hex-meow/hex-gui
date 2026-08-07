@@ -224,6 +224,116 @@ export interface FrictionCalibrationView {
   cleanup_warning: string | null;
 }
 
+export interface TorqueCalibrationRequest {
+  node_id: number;
+  expected_vendor_id: number;
+  expected_product_code: number;
+  expected_revision_number: number;
+  expected_serial_number: number;
+  mass_kg: number;
+  center_distance_m: number;
+  sweep_speed_rad_per_s: number;
+  sweep_acceleration_rad_per_s2: number;
+  sweep_cycles: number;
+  controller_kp_nm_per_rad: number;
+  controller_kd_nm_s_per_rad: number;
+  max_torque_permille: number;
+}
+
+export interface TorqueFitPoint {
+  angle_deg: number;
+  gravity_torque_nm: number;
+  forward_raw_nm: number;
+  reverse_raw_nm: number;
+  midpoint_raw_nm: number;
+  fitted_raw_nm: number;
+  friction_half_difference_raw_nm: number;
+  corrected_residual_nm: number;
+  forward_stddev_raw_nm: number;
+  reverse_stddev_raw_nm: number;
+  forward_samples: number;
+  reverse_samples: number;
+}
+
+export interface TorquePassSummary {
+  cycle: number;
+  direction: "forward" | "reverse";
+  accepted_samples: number;
+  rejected_samples: number;
+  mean_velocity_rad_per_s: number;
+  velocity_stddev_rad_per_s: number;
+  peak_absolute_velocity_rad_per_s: number;
+  peak_tracking_error_deg: number;
+  minimum_raw_torque_nm: number;
+  maximum_raw_torque_nm: number;
+}
+
+export interface TorqueCalibrationResult {
+  node_id: number;
+  vendor_id: number;
+  product_code: number;
+  revision_number: number;
+  serial_number: number;
+  mass_kg: number;
+  center_distance_m: number;
+  standard_gravity_m_per_s2: number;
+  maximum_gravity_torque_nm: number;
+  peak_torque_nm: number;
+  torque_factor: number;
+  torque_fit_rmse_nm: number;
+  positive_torque_factor: number;
+  negative_torque_factor: number;
+  directional_asymmetry_percent: number;
+  mean_hysteresis_half_width_raw_nm: number;
+  forward_friction_offset_raw_nm: number;
+  reverse_friction_offset_raw_nm: number;
+  calibration_temperature_c: number;
+  zero_position_raw: number;
+  sweep_endpoint_deg: number;
+  fit_angle_limit_deg: number;
+  sweep_speed_rad_per_s: number;
+  sweep_acceleration_rad_per_s2: number;
+  sweep_cycles: number;
+  control_rate_hz: number;
+  controller_kp_nm_per_rad: number;
+  controller_kd_nm_s_per_rad: number;
+  max_torque_permille: number;
+  accepted_sample_count: number;
+  rejected_sample_count: number;
+  pass_summaries: TorquePassSummary[];
+  fit_points: TorqueFitPoint[];
+}
+
+export interface TorqueCalibrationView {
+  running: boolean;
+  acceptance_active: boolean;
+  traffic_active: boolean;
+  phase: string;
+  progress_percent: number;
+  node_id: number | null;
+  current_command_permille: number;
+  current_command_nm: number;
+  angle_deg: number | null;
+  target_angle_deg: number | null;
+  trajectory_angle_deg: number | null;
+  trajectory_velocity_rad_per_s: number | null;
+  tracking_error_deg: number | null;
+  velocity_rad_per_s: number | null;
+  acceleration_rad_per_s2: number | null;
+  actual_torque_permille: number | null;
+  actual_torque_nm: number | null;
+  motor_temperature_c: number | null;
+  current_pass: number;
+  total_passes: number;
+  accepted_samples: number;
+  rejected_samples: number;
+  sample_valid: boolean;
+  sample_rejection_reason: string | null;
+  result: TorqueCalibrationResult | null;
+  error: string | null;
+  cleanup_warning: string | null;
+}
+
 // ── IMU (mirrors imu::ImuState) ──
 export interface ImuState {
   node_id: number;

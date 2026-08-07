@@ -24,10 +24,9 @@ use crate::dto::{
     MeowCanSettingsRequestDto, MeowMotorSnapshotDto, MeowMotorTargetDto, MeowProfileLimitsDto,
     MotorInfoDto, MotorModeDto, MotorTargetDto,
 };
-use crate::friction_calibration::{
-    FrictionCalibrationRequest, FrictionCalibrationView,
-};
+use crate::friction_calibration::{FrictionCalibrationRequest, FrictionCalibrationView};
 use crate::state::AppState;
+use crate::torque_calibration::{TorqueCalibrationRequest, TorqueCalibrationView};
 use crate::zenoh_arm::{ArmInfo, ArmUrdf, ZenohArmConn, ZenohArmState};
 use crate::zenoh_base::{BaseInfo, ZenohBaseState, ZenohConn};
 use crate::zenoh_config::{
@@ -97,6 +96,10 @@ pub(crate) async fn stop_friction_calibration(state: &AppState) {
     let _ = state.friction_calibration.stop().await;
 }
 
+pub(crate) async fn stop_torque_calibration(state: &AppState) {
+    let _ = state.torque_calibration.stop().await;
+}
+
 #[tauri::command]
 pub async fn connect(
     state: State<'_, AppState>,
@@ -141,6 +144,7 @@ pub async fn connect(
     log::info!("connected to {iface} as nid 0x{our_nid:02X}");
     *state.meow_manager.lock().await = Some(Arc::new(meow_mgr));
     *state.calibration_bus.lock().await = Some(calibration_bus);
+    *state.calibration_host_node_id.lock().await = Some(our_nid);
     *guard = Some(Arc::new(mgr));
     Ok(ConnectionInfoDto::new(
         backend_name,
@@ -156,6 +160,7 @@ pub async fn disconnect(state: State<'_, AppState>) -> CmdResult<()> {
     // in-flight transaction, while later transactions wait for teardown.
     let _operation = state.device_settings_operation.acquire().await;
     stop_friction_calibration(&state).await;
+    state.torque_calibration.reset().await;
     // Stop any running Robot Application first (disables its motors cleanly).
     stop_lift_session(&state).await?;
     if let (Some(app), Some(mgr)) = (state.hopea3.lock().await.take(), state.manager().await) {
@@ -180,6 +185,7 @@ pub async fn disconnect(state: State<'_, AppState>) -> CmdResult<()> {
     let was = guard.take().is_some();
     state.meow_manager.lock().await.take();
     state.calibration_bus.lock().await.take();
+    state.calibration_host_node_id.lock().await.take();
     if was {
         log::info!("disconnected");
     }
@@ -191,14 +197,23 @@ pub async fn friction_calibration_start(
     state: State<'_, AppState>,
     request: FrictionCalibrationRequest,
 ) -> CmdResult<FrictionCalibrationView> {
+    let _start = state.calibration_start_gate.lock().await;
+    let torque = state.torque_calibration.view().await;
+    if torque.running || torque.acceptance_active {
+        return Err("torque calibration already owns the motor bus".into());
+    }
     let manager = meow_manager(&state).await?;
     let bus = state
         .calibration_bus()
         .await
         .ok_or_else(|| "calibration CAN transport is unavailable".to_string())?;
+    let host_node_id = state
+        .calibration_host_node_id()
+        .await
+        .ok_or_else(|| "calibration host node ID is unavailable".to_string())?;
     state
         .friction_calibration
-        .start(manager, bus, request)
+        .start(manager, bus, host_node_id, request)
         .await
 }
 
@@ -214,6 +229,67 @@ pub async fn friction_calibration_stop(
     state: State<'_, AppState>,
 ) -> CmdResult<FrictionCalibrationView> {
     Ok(state.friction_calibration.stop().await)
+}
+
+#[tauri::command]
+pub async fn torque_calibration_start(
+    state: State<'_, AppState>,
+    request: TorqueCalibrationRequest,
+) -> CmdResult<TorqueCalibrationView> {
+    let _start = state.calibration_start_gate.lock().await;
+    if state.friction_calibration.view().await.running {
+        return Err("friction calibration already owns the motor bus".into());
+    }
+    let manager = meow_manager(&state).await?;
+    let bus = state
+        .calibration_bus()
+        .await
+        .ok_or_else(|| "calibration CAN transport is unavailable".to_string())?;
+    let host_node_id = state
+        .calibration_host_node_id()
+        .await
+        .ok_or_else(|| "calibration host node ID is unavailable".to_string())?;
+    state
+        .torque_calibration
+        .start_measurement(manager, bus, host_node_id, request)
+        .await
+}
+
+#[tauri::command]
+pub async fn torque_calibration_acceptance_start(
+    state: State<'_, AppState>,
+) -> CmdResult<TorqueCalibrationView> {
+    let _start = state.calibration_start_gate.lock().await;
+    if state.friction_calibration.view().await.running {
+        return Err("friction calibration already owns the motor bus".into());
+    }
+    let manager = meow_manager(&state).await?;
+    let bus = state
+        .calibration_bus()
+        .await
+        .ok_or_else(|| "calibration CAN transport is unavailable".to_string())?;
+    let host_node_id = state
+        .calibration_host_node_id()
+        .await
+        .ok_or_else(|| "calibration host node ID is unavailable".to_string())?;
+    state
+        .torque_calibration
+        .start_acceptance(manager, bus, host_node_id)
+        .await
+}
+
+#[tauri::command]
+pub async fn torque_calibration_get(
+    state: State<'_, AppState>,
+) -> CmdResult<TorqueCalibrationView> {
+    Ok(state.torque_calibration.view().await)
+}
+
+#[tauri::command]
+pub async fn torque_calibration_stop(
+    state: State<'_, AppState>,
+) -> CmdResult<TorqueCalibrationView> {
+    Ok(state.torque_calibration.stop().await)
 }
 
 #[tauri::command]

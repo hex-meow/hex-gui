@@ -10,6 +10,7 @@ import { MeowMotorPanel } from "./components/MeowMotorPanel";
 import { ImuPanel } from "./components/ImuPanel";
 import { DeviceSettingsTool } from "./components/DeviceSettingsTool";
 import { MotorFrictionCalibrationPanel } from "./components/MotorFrictionCalibrationPanel";
+import { MotorTorqueCalibrationPanel } from "./components/MotorTorqueCalibrationPanel";
 import { Hopea3Panel } from "./components/Hopea3Panel";
 import { LiftPanel } from "./components/LiftPanel";
 import { SmartKnobPanel } from "./components/SmartKnobPanel";
@@ -36,6 +37,7 @@ type Tool =
   | "canalyzer"
   | "dfu"
   | "calibration"
+  | "torqueCalibration"
   | "console";
 
 const DEVICE_POLL_MS = 700;
@@ -132,16 +134,13 @@ export default function App() {
       message.warning(t("settingsBusyLeave"));
       return;
     }
-    if (tool === "calibration" && calibrationBusy) {
+    if ((tool === "calibration" || tool === "torqueCalibration") && calibrationBusy) {
       message.warning(t("calibrationBusyLeave"));
       return;
     }
     try {
       if (tool === "dfu") {
         await Promise.all([hpmDfuApi.leave(), canDfuApi.leave()]);
-      } else if (tool === "calibration") {
-        await api.frictionCalibrationStop();
-        await api.disconnect();
       } else {
         await api.disconnect();
       }
@@ -197,14 +196,17 @@ export default function App() {
     canalyzer: { title: t("toolCanalyzer"), desc: t("toolCanalyzerDesc") },
     dfu: { title: t("toolDfu"), desc: t("toolDfuDesc") },
     calibration: { title: t("toolCalibration"), desc: t("toolCalibrationDesc") },
+    torqueCalibration: {
+      title: t("toolTorqueCalibration"),
+      desc: t("toolTorqueCalibrationDesc"),
+    },
     console: { title: t("toolConsole"), desc: t("toolConsoleDesc") },
   } satisfies Record<Tool, { title: string; desc: string }>;
   const { title: toolTitle, desc: toolDesc } = toolMeta[tool];
   const needsHeartbeat =
     tool === "control" ||
     tool === "hopea3" ||
-    tool === "smartknob" ||
-    tool === "calibration";
+    tool === "smartknob";
   // hopea3 / smartknob / zenoh / arm / canalyzer 都是整屏面板;zenoh/arm 走 Zenoh,
   // canalyzer 自带总线连接,都不使用顶栏的电机 ConnectBar。
   const showSidebar =
@@ -217,7 +219,8 @@ export default function App() {
     tool !== "config" &&
     tool !== "canalyzer" &&
     tool !== "dfu" &&
-    tool !== "calibration";
+    tool !== "calibration" &&
+    tool !== "torqueCalibration";
   const showConnectBar =
     tool !== "console" &&
     tool !== "zenoh" &&
@@ -236,7 +239,7 @@ export default function App() {
             disabled={
               (tool === "dfu" && dfuBusy) ||
               (tool === "settings" && settingsBusy) ||
-              (tool === "calibration" && calibrationBusy)
+              ((tool === "calibration" || tool === "torqueCalibration") && calibrationBusy)
             }
             onClick={switchTool}
           >
@@ -268,7 +271,7 @@ export default function App() {
               devices={devices}
               disconnectDisabled={
                 (tool === "settings" && settingsBusy) ||
-                (tool === "calibration" && calibrationBusy)
+                ((tool === "calibration" || tool === "torqueCalibration") && calibrationBusy)
               }
             />
           </section>
@@ -313,6 +316,12 @@ export default function App() {
             <DfuPanel onBusyChange={setDfuBusy} />
           ) : tool === "calibration" ? (
             <MotorFrictionCalibrationPanel
+              connected={connected}
+              devices={devices}
+              onRunningChange={setCalibrationBusy}
+            />
+          ) : tool === "torqueCalibration" ? (
+            <MotorTorqueCalibrationPanel
               connected={connected}
               devices={devices}
               onRunningChange={setCalibrationBusy}
@@ -496,13 +505,22 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
 
         <ToolSection title={t("catTools")} hint={t("catToolsHint")}>
           {developerMode && (
-            <ToolCard
-              title={t("toolCalibration")}
-              desc={t("toolCalibrationDesc")}
-              tag={t("tagCalibration")}
-              accent="pink"
-              onClick={() => onPick("calibration")}
-            />
+            <>
+              <ToolCard
+                title={t("toolCalibration")}
+                desc={t("toolCalibrationDesc")}
+                tag={t("tagCalibration")}
+                accent="pink"
+                onClick={() => onPick("calibration")}
+              />
+              <ToolCard
+                title={t("toolTorqueCalibration")}
+                desc={t("toolTorqueCalibrationDesc")}
+                tag={t("tagCalibration")}
+                accent="orange"
+                onClick={() => onPick("torqueCalibration")}
+              />
+            </>
           )}
           <ToolCard
             title={t("toolSettings")}

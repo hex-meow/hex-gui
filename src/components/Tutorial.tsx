@@ -199,6 +199,37 @@ const CALIBRATION_SLIDES: Slide[] = [
   },
 ];
 
+const TORQUE_CALIBRATION_SLIDES: Slide[] = [
+  {
+    title: { en: "1 · Mount and clear the fixture", zh: "1 · 安装并清空工装" },
+    body: {
+      en: "Lay the motor on its side. The light lever and 1 kg mass at 0.27 m must pass both ±65° endpoints freely. Keep immediate physical power removal ready.",
+      zh: "电机侧放；轻质杆与中心距 0.27 m 的 1 kg 负重必须能自由通过两侧 ±65° 端点；保持可立即物理断电。",
+    },
+  },
+  {
+    title: { en: "2 · Capture the low point", zh: "2 · 采集最低点" },
+    body: {
+      en: "With the motor Disabled, the backend waits for the lever to hang still and records that encoder value as local zero. No position object is rewritten.",
+      zh: "电机保持 Disabled，后端等待杆自然静止并把该编码器位置作为本地零点，不改写任何位置对象。",
+    },
+  },
+  {
+    title: { en: "3 · Pair host-controlled MIT traversals", zh: "3 · 配对主机 MIT 原始数据" },
+    body: {
+      en: "Rust generates a speed/acceleration-limited trajectory and streams a host PD plus nominal-gravity Tff over compressed MIT at 1000 Hz. At the same signed angle, forward and reverse raw 0x4577 values are averaged before the through-origin fit. Only ±60° is fitted.",
+      zh: "Rust 生成限速、限加速度轨迹，并以 1000 Hz compressed MIT 发送主机 PD 与名义重力 Tff；在相同有符号角度对正向与反向的原始 0x4577 取平均后进行过原点拟合；只拟合 ±60°。",
+    },
+  },
+  {
+    title: { en: "4 · Acceptance and silence", zh: "4 · 验收与静默" },
+    body: {
+      en: "Acceptance streams 100 Hz compressed-MIT gravity torque with kp=kd=0 and no friction term. Ending either operation zeros and Disables the motor, restores settings, then stops PDO and host heartbeat traffic.",
+      zh: "验收以 100 Hz compressed-MIT 发送纯重力矩，kp=kd=0 且不含摩擦项。结束任一操作都会归零、失能、恢复参数，并停止 PDO 与主机心跳。",
+    },
+  },
+];
+
 const DFU_SLIDES: Slide[] = [
   {
     title: { en: "1 · Choose transport", zh: "1 · 选择传输方式" },
@@ -324,6 +355,7 @@ export const TUTORIALS: Record<string, Slide[]> = {
   canalyzer: CANALYZER_SLIDES,
   dfu: DFU_SLIDES,
   calibration: CALIBRATION_SLIDES,
+  torqueCalibration: TORQUE_CALIBRATION_SLIDES,
 };
 
 // Renders the slide's image/video, falling back to the placeholder caption if
