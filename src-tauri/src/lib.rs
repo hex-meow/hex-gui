@@ -4,6 +4,7 @@
 //! `#[tauri::command]` defined in [`commands`].
 
 mod analyzer;
+mod authenticity;
 mod backend;
 mod calibration_transport;
 mod can_lease;
@@ -118,6 +119,9 @@ pub fn run() {
             commands::disconnect,
             commands::is_connected,
             commands::list_devices,
+            authenticity::authenticity_inspect,
+            authenticity::authenticity_verify_online,
+            authenticity::authenticity_register,
             commands::identify,
             commands::initialize,
             commands::initialize_all,

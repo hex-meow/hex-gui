@@ -339,6 +339,30 @@ const CANALYZER_SLIDES: Slide[] = [
   },
 ];
 
+const AUTHENTICITY_SLIDES: Slide[] = [
+  {
+    title: { en: "1 · Connect and wait for heartbeats", zh: "1 · 连接并等待心跳" },
+    body: {
+      en: "The app identifies heartbeat nodes through their complete 0x1018 record. Unknown products remain visible to discovery but never receive proprietary proof reads.",
+      zh: "APP 通过完整 0x1018 识别心跳节点。未知产品仍可被发现，但不会收到任何专用证明读取。",
+    },
+  },
+  {
+    title: { en: "2 · Read source and registration separately", zh: "2 · 分开查看来源与注册状态" },
+    body: {
+      en: "Signed hexmeow devices are verified offline with a product-pinned P-256 key. Meow Motor uses its complete 0x4001 v1 envelope and the online issuance ledger. Network failure is never displayed as a counterfeit verdict.",
+      zh: "自有 hexmeow 设备使用产品固定的 P-256 公钥离线验签；Meow Motor 使用完整 0x4001 v1 envelope 与在线签发账本。网络故障不会被显示成盗版结论。",
+    },
+  },
+  {
+    title: { en: "3 · First-register the selected set", zh: "3 · 首次注册所选集合" },
+    body: {
+      en: "Review every identity, then register all selected new devices atomically. Registration is normally irreversible and reveals no customer, order or registration-time information.",
+      zh: "核对每个身份后，将所选新设备作为一个原子事务注册。注册通常不可撤销，公开接口不会透露客户、订单或注册时间。",
+    },
+  },
+];
+
 // Slide sets keyed by tool id (matching App's Tool union, plus "home" for the
 // landing-page guide). Tools without a written guide yet fall back to
 // placeholder steps.
@@ -354,6 +378,7 @@ export const TUTORIALS: Record<string, Slide[]> = {
   config: placeholderSlides("config"),
   canalyzer: CANALYZER_SLIDES,
   dfu: DFU_SLIDES,
+  authenticity: AUTHENTICITY_SLIDES,
   calibration: CALIBRATION_SLIDES,
   torqueCalibration: TORQUE_CALIBRATION_SLIDES,
 };

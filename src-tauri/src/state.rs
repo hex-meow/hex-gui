@@ -77,6 +77,9 @@ pub struct AppState {
     /// for operation-scoped heartbeat traffic and stop it before becoming
     /// ready for motor hot-swap.
     pub calibration_host_node_id: Mutex<Option<u8>>,
+    /// Read-only source-proof snapshots keyed by `(node-id, heartbeat session
+    /// epoch)`. Public registration re-reads the live device before use.
+    pub authenticity: crate::authenticity::AuthenticityState,
     /// Serializes the cross-tool check/start transition so friction and torque
     /// calibration cannot race into concurrent ownership of one motor bus.
     pub calibration_start_gate: Mutex<()>,

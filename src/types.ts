@@ -15,6 +15,42 @@ export interface MotorIdentity {
   product_name: string | null;
 }
 
+export interface AuthenticityIdentity {
+  vendor_id: number;
+  product_code: number;
+  revision_number: number;
+  serial_number: number;
+}
+
+export interface AuthenticityTarget {
+  nodeId: number;
+  sessionEpoch: number;
+}
+
+export interface AuthenticityDeviceView {
+  node_id: number;
+  session_epoch: number;
+  identity: AuthenticityIdentity;
+  device_name: string;
+  scheme: "meow_motor_token" | "signed_p256";
+  local_status: "envelope_valid" | "valid" | "unsupported" | "unprovisioned" | "invalid";
+  detail: string;
+  signing_key_id: number | null;
+  digest_hex: string | null;
+  registration_eligible: boolean;
+}
+
+export interface AuthenticityOnlineStatus {
+  node_id: number;
+  session_epoch: number;
+  status: "unknown" | "issued_unregistered" | "registered" | "revoked" | "invalid";
+}
+
+export interface AuthenticityRegistrationResult {
+  status: "registered" | "already_registered";
+  device_count: number;
+}
+
 export interface CanBitTiming {
   bitrate: number | null;
   /** Per-mille: 800 means a 0.800 sample point. */

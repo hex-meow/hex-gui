@@ -156,6 +156,11 @@ const STRINGS = {
     en: "Identify supported devices, validate firmware and run recoverable updates.",
     zh: "识别受支持设备、严格校验固件并执行可恢复升级。",
   },
+  toolAuthenticity: { en: "Product Authenticity", zh: "正版验证与注册" },
+  toolAuthenticityDesc: {
+    en: "Verify known devices from 0x1018 and first-register a complete device set.",
+    zh: "根据 0x1018 严格验证已知设备，并首次注册完整设备集合。",
+  },
   canBus: { en: "Bus", zh: "总线" },
   canConnectHint: { en: "e.g. can0 / socketcan:vcan0 / gs_usb", zh: "例如 can0 / socketcan:vcan0 / gs_usb" },
   canConnectFailed: { en: "Capture failed", zh: "抓包失败" },
@@ -451,6 +456,7 @@ const STRINGS = {
   tagCalibration: { en: "Calibration", zh: "标定" },
   tagDebug: { en: "Debug", zh: "调试" },
   tagFirmware: { en: "DFU", zh: "DFU" },
+  tagAuthenticity: { en: "Verify & register", zh: "验证与注册" },
   tagQuickStart: { en: "Quick start", zh: "快速上手" },
   toolHopeA3: { en: "HopeA3(Raw Motor)", zh: "HopeA3(原始电机)" },
   toolHopeA3Desc: {

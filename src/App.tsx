@@ -20,6 +20,7 @@ import { ArmPanel } from "./components/ArmPanel";
 import { ControllerConfigPanel } from "./components/ControllerConfigPanel";
 import { CanAnalyzerPanel } from "./components/CanAnalyzerPanel";
 import { DfuPanel } from "./components/DfuPanel";
+import { AuthenticityPanel } from "./components/AuthenticityPanel";
 import { TutorialModal, TUTORIALS } from "./components/Tutorial";
 import { canDfuApi, hpmDfuApi } from "./dfuApi";
 import type { MotorInfo } from "./types";
@@ -36,6 +37,7 @@ type Tool =
   | "config"
   | "canalyzer"
   | "dfu"
+  | "authenticity"
   | "calibration"
   | "torqueCalibration"
   | "console";
@@ -195,6 +197,7 @@ export default function App() {
     config: { title: t("toolConfig"), desc: t("toolConfigDesc") },
     canalyzer: { title: t("toolCanalyzer"), desc: t("toolCanalyzerDesc") },
     dfu: { title: t("toolDfu"), desc: t("toolDfuDesc") },
+    authenticity: { title: t("toolAuthenticity"), desc: t("toolAuthenticityDesc") },
     calibration: { title: t("toolCalibration"), desc: t("toolCalibrationDesc") },
     torqueCalibration: {
       title: t("toolTorqueCalibration"),
@@ -219,6 +222,7 @@ export default function App() {
     tool !== "config" &&
     tool !== "canalyzer" &&
     tool !== "dfu" &&
+    tool !== "authenticity" &&
     tool !== "calibration" &&
     tool !== "torqueCalibration";
   const showConnectBar =
@@ -314,6 +318,8 @@ export default function App() {
             <CanAnalyzerPanel />
           ) : tool === "dfu" ? (
             <DfuPanel onBusyChange={setDfuBusy} />
+          ) : tool === "authenticity" ? (
+            <AuthenticityPanel connected={connected} devices={devices} />
           ) : tool === "calibration" ? (
             <MotorFrictionCalibrationPanel
               connected={connected}
@@ -504,6 +510,13 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
         </ToolSection>
 
         <ToolSection title={t("catTools")} hint={t("catToolsHint")}>
+          <ToolCard
+            title={t("toolAuthenticity")}
+            desc={t("toolAuthenticityDesc")}
+            tag={t("tagAuthenticity")}
+            accent="green"
+            onClick={() => onPick("authenticity")}
+          />
           {developerMode && (
             <>
               <ToolCard

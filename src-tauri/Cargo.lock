@@ -1066,6 +1066,7 @@ dependencies = [
  "elliptic-curve",
  "rfc6979",
  "signature",
+ "spki",
 ]
 
 [[package]]
@@ -1086,6 +1087,8 @@ dependencies = [
  "ff",
  "generic-array",
  "group",
+ "pem-rfc7468",
+ "pkcs8",
  "rand_core 0.6.4",
  "sec1",
  "subtle",
@@ -1856,6 +1859,7 @@ dependencies = [
  "hexmeow-stm32-can-dfu",
  "hpm-usb-dfu",
  "log",
+ "p256",
  "prost",
  "prost-build",
  "protoc-bin-vendored",
@@ -4312,6 +4316,7 @@ dependencies = [
  "base16ct",
  "der",
  "generic-array",
+ "pkcs8",
  "subtle",
  "zeroize",
 ]

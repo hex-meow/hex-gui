@@ -1,0 +1,62 @@
+.authenticity-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 22px;
+}
+
+.authenticity-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 85% 10%, rgba(98, 209, 143, 0.13), transparent 18rem),
+    rgba(16, 19, 24, 0.92);
+}
+
+.authenticity-hero .ant-typography { color: #eef2f7; }
+.authenticity-hero .ant-typography-secondary,
+.authenticity-hero p.ant-typography { color: #a9b2bf; }
+.authenticity-hero h3.ant-typography { margin: 4px 0 8px; }
+.authenticity-hero p.ant-typography { max-width: 780px; margin: 0; }
+.authenticity-kicker { color: #62d18f !important; font-size: 11px; font-weight: 800; letter-spacing: .16em; }
+
+.authenticity-boundaries {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.authenticity-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.authenticity-device-card.ant-card {
+  color: #dce3ec;
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(16, 19, 24, 0.94);
+}
+.authenticity-device-card .ant-card-head { color: #eef2f7; border-bottom-color: rgba(255, 255, 255, 0.08); }
+.authenticity-device-card .ant-card-extra,
+.authenticity-device-card .ant-checkbox-wrapper,
+.authenticity-device-card .ant-descriptions-item-content { color: #dce3ec; }
+.authenticity-device-card .ant-descriptions-item-label { color: #8792a2; }
+.authenticity-device-title { display: flex; align-items: center; gap: 10px; }
+.authenticity-device-title code { color: #f4bb56; font-size: 12px; }
+.authenticity-status-row { margin-bottom: 12px; }
+.authenticity-digest { display: inline-block; max-width: 440px; overflow: hidden; color: #9fc6ef !important; font-family: monospace; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.authenticity-error { margin-top: 12px; }
+
+@media (max-width: 900px) {
+  .authenticity-hero { align-items: stretch; flex-direction: column; }
+  .authenticity-boundaries,
+  .authenticity-grid { grid-template-columns: 1fr; }
+}

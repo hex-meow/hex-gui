@@ -161,6 +161,7 @@ pub async fn disconnect(state: State<'_, AppState>) -> CmdResult<()> {
     let _operation = state.device_settings_operation.acquire().await;
     stop_friction_calibration(&state).await;
     state.torque_calibration.reset().await;
+    state.authenticity.clear().await;
     // Stop any running Robot Application first (disables its motors cleanly).
     stop_lift_session(&state).await?;
     if let (Some(app), Some(mgr)) = (state.hopea3.lock().await.take(), state.manager().await) {

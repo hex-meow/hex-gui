@@ -273,6 +273,18 @@ bus with the right settings:
 
 - **Motor Control** — everything above. Broadcasts our heartbeat (the motor's
   `0x1016` consumer needs it).
+- **Product Authenticity** — a public, always-visible verification and
+  first-registration workspace. It passively discovers heartbeat sessions,
+  but reads a proprietary proof object only after a complete `0x1018:00..04`
+  re-read exactly matches a known local product profile. Meow Motor uses its
+  locally strict `0x4001` v1 envelope plus the fixed
+  `https://product-auth.hexmeow.com` issuance ledger. Lift G0B1 uses its
+  read-only `0x2113` raw low-S P-256 proof for offline source verification;
+  registration/revocation remains a separate online result. Other heartbeat
+  nodes are deliberately not probed. A CAN or HTTPS failure is shown as
+  unavailable, never as an invalid/counterfeit proof. Selected new devices are
+  re-read and registered as one atomic mixed-device batch after the server's
+  three-second cooldown.
 - **Firmware Update** — an independent DFU workspace with a CAN/USB selector.
   The current USB path recognizes only exact Bootloader version `0x0100`,
   mapped locally to product code `0x6763616E` (ASCII `gcan`). Protected devices
