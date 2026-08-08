@@ -307,26 +307,39 @@ impl ZenohLiftConn {
     }
 
     /// 发现所有 kind==LIFT 的 robot,并逐个补 `lift/description`。
+    ///
+    /// 分两阶段:先把 robot 级 query 的回复排空成 Vec,再逐个发 `lift/description` 的第二次
+    /// query。与 `zenoh_ee::discover`(先 `discover_all().await` 收完再查)保持一致。
+    ///
+    /// 注:2026-08-08 排查"面板列不出设备"时一度怀疑嵌套 query 是元凶,**实测证伪** ——
+    /// 嵌套写法在同样环境下也能正常发现。保留两阶段只是为了与 EE 同构、少一层嵌套借用,
+    /// 不要把它当成那次故障的修复。
     pub async fn discover(&self) -> Vec<LiftInfo> {
-        let mut out = Vec::new();
-        let Ok(replies) = self.session.get(ROBOT_DESCRIPTION_SELECTOR).await else {
-            return out;
-        };
-        while let Ok(reply) = replies.recv_async().await {
-            let Ok(sample) = reply.result() else { continue };
-            let key = sample.key_expr().as_str().to_string();
-            let Ok(d) = pb::RobotDescription::decode(&*sample.payload().to_bytes()) else {
-                continue;
-            };
-            if d.kind != pb::RobotKind::Lift as i32 {
-                continue;
+        // 阶段一:排空 robot 级 description。
+        let mut found: Vec<(String, String)> = Vec::new(); // (prefix, model)
+        if let Ok(replies) = self.session.get(ROBOT_DESCRIPTION_SELECTOR).await {
+            while let Ok(reply) = replies.recv_async().await {
+                let Ok(sample) = reply.result() else { continue };
+                let key = sample.key_expr().as_str().to_string();
+                let Ok(d) = pb::RobotDescription::decode(&*sample.payload().to_bytes()) else {
+                    continue;
+                };
+                if d.kind != pb::RobotKind::Lift as i32 {
+                    continue;
+                }
+                let Some(prefix) = key.strip_suffix("/description") else {
+                    continue;
+                };
+                found.push((prefix.to_string(), d.model));
             }
-            let Some(prefix) = key.strip_suffix("/description") else {
-                continue;
-            };
+        }
+
+        // 阶段二:外层回复已收完,可以安全地逐个查设备级 description。
+        let mut out = Vec::new();
+        for (prefix, model) in found {
             let mut info = LiftInfo {
-                prefix: prefix.to_string(),
-                model: d.model,
+                prefix: prefix.clone(),
+                model,
                 ..Default::default()
             };
             if let Some(ld) = query_one::<pb::LiftDescription>(
@@ -348,6 +361,7 @@ impl ZenohLiftConn {
             }
             out.push(info);
         }
+        log::info!("Lift 发现 {} 台", out.len());
         out
     }
 
@@ -625,6 +639,34 @@ impl ZenohLiftConn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 真机/在线冒烟测试:跑 GUI **自己的**发现路径,而不是另写一个客户端 ——
+    /// 2026-08-08 面板列不出设备的原因正是 `discover()` 在外层 query 的回复循环里嵌套了
+    /// 第二次 query;那种 bug 只有走同一段代码才抓得到。
+    ///
+    /// 需要现网有一台 lift 控制器,故默认 ignore:
+    /// `cargo test -p hex-motor-gui --lib -- --ignored discover_finds_a_live_lift --nocapture`
+    // zenoh runtime 不支持 current-thread 调度器,必须多线程。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires a running lift controller + zenoh router on tcp/127.0.0.1:7447"]
+    async fn discover_finds_a_live_lift() {
+        // 端点由环境变量给,方便对比"填了 tcp/…" 与 "留空(组播扫描)"两种用法。
+        let ep = std::env::var("SMOKE_ENDPOINT").unwrap_or_else(|_| "tcp/127.0.0.1:7447".into());
+        println!("connecting with endpoint = {ep:?}");
+        let conn = ZenohLiftConn::open(&ep).await.expect("open zenoh");
+        let lifts = conn.discover().await;
+        println!("discovered {} lift(s)", lifts.len());
+        for l in &lifts {
+            println!(
+                "  {} model={} pos=[{:?},{:?}] vel_max={:?} vel_min={:?} modes={:?} payload={:?}",
+                l.prefix, l.model, l.pos_min, l.pos_max, l.vel_max, l.vel_min,
+                l.command_modes, l.payload_max_kg
+            );
+        }
+        assert!(!lifts.is_empty(), "没发现 lift —— 发现路径回归了");
+        // description 必须被补齐:只有 robot 级回复而没有设备级细节 = 第二阶段 query 挂了。
+        assert!(!lifts[0].pos_max.is_empty(), "lift/description 未补齐");
+    }
 
     #[test]
     fn fault_codes_match_od_v04_table() {
