@@ -478,6 +478,49 @@ const STRINGS = {
     en: "Digital twin, gravity compensation, gravity setup and preset postures.",
     zh: "机械臂数字孪生、重力补偿、设置重力与预设位姿。",
   },
+  toolLiftZenoh: { en: "Lift (Zenoh)", zh: "Lift (Zenoh)" },
+  toolLiftZenohDesc: {
+    en: "Homing, height goals and jog over the robot API. Works the same whether the lift runs standalone or is hosted by a chassis process.",
+    zh: "走 robot API 的回零、高度目标与点动。升降独占总线或被底盘进程托管都一样用。",
+  },
+  tagLiftApi: { en: "Lift", zh: "升降" },
+
+  // ── Lift (Zenoh) 面板 ──
+  liftConnect: { en: "Connect", zh: "连接" },
+  liftDisconnect: { en: "Disconnect", zh: "断开" },
+  liftEndpointHint: { en: "blank = multicast scan, or tcp/IP:7447", zh: "留空=组播扫描,或 tcp/IP:7447" },
+  liftNoneFound: { en: "No lift found (is the controller running?)", zh: "没发现升降(控制器起了吗?)" },
+  liftAcquire: { en: "Acquire", zh: "取控" },
+  liftRelease: { en: "Release", zh: "释放" },
+  liftAcquired: { en: "Control acquired", zh: "已取得控制权" },
+  liftBusy: { en: "Held by", zh: "被占" },
+  liftControlling: { en: "Controlling", zh: "控制中" },
+  liftReadOnly: { en: "Read-only", zh: "只读观察" },
+  liftHoming: { en: "Homing…", zh: "回零中…" },
+  liftHomingStarted: { en: "Homing started; watch the Homed badge", zh: "回零已启动,看「已回零」徽标" },
+  liftNotHomedTitle: { en: "Not homed yet", zh: "尚未回零" },
+  liftNotHomedDesc: {
+    en: "The device clears its home state on every reset, and the controller refuses ACTIVE until homing completes. Home first, then height control unlocks.",
+    zh: "设备每次复位都会清掉回零状态,控制器在回零完成前拒绝进入 ACTIVE。先回零,高度控制随即解锁。",
+  },
+  liftApiDisable: { en: "Disable", zh: "去使能" },
+  liftHeight: { en: "Height", zh: "当前高度" },
+  liftSoftLimits: { en: "Soft limits", zh: "软限位" },
+  liftVelMax: { en: "Max speed", zh: "速度上限" },
+  liftPayload: { en: "Rated payload", zh: "额定负载" },
+  liftGotoTitle: { en: "Height goal", zh: "高度目标" },
+  liftGoto: { en: "Go", zh: "前往" },
+  liftGotoHint: {
+    en: "The device plans and stops on its own; completion shows as the Reached badge.",
+    zh: "设备自行规划并停机;到位与否看「已到位」徽标。",
+  },
+  liftJogTitle: { en: "Jog", zh: "点动" },
+  liftApiJogHint: { en: "Hold to move, release to stop.", zh: "按住移动,松开停止。" },
+  liftNoGuardedContact: {
+    en: "Guarded contact unavailable on this model (no trustworthy joint-force estimate).",
+    zh: "本型号不支持守卫接触(拿不到可信的关节力估计)。",
+  },
+
   toolConsole: { en: "Robot Console", zh: "机器人控制台" },
   toolConsoleDesc: {
     en: "One console for the whole robot: auto-discovered device tree (arm/EE/base/lift), per-robot panels and sessions. EE gripper panel lands first; arm/base migrate next; digital twin later.",
@@ -534,7 +577,7 @@ const STRINGS = {
   hwResourceCount: { en: "Declared resources", zh: "已声明资源数" },
   hwNoResources: { en: "hw/info declares no resources", zh: "hw/info 未声明资源" },
   wifiSettings: { en: "Wi-Fi settings", zh: "Wi-Fi 配置" },
-  wifiNeedConnection: { en: "Connect Robot Console first.", zh: "请先连接 Robot Console。" },
+  wifiNeedConnection: { en: "Connect Controller Config first.", zh: "请先连接控制器配置。" },
   wifiWiredOnly: {
     en: "Changing or forgetting Wi-Fi is allowed only through the controller's wired end0 connection. Read-only status and scans also work over Wi-Fi.",
     zh: "更改或删除 Wi-Fi 仅允许通过控制器有线 end0 连接；状态与扫描在 Wi-Fi 上也可读取。",
@@ -569,8 +612,8 @@ const STRINGS = {
   wifiJobFailed: { en: "Wi-Fi operation failed", zh: "Wi-Fi 操作失败" },
   toolConfig: { en: "Controller Config", zh: "控制器配置" },
   toolConfigDesc: {
-    en: "Edit the controller's launch.yaml over Zenoh: validate, save and apply (restarts robots).",
-    zh: "通过 Zenoh 编辑控制器 launch.yaml:校验、保存、应用(会重启机器人)。",
+    en: "Manage controller launch.yaml and Wi-Fi over Zenoh: validate, save and apply configuration.",
+    zh: "通过 Zenoh 管理控制器 launch.yaml 与 Wi-Fi：校验、保存并应用配置。",
   },
   tagConfig: { en: "Config", zh: "配置" },
   // Base(Zenoh) panel

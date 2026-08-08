@@ -866,6 +866,60 @@ export interface EeInfo {
   width_max: number;
 }
 
+/** 发现到的一台升降(Lift(Zenoh) app;区别于直连 CAN 的 LiftState)。 */
+export interface LiftRobotInfo {
+  prefix: string;
+  model: string;
+  dof: number;
+  joint_names: string[];
+  pos_min: number[];
+  pos_max: number[];
+  vel_max: number[];
+  vel_min: number[];
+  needs_homing: boolean[];
+  command_modes: number[]; // 1=POSITION 2=VELOCITY 3=TRAJECTORY(力控型号,当前无)
+  payload_max_kg: number | null;
+}
+
+/** Lift(Zenoh)面板状态快照。 */
+export interface ZenohLiftState {
+  connected: boolean;
+  controlling: boolean;
+  holder: number;
+  mode: string;       // DISABLED/ACTIVE/FAULT/CALIBRATING
+  robot_mode: string; // STANDBY/RUNNING/OVERTAKEN/FATAL_ERROR
+  model: string;
+  prefix: string;
+
+  height: number;     // 当前高度 m(未 homing 时设备严格报 0)
+  pos_min: number;
+  pos_max: number;
+  vel_max: number;
+  vel_min: number;    // 速度释放死区:jog 下限取它,更小的值设备不会动
+  payload_max_kg: number | null;
+
+  // LiftStatus 直译
+  homed: boolean;
+  config_valid: boolean;   // false ⇒ 设备 fail-closed 拒绝一切运动
+  target_reached: boolean; // 自主 goal 无回执,这是判完成的唯一途径
+  moving: boolean;
+  output_limited: boolean;
+  at_lower_limit: boolean;
+  at_upper_limit: boolean;
+  estop: boolean;
+  fault_code: number;
+  fault_text: string;
+
+  // 能力声明(决定禁用哪些控件)
+  can_position: boolean;
+  can_velocity: boolean;
+  guarded_contact_supported: boolean;
+
+  homing: boolean;
+  fatal: boolean;
+  last_error: string | null;
+}
+
 /** 设备树节点(机器人控制台全量发现,所有 kind)。 */
 export interface RobotNode {
   prefix: string;

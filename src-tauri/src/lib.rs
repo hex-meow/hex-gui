@@ -32,6 +32,7 @@ mod zenoh_base;
 mod zenoh_config;
 mod zenoh_discovery;
 mod zenoh_ee;
+mod zenoh_lift;
 mod zenoh_hw;
 mod zenoh_wifi;
 
@@ -245,6 +246,19 @@ pub fn run() {
             commands::ee_scene,
             commands::console_get_urdf,
             commands::ee_machines,
+            commands::zlift_connect,
+            commands::zlift_disconnect,
+            commands::zlift_discover,
+            commands::zlift_set_focus,
+            commands::zlift_acquire,
+            commands::zlift_home,
+            commands::zlift_goto,
+            commands::zlift_jog,
+            commands::zlift_set_mode,
+            commands::zlift_set_limits,
+            commands::zlift_clear_fault,
+            commands::zlift_get_state,
+            commands::zlift_release,
             commands::wifi_discover,
             commands::wifi_status,
             commands::wifi_scan,

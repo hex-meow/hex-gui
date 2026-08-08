@@ -17,6 +17,7 @@ import { SmartKnobPanel } from "./components/SmartKnobPanel";
 import RobotConsole from "./components/RobotConsole";
 import { ZenohPanel } from "./components/ZenohPanel";
 import { ArmPanel } from "./components/ArmPanel";
+import { LiftRobotPanel } from "./components/LiftRobotPanel";
 import { ControllerConfigPanel } from "./components/ControllerConfigPanel";
 import { CanAnalyzerPanel } from "./components/CanAnalyzerPanel";
 import { DfuPanel } from "./components/DfuPanel";
@@ -34,6 +35,7 @@ type Tool =
   | "smartknob"
   | "zenoh"
   | "arm"
+  | "liftApi"
   | "config"
   | "canalyzer"
   | "dfu"
@@ -203,6 +205,7 @@ export default function App() {
       title: t("toolTorqueCalibration"),
       desc: t("toolTorqueCalibrationDesc"),
     },
+    liftApi: { title: t("toolLiftZenoh"), desc: t("toolLiftZenohDesc") },
     console: { title: t("toolConsole"), desc: t("toolConsoleDesc") },
   } satisfies Record<Tool, { title: string; desc: string }>;
   const { title: toolTitle, desc: toolDesc } = toolMeta[tool];
@@ -219,6 +222,7 @@ export default function App() {
     tool !== "smartknob" &&
     tool !== "zenoh" &&
     tool !== "arm" &&
+    tool !== "liftApi" &&
     tool !== "config" &&
     tool !== "canalyzer" &&
     tool !== "dfu" &&
@@ -229,6 +233,7 @@ export default function App() {
     tool !== "console" &&
     tool !== "zenoh" &&
     tool !== "arm" &&
+    tool !== "liftApi" &&
     tool !== "config" &&
     tool !== "canalyzer" &&
     tool !== "dfu";
@@ -312,6 +317,8 @@ export default function App() {
             <ZenohPanel />
           ) : tool === "arm" ? (
             <ArmPanel />
+          ) : tool === "liftApi" ? (
+            <LiftRobotPanel />
           ) : tool === "config" ? (
             <ControllerConfigPanel />
           ) : tool === "canalyzer" ? (
@@ -501,6 +508,13 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
             onClick={() => onPick("arm")}
           />
           <ToolCard
+            title={t("toolLiftZenoh")}
+            desc={t("toolLiftZenohDesc")}
+            tag={t("tagLiftApi")}
+            accent="green"
+            onClick={() => onPick("liftApi")}
+          />
+          <ToolCard
             title={t("toolConfig")}
             desc={t("toolConfigDesc")}
             tag={t("tagConfig")}
@@ -510,15 +524,15 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
         </ToolSection>
 
         <ToolSection title={t("catTools")} hint={t("catToolsHint")}>
-          <ToolCard
-            title={t("toolAuthenticity")}
-            desc={t("toolAuthenticityDesc")}
-            tag={t("tagAuthenticity")}
-            accent="green"
-            onClick={() => onPick("authenticity")}
-          />
           {developerMode && (
             <>
+              <ToolCard
+                title={t("toolAuthenticity")}
+                desc={t("toolAuthenticityDesc")}
+                tag={t("tagAuthenticity")}
+                accent="green"
+                onClick={() => onPick("authenticity")}
+              />
               <ToolCard
                 title={t("toolCalibration")}
                 desc={t("toolCalibrationDesc")}

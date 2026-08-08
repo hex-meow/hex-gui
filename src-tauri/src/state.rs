@@ -114,6 +114,7 @@ pub struct AppState {
     pub config: Mutex<Option<crate::zenoh_config::ZenohConfigConn>>,
     /// EE(Zenoh):到 hex-controller 末端执行器的连接(机器人控制台共用其全量发现,至多一条)。
     pub zenoh_ee: Mutex<Option<crate::zenoh_ee::ZenohEeConn>>,
+    pub zenoh_lift: Mutex<Option<crate::zenoh_lift::ZenohLiftConn>>,
     /// The running SmartKnob Robot Application, if started. At most one at a
     /// time (it owns the high-rate haptic loop on the single bus).
     pub smartknob: Mutex<Option<SmartKnob>>,

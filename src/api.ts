@@ -3,7 +3,7 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, ArmUrdf, AuthenticityDeviceView, AuthenticityOnlineStatus, AuthenticityRegistrationResult, AuthenticityTarget, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ConnectionInfo, ControllerInfo, DeviceSettingsRequest, DeviceSettingsResult, EventsSnapshot, FrictionCalibrationRequest, FrictionCalibrationView, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftFactoryCalibrationResult, LiftState, LiveState, LogLine, MeowCanSettingsRequest, MeowMotorSnapshot, MeowMotorTarget, MeowProfileLimits, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, TorqueCalibrationRequest, TorqueCalibrationView, ZenohArmState, ZenohBaseState , EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
+import type { ArmInfo, ArmUrdf, AuthenticityDeviceView, AuthenticityOnlineStatus, AuthenticityRegistrationResult, AuthenticityTarget, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ConnectionInfo, ControllerInfo, DeviceSettingsRequest, DeviceSettingsResult, EventsSnapshot, FrictionCalibrationRequest, FrictionCalibrationView, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftFactoryCalibrationResult, LiftState, LiveState, LogLine, MeowCanSettingsRequest, MeowMotorSnapshot, MeowMotorTarget, MeowProfileLimits, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, TorqueCalibrationRequest, TorqueCalibrationView, ZenohArmState, ZenohBaseState, LiftRobotInfo, ZenohLiftState, EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
 
 export const api = {
   connect: (iface: string, dataBitrate: number, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -288,12 +288,28 @@ export const api = {
   eeSetEstopBehavior: (behavior: number) => invoke<void>("ee_set_estop_behavior", { behavior }),
   eeClearFault: () => invoke<void>("ee_clear_fault"),
   eeGetState: () => invoke<ZenohEeState>("ee_get_state"),
+
+  // ── Lift(Zenoh robot API);与直连 CAN 的 lift* 命令并存,后端命名空间是 zlift_* ──
+  zliftConnect: (connect: string) => invoke<void>("zlift_connect", { connect }),
+  zliftDisconnect: () => invoke<void>("zlift_disconnect"),
+  zliftDiscover: () => invoke<LiftRobotInfo[]>("zlift_discover"),
+  zliftSetFocus: (prefix: string) => invoke<void>("zlift_set_focus", { prefix }),
+  zliftAcquire: (prefix: string, model: string) => invoke<void>("zlift_acquire", { prefix, model }),
+  zliftHome: () => invoke<void>("zlift_home"),
+  zliftGoto: (height: number) => invoke<void>("zlift_goto", { height }),
+  zliftJog: (dq: number | null) => invoke<void>("zlift_jog", { dq }),
+  zliftSetMode: (mode: number) => invoke<void>("zlift_set_mode", { mode }),
+  zliftSetLimits: (posMin: number | null, posMax: number | null, velMax: number | null) =>
+    invoke<void>("zlift_set_limits", { posMin, posMax, velMax }),
+  zliftClearFault: () => invoke<void>("zlift_clear_fault"),
+  zliftGetState: () => invoke<ZenohLiftState>("zlift_get_state"),
+  zliftRelease: () => invoke<void>("zlift_release"),
   eeRelease: () => invoke<void>("ee_release"),
   eeScene: () => invoke<SceneRobot[]>("ee_scene"),
   consoleGetUrdf: (prefix: string, kindName: string) => invoke<ConsoleUrdf | null>("console_get_urdf", { prefix, kindName }),
   eeMachines: () => invoke<Record<string, MountEdge[]>>("ee_machines"),
 
-  // Controller Wi-Fi (reuses Robot Console's EE Zenoh session)
+  // Controller Wi-Fi (reuses Controller Config's controller-level Zenoh session)
   wifiDiscover: () => invoke<WifiController[]>("wifi_discover"),
   wifiStatus: (cid: string) => invoke<WifiStatus>("wifi_status", { cid }),
   wifiScan: (cid: string) => invoke<WifiScanEntry[]>("wifi_scan", { cid }),

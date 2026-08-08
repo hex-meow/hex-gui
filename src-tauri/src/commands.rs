@@ -1815,23 +1815,23 @@ pub async fn ee_machines(
         .unwrap_or_default())
 }
 
-// ───────────────────────── Robot Console Wi-Fi(Zenoh) ──────────────────────
+// ───────────────────────── Controller Config Wi-Fi(Zenoh) ──────────────────
 
-async fn console_zenoh_session(state: &AppState) -> CmdResult<zenoh::Session> {
+async fn config_zenoh_session(state: &AppState) -> CmdResult<zenoh::Session> {
     state
-        .zenoh_ee
+        .config
         .lock()
         .await
         .as_ref()
-        .map(ZenohEeConn::session)
-        .ok_or_else(|| "未连接 Robot Console Zenoh".to_string())
+        .map(ZenohConfigConn::session)
+        .ok_or_else(|| "未连接 Controller Config Zenoh".to_string())
 }
 
 #[tauri::command]
 pub async fn wifi_discover(
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<crate::zenoh_wifi::WifiControllerDto>> {
-    let session = console_zenoh_session(&state).await?;
+    let session = config_zenoh_session(&state).await?;
     crate::zenoh_wifi::discover(&session).await.map_err(err)
 }
 
@@ -1840,7 +1840,7 @@ pub async fn wifi_status(
     state: State<'_, AppState>,
     cid: String,
 ) -> CmdResult<crate::zenoh_wifi::WifiStatusDto> {
-    let session = console_zenoh_session(&state).await?;
+    let session = config_zenoh_session(&state).await?;
     crate::zenoh_wifi::status(&session, &cid).await.map_err(err)
 }
 
@@ -1849,7 +1849,7 @@ pub async fn wifi_scan(
     state: State<'_, AppState>,
     cid: String,
 ) -> CmdResult<Vec<crate::zenoh_wifi::WifiScanEntryDto>> {
-    let session = console_zenoh_session(&state).await?;
+    let session = config_zenoh_session(&state).await?;
     crate::zenoh_wifi::scan(&session, &cid).await.map_err(err)
 }
 
@@ -1858,7 +1858,7 @@ pub async fn wifi_networks(
     state: State<'_, AppState>,
     cid: String,
 ) -> CmdResult<Vec<crate::zenoh_wifi::WifiSavedNetworkDto>> {
-    let session = console_zenoh_session(&state).await?;
+    let session = config_zenoh_session(&state).await?;
     crate::zenoh_wifi::networks(&session, &cid)
         .await
         .map_err(err)
@@ -1873,7 +1873,7 @@ pub async fn wifi_validate(
     hidden: bool,
     country: Option<String>,
 ) -> CmdResult<()> {
-    let session = console_zenoh_session(&state).await?;
+    let session = config_zenoh_session(&state).await?;
     crate::zenoh_wifi::validate(&session, &cid, &ssid, passphrase, hidden, country)
         .await
         .map_err(err)
@@ -1890,7 +1890,7 @@ pub async fn wifi_set(
     country: Option<String>,
     expected_revision: Option<u64>,
 ) -> CmdResult<crate::zenoh_wifi::WifiJobDto> {
-    let session = console_zenoh_session(&state).await?;
+    let session = config_zenoh_session(&state).await?;
     crate::zenoh_wifi::set(
         &session,
         &cid,
@@ -1911,7 +1911,7 @@ pub async fn wifi_forget(
     ssid_hex: String,
     expected_revision: Option<u64>,
 ) -> CmdResult<crate::zenoh_wifi::WifiJobDto> {
-    let session = console_zenoh_session(&state).await?;
+    let session = config_zenoh_session(&state).await?;
     crate::zenoh_wifi::forget(&session, &cid, &ssid_hex, expected_revision)
         .await
         .map_err(err)
@@ -1923,7 +1923,7 @@ pub async fn wifi_forget_all(
     cid: String,
     expected_revision: Option<u64>,
 ) -> CmdResult<crate::zenoh_wifi::WifiJobDto> {
-    let session = console_zenoh_session(&state).await?;
+    let session = config_zenoh_session(&state).await?;
     crate::zenoh_wifi::forget_all(&session, &cid, expected_revision)
         .await
         .map_err(err)
@@ -1935,7 +1935,7 @@ pub async fn wifi_job(
     cid: String,
     job_id: String,
 ) -> CmdResult<crate::zenoh_wifi::WifiJobDto> {
-    let session = console_zenoh_session(&state).await?;
+    let session = config_zenoh_session(&state).await?;
     crate::zenoh_wifi::job(&session, &cid, &job_id)
         .await
         .map_err(err)
@@ -2134,4 +2134,133 @@ pub async fn lift_commission_estop(state: State<'_, AppState>) -> CmdResult<()> 
 pub async fn lift_commission_csv(state: State<'_, AppState>) -> CmdResult<String> {
     let app = lift_session(&state).await?;
     app.commission_csv().map_err(err)
+}
+
+// ───────────────────────── Lift (Zenoh robot API) ─────────────────────────
+//
+// 独立于 catRawCanApp 里的直连 CAN `lift` 调试工具:那个直接说 CANopen,这个只说
+// 12-lift-api 的公共 robot API,因此对"托管在底盘进程里"还是"独占总线的
+// lift_controller"完全无感 —— 键空间一样。
+
+/// 连上 Zenoh 并开始被动观察(不取控、不动设备)。
+#[tauri::command]
+pub async fn zlift_connect(state: State<'_, AppState>, connect: String) -> CmdResult<()> {
+    let mut g = state.zenoh_lift.lock().await;
+    if g.is_some() {
+        return Err("Lift Zenoh 已连接;先 disconnect".into());
+    }
+    *g = Some(crate::zenoh_lift::ZenohLiftConn::open(&connect).await.map_err(err)?);
+    log::info!("Lift Zenoh 已连接: {connect}");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn zlift_disconnect(state: State<'_, AppState>) -> CmdResult<()> {
+    if let Some(c) = state.zenoh_lift.lock().await.take() {
+        c.release().await;
+    }
+    Ok(())
+}
+
+/// 发现网络里的升降(kind==LIFT),含 lift/description(设备派生的软限位与能力声明)。
+#[tauri::command]
+pub async fn zlift_discover(
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<crate::zenoh_lift::LiftInfo>> {
+    let g = state.zenoh_lift.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Lift Zenoh".to_string())?;
+    Ok(c.discover().await)
+}
+
+/// 观察聚焦(只读,与取控解耦):列表选中即观察。
+#[tauri::command]
+pub async fn zlift_set_focus(state: State<'_, AppState>, prefix: String) -> CmdResult<()> {
+    let g = state.zenoh_lift.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Lift Zenoh".to_string())?;
+    c.set_focus(&prefix).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn zlift_acquire(
+    state: State<'_, AppState>,
+    prefix: String,
+    model: String,
+) -> CmdResult<()> {
+    let g = state.zenoh_lift.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Lift Zenoh".to_string())?;
+    c.acquire(&prefix, &model).await.map_err(err)
+}
+
+/// 回零。立即返回 started,完成与否看 `homed` 徽标(要几秒~几十秒)。
+#[tauri::command]
+pub async fn zlift_home(state: State<'_, AppState>) -> CmdResult<()> {
+    let g = state.zenoh_lift.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Lift Zenoh".to_string())?;
+    c.home().await.map_err(err)
+}
+
+/// 去指定高度(自主 goal,发完即撒手)。
+#[tauri::command]
+pub async fn zlift_goto(state: State<'_, AppState>, height: f32) -> CmdResult<()> {
+    let g = state.zenoh_lift.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Lift Zenoh".to_string())?;
+    c.goto(height).await.map_err(err)
+}
+
+/// 点动:`Some(dq)` 起 50Hz 速度流,`None` 停车。
+#[tauri::command]
+pub async fn zlift_jog(state: State<'_, AppState>, dq: Option<f32>) -> CmdResult<()> {
+    let g = state.zenoh_lift.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Lift Zenoh".to_string())?;
+    c.jog(dq).await.map_err(err)
+}
+
+/// v1 只支持 DISABLED(1)/ACTIVE(2);未 homing 时 ACTIVE 会被控制器如实拒绝。
+#[tauri::command]
+pub async fn zlift_set_mode(state: State<'_, AppState>, mode: i32) -> CmdResult<()> {
+    let g = state.zenoh_lift.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Lift Zenoh".to_string())?;
+    c.set_mode(mode).await.map_err(err)
+}
+
+/// 收紧软限位/速度上限(只收紧;越界值由控制器夹回设备能力)。
+#[tauri::command]
+pub async fn zlift_set_limits(
+    state: State<'_, AppState>,
+    pos_min: Option<f32>,
+    pos_max: Option<f32>,
+    vel_max: Option<f32>,
+) -> CmdResult<()> {
+    let g = state.zenoh_lift.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Lift Zenoh".to_string())?;
+    c.set_limits(pos_min, pos_max, vel_max).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn zlift_clear_fault(state: State<'_, AppState>) -> CmdResult<()> {
+    let g = state.zenoh_lift.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Lift Zenoh".to_string())?;
+    c.clear_fault().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn zlift_get_state(
+    state: State<'_, AppState>,
+) -> CmdResult<crate::zenoh_lift::ZenohLiftState> {
+    Ok(state
+        .zenoh_lift
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.state())
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn zlift_release(state: State<'_, AppState>) -> CmdResult<()> {
+    let g = state.zenoh_lift.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Lift Zenoh".to_string())?;
+    c.release().await;
+    Ok(())
 }
