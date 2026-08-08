@@ -32,6 +32,7 @@ const MANIFEST_UPPER_V1: u16 = 0x0106;
 const SDO_TIMEOUT: Duration = Duration::from_millis(700);
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
+const HTTP_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const MAX_PROOFS: usize = 64;
 
 const LIFT_PUBLIC_KEY_XY: [u8; 64] = [
@@ -771,7 +772,7 @@ async fn post_json<T: for<'de> Deserialize<'de>>(
     let url = format!("{API_ORIGIN}{path}");
     let body = serde_json::to_vec(request)
         .map_err(|error| format!("encoding authenticity request: {error}"))?;
-    let response = client
+    let mut response = client
         .post(&url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .body(body)
@@ -793,12 +794,37 @@ async fn post_json<T: for<'de> Deserialize<'de>>(
             "authenticity service returned HTTP {status}{retry}"
         ));
     }
-    let bytes = response
-        .bytes()
+    let initial_capacity = checked_response_capacity(response.content_length())?;
+    let mut bytes = Vec::with_capacity(initial_capacity);
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|error| format!("reading authenticity service response: {error}"))?;
+        .map_err(|error| format!("reading authenticity service response: {error}"))?
+    {
+        append_response_chunk(&mut bytes, &chunk)?;
+    }
     serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid authenticity service response: {error}"))
+}
+
+fn checked_response_capacity(content_length: Option<u64>) -> Result<usize, String> {
+    match content_length {
+        Some(length) if length > HTTP_RESPONSE_MAX_BYTES as u64 => Err(format!(
+            "authenticity service response exceeds {HTTP_RESPONSE_MAX_BYTES} bytes"
+        )),
+        Some(length) => Ok(length as usize),
+        None => Ok(0),
+    }
+}
+
+fn append_response_chunk(bytes: &mut Vec<u8>, chunk: &[u8]) -> Result<(), String> {
+    if chunk.len() > HTTP_RESPONSE_MAX_BYTES.saturating_sub(bytes.len()) {
+        return Err(format!(
+            "authenticity service response exceeds {HTTP_RESPONSE_MAX_BYTES} bytes"
+        ));
+    }
+    bytes.extend_from_slice(chunk);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -900,5 +926,20 @@ mod tests {
         assert!(validate_targets(&[one]).is_ok());
         assert!(validate_targets(&[]).is_err());
         assert!(validate_targets(&[one, one]).is_err());
+    }
+
+    #[test]
+    fn response_limit_checks_declared_and_streamed_sizes() {
+        assert_eq!(checked_response_capacity(None).unwrap(), 0);
+        assert_eq!(
+            checked_response_capacity(Some(HTTP_RESPONSE_MAX_BYTES as u64)).unwrap(),
+            HTTP_RESPONSE_MAX_BYTES
+        );
+        assert!(checked_response_capacity(Some(HTTP_RESPONSE_MAX_BYTES as u64 + 1)).is_err());
+
+        let mut bytes = vec![0_u8; HTTP_RESPONSE_MAX_BYTES - 1];
+        append_response_chunk(&mut bytes, &[1]).unwrap();
+        assert_eq!(bytes.len(), HTTP_RESPONSE_MAX_BYTES);
+        assert!(append_response_chunk(&mut bytes, &[2]).is_err());
     }
 }
