@@ -13,6 +13,7 @@
 //! 3. **homing 是一等公民**:未 homing 时 `set_mode(ACTIVE)` 会被控制器拒绝,必须先
 //!    `rpc/home`;它立即回 started,结果走 `LiftStatus.homed`(要几秒~几十秒)。
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -21,6 +22,7 @@ use anyhow::anyhow;
 use prost::Message;
 use serde::Serialize;
 
+use crate::diag;
 use crate::zenoh_discovery::ROBOT_DESCRIPTION_SELECTOR;
 
 pub mod pb {
@@ -45,6 +47,31 @@ async fn query_one<Resp: Message + Default>(
         }
     }
     None
+}
+
+/// 汇聚一次 query 的**全部**回复。`.../log/recent` 每进程一个 queryable,只取第一条会漏掉
+/// 同一控制器下其它进程(launcher / 其它 robot)的日志。
+async fn query_all(session: &zenoh::Session, key: &str) -> Vec<(String, Vec<u8>)> {
+    let mut out = Vec::new();
+    if let Ok(replies) = session.get(key).await {
+        while let Ok(reply) = replies.recv_async().await {
+            if let Ok(sample) = reply.result() {
+                out.push((
+                    sample.key_expr().as_str().to_string(),
+                    sample.payload().to_bytes().to_vec(),
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// proto `Event` → 诊断 DTO(seq 占位 0,由 `EventBuf` 分配;kv 排序稳定)。
+fn to_diag_event(ev: pb::Event) -> diag::RobotEvent {
+    let ts_ns = ev.header.as_ref().map(|h| h.stamp_ns).unwrap_or(0);
+    let mut kv: Vec<(String, String)> = ev.kv.into_iter().collect();
+    kv.sort();
+    diag::RobotEvent { seq: 0, severity: ev.severity, code: ev.code, text: ev.text, kv, ts_ns }
 }
 
 fn op_mode_name(m: i32) -> &'static str {
@@ -146,6 +173,8 @@ struct Ctrl {
     jog: StdMutex<Option<f32>>,
     homing_pending: AtomicBool,
     state: StdMutex<ZenohLiftState>,
+    events: StdMutex<diag::EventBuf>,
+    logs: StdMutex<VecDeque<diag::LogLine>>,
 }
 
 pub struct ZenohLiftConn {
@@ -174,6 +203,8 @@ impl ZenohLiftConn {
                 connected: true,
                 ..Default::default()
             }),
+            events: StdMutex::new(diag::EventBuf::default()),
+            logs: StdMutex::new(VecDeque::new()),
         });
 
         // ── 50Hz jog 流 ──
@@ -299,6 +330,39 @@ impl ZenohLiftConn {
                         st.mode = "DISABLED".into();
                         log::warn!("Lift: 失去控制权(当前 holder={})", s.session_holder);
                     }
+                }
+            });
+        }
+
+        // ── 事件流 <prefix>/events ──
+        if let Ok(sub) = session.declare_subscriber("hexmeow/**/events").await {
+            let c = ctrl.clone();
+            tokio::spawn(async move {
+                while let Ok(sample) = sub.recv_async().await {
+                    let Some(p) = c.view_prefix.lock().unwrap().clone() else { continue };
+                    if sample.key_expr().as_str() != format!("{p}/events") { continue; }
+                    if let Ok(ev) = pb::Event::decode(&*sample.payload().to_bytes()) {
+                        c.events.lock().unwrap().push_live(to_diag_event(ev));
+                    }
+                }
+            });
+        }
+        // ── 日志流 hexmeow/<cid>/*/log ──
+        // 按 **cid** 过滤而不是按 robot prefix:同一控制器下 launcher 与各 robot 各有自己的
+        // log key,只收 lift 自己那条会看不到 launcher 的启动/失败信息 —— 而那恰恰是
+        // "为什么没起来" 最有用的一段。
+        if let Ok(sub) = session.declare_subscriber("hexmeow/**/log").await {
+            let c = ctrl.clone();
+            tokio::spawn(async move {
+                while let Ok(sample) = sub.recv_async().await {
+                    let Some(dp) = c.view_prefix.lock().unwrap().clone() else { continue };
+                    let Some(cid) = diag::cid_prefix(&dp) else { continue };
+                    let key = sample.key_expr().as_str();
+                    if !key.starts_with(&format!("{cid}/")) || !key.ends_with("/log") { continue; }
+                    let proc = diag::proc_of_log_key(key);
+                    let raw = String::from_utf8_lossy(&sample.payload().to_bytes()).into_owned();
+                    let line = diag::parse_log_line(&proc, &raw);
+                    diag::push_capped(&mut c.logs.lock().unwrap(), line, diag::LOG_RING_CAP);
                 }
             });
         }
@@ -600,6 +664,38 @@ impl ZenohLiftConn {
         Ok(())
     }
 
+    pub fn get_events(&self) -> diag::EventsSnapshot {
+        self.ctrl.events.lock().unwrap().snapshot()
+    }
+
+    pub fn get_logs(&self) -> Vec<diag::LogLine> {
+        self.ctrl.logs.lock().unwrap().iter().cloned().collect()
+    }
+
+    /// 从 `<prefix>/events/recent` 与 `<cid>/*/log/recent` 播种一次历史 ——
+    /// 事后才连上 GUI 也能看到之前发生的事(如 homing 失败、0x8130)。
+    pub async fn refresh_diag(&self) {
+        let Some(prefix) = self.ctrl.view_prefix.lock().unwrap().clone() else { return };
+        if let Some(log) =
+            query_one::<pb::EventLog>(&self.session, &format!("{prefix}/events/recent"), vec![]).await
+        {
+            let history: Vec<diag::RobotEvent> = log.events.into_iter().map(to_diag_event).collect();
+            self.ctrl.events.lock().unwrap().reseed(history);
+        }
+        if let Some(cid) = diag::cid_prefix(&prefix) {
+            let blobs = query_all(&self.session, &format!("{cid}/*/log/recent")).await;
+            let mut ring = VecDeque::new();
+            for (key, payload) in blobs {
+                let proc = diag::proc_of_log_key(&key);
+                let text = String::from_utf8_lossy(&payload);
+                for raw in text.lines().filter(|l| !l.is_empty()) {
+                    diag::push_capped(&mut ring, diag::parse_log_line(&proc, raw), diag::LOG_RING_CAP);
+                }
+            }
+            *self.ctrl.logs.lock().unwrap() = ring;
+        }
+    }
+
     pub fn state(&self) -> ZenohLiftState {
         self.ctrl.state.lock().unwrap().clone()
     }
@@ -666,6 +762,29 @@ mod tests {
         assert!(!lifts.is_empty(), "没发现 lift —— 发现路径回归了");
         // description 必须被补齐:只有 robot 级回复而没有设备级细节 = 第二阶段 query 挂了。
         assert!(!lifts[0].pos_max.is_empty(), "lift/description 未补齐");
+    }
+
+    /// 在线冒烟:诊断历史播种。事件来自控制器的 `<prefix>/events/recent`,
+    /// 日志来自同一 cid 下**每个进程**的 `.../log/recent`(含 launcher —— 排查"没起来"时
+    /// 最有用的恰恰是它,只订 lift 自己那条会看不到)。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires a running lift controller + zenoh router on tcp/127.0.0.1:7447"]
+    async fn refresh_diag_seeds_logs_and_events() {
+        let conn = ZenohLiftConn::open("tcp/127.0.0.1:7447").await.expect("open zenoh");
+        let lifts = conn.discover().await;
+        assert!(!lifts.is_empty(), "先确保有 lift 在跑");
+        conn.set_focus(&lifts[0].prefix).await;
+        conn.refresh_diag().await;
+        let logs = conn.get_logs();
+        let events = conn.get_events();
+        println!("logs={} events={}", logs.len(), events.events.len());
+        for l in logs.iter().rev().take(3) {
+            println!("  [{}] {} {}", l.proc, l.level, l.msg);
+        }
+        for e in events.events.iter().rev().take(5) {
+            println!("  event {} {}", e.code, e.text);
+        }
+        assert!(!logs.is_empty(), "日志历史应非空");
     }
 
     #[test]

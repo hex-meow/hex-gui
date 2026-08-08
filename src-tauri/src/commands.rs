@@ -2264,3 +2264,34 @@ pub async fn zlift_release(state: State<'_, AppState>) -> CmdResult<()> {
     c.release().await;
     Ok(())
 }
+
+/// 播种一次事件/日志历史(事后连上也看得到之前发生的事)。
+#[tauri::command]
+pub async fn zlift_refresh_diag(state: State<'_, AppState>) -> CmdResult<()> {
+    let g = state.zenoh_lift.lock().await;
+    let c = g.as_ref().ok_or_else(|| "未连接 Lift Zenoh".to_string())?;
+    c.refresh_diag().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn zlift_get_events(state: State<'_, AppState>) -> CmdResult<EventsSnapshot> {
+    Ok(state
+        .zenoh_lift
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.get_events())
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn zlift_get_logs(state: State<'_, AppState>) -> CmdResult<Vec<LogLine>> {
+    Ok(state
+        .zenoh_lift
+        .lock()
+        .await
+        .as_ref()
+        .map(|c| c.get_logs())
+        .unwrap_or_default())
+}

@@ -510,6 +510,8 @@ const STRINGS = {
   liftPayload: { en: "Rated payload", zh: "额定负载" },
   liftGotoTitle: { en: "Height goal", zh: "高度目标" },
   liftGoto: { en: "Go", zh: "前往" },
+  liftGotoMin: { en: "Min", zh: "到底" },
+  liftGotoMax: { en: "Max", zh: "到顶" },
   liftGotoHint: {
     en: "The device plans and stops on its own; completion shows as the Reached badge.",
     zh: "设备自行规划并停机;到位与否看「已到位」徽标。",

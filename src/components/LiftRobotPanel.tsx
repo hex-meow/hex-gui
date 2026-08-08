@@ -19,7 +19,7 @@ import {
 } from "antd";
 import { api, errMsg } from "../api";
 import type { LiftRobotInfo, ZenohLiftState } from "../types";
-import { FaultAlert, RobotModeTag } from "./DiagnosticsPanel";
+import { DiagnosticsCard, FaultAlert, RobotModeTag } from "./DiagnosticsPanel";
 import { useI18n } from "../i18n";
 
 const POLL_MS = 100; // 升降是慢轴,10Hz 足够;状态本身也只有 ~10Hz
@@ -90,7 +90,10 @@ export function LiftRobotPanel() {
       setLifts(list);
       const first = list[0]?.prefix ?? null;
       setSelected(first);
-      if (first) await api.zliftSetFocus(first).catch(() => {});
+      if (first) {
+        await api.zliftSetFocus(first).catch(() => {});
+        await api.zliftRefreshDiag().catch(() => {});
+      }
       if (!list.length) message.warning(t("liftNoneFound"));
     } catch (e) { message.error(errMsg(e)); }
     finally { setBusy(false); }
@@ -104,6 +107,8 @@ export function LiftRobotPanel() {
   const onSelect = useCallback(async (prefix: string) => {
     setSelected(prefix);
     await api.zliftSetFocus(prefix).catch(() => {});
+    // 播种历史:事后才连上 GUI 也能看到之前的事件/日志(如启动失败、homing 失败)。
+    await api.zliftRefreshDiag().catch(() => {});
   }, []);
 
   const acquire = useCallback(async () => {
@@ -245,6 +250,14 @@ export function LiftRobotPanel() {
             <Button type="primary" disabled={!canMove} onClick={() => goto_(target)}>
               {t("liftGoto")}
             </Button>
+            {/* 一键到底/到顶(与裸 CAN lift 面板同一便利)。目标取设备派生的 98% 软限位,
+                不是物理端点 —— 所以这是"走到可用行程的两端",不会去撞硬限位。 */}
+            <Button disabled={!canMove} onClick={() => { setTarget(posMin); goto_(posMin); }}>
+              ⤓ {t("liftGotoMin")}
+            </Button>
+            <Button disabled={!canMove} onClick={() => { setTarget(posMax); goto_(posMax); }}>
+              ⤒ {t("liftGotoMax")}
+            </Button>
             <Typography.Text type="secondary">{t("liftGotoHint")}</Typography.Text>
           </Space>
         </Card>
@@ -277,6 +290,14 @@ export function LiftRobotPanel() {
             <Typography.Text type="secondary">{t("liftApiJogHint")}</Typography.Text>
           </Space>
         </Card>
+      )}
+      {connected && (
+        <DiagnosticsCard
+          enabled={!!selected}
+          getEvents={api.zliftGetEvents}
+          getLogs={api.zliftGetLogs}
+          onRefresh={api.zliftRefreshDiag}
+        />
       )}
     </Space>
   );
