@@ -15,7 +15,6 @@ import { ZenohPanel } from "./ZenohPanel";
 import { MachineViewer } from "./MachineViewer";
 import { EeQuickStrip } from "./EeQuickStrip";
 import type { SceneRobot } from "../types";
-import { WifiSettingsDrawer } from "./WifiSettingsDrawer";
 import { HardwarePanel } from "./HardwarePanel";
 
 const { Sider, Content } = Layout;
@@ -40,7 +39,6 @@ export default function RobotConsole() {
   const [focusMode, setFocusMode] = useState<"ghost" | "hide" | "off">(
     () => (localStorage.getItem("console.focusMode") as "ghost" | "hide" | "off") || "ghost");
   const [spacing, setSpacing] = useState<number>(() => Number(localStorage.getItem("console.spacing")) || 2);
-  const [wifiOpen, setWifiOpen] = useState(false);
 
   const connect = useCallback(async () => {
     try {
@@ -54,7 +52,7 @@ export default function RobotConsole() {
     await Promise.allSettled([api.armRelease(), api.zenohRelease(), api.eeRelease()]);
     await Promise.allSettled([api.armDisconnect(), api.zenohDisconnect(), api.eeDisconnect()]);
     setConnected(false); setNodes([]); setSel(null); setHardwareCid(null);
-    setHardware(EMPTY_HARDWARE); setHeld(new Set()); setWifiOpen(false);
+    setHardware(EMPTY_HARDWARE); setHeld(new Set());
   }, []);
 
   // 周期全量发现(在线/离线以"出现在发现结果里"为准;liveliness 精细三态是后续优化)
@@ -168,8 +166,6 @@ export default function RobotConsole() {
       ],
     };
   });
-  const wifiCids = allCids.map((cid) => `hexmeow/${cid}`);
-
   return (
     <Layout style={{ height: "100%", background: "transparent" }}>
       <Sider width={270} theme="light" style={{ borderRight: "1px solid rgba(128,128,128,.25)", padding: 8 }}>
@@ -180,15 +176,6 @@ export default function RobotConsole() {
             ? <Button size="small" onClick={disconnect}>{t("consoleDisconnect")}</Button>
             : <Button size="small" type="primary" onClick={connect}>{t("consoleConnect")}</Button>}
         </Space.Compact>
-        <Button
-          size="small"
-          block
-          disabled={!connected}
-          style={{ marginBottom: 8 }}
-          onClick={() => setWifiOpen(true)}
-        >
-          {t("wifiSettings")}
-        </Button>
         {connected && nodes.length === 0 && hardware.controllers.length === 0 && (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("consoleSearching")} />
         )}
@@ -278,12 +265,6 @@ export default function RobotConsole() {
           </Card>
         )}
       </Content>
-      <WifiSettingsDrawer
-        open={wifiOpen}
-        connected={connected}
-        fallbackCids={wifiCids}
-        onClose={() => setWifiOpen(false)}
-      />
     </Layout>
   );
 }

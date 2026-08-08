@@ -10,6 +10,7 @@ import { ReloadOutlined } from "@ant-design/icons";
 import { api, errMsg } from "../api";
 import { useI18n } from "../i18n";
 import type { ApiVersion, ConfigGetDto, ConfigValidateResult, ControllerInfo, CriticalChange } from "../types";
+import { WifiSettingsDrawer } from "./WifiSettingsDrawer";
 import "./ControllerConfigPanel.css";
 
 // 本 GUI 支持的 config schema 主版本。控制器上报的 schema_version.major 更高 → 只读(沿用 01 版本规则)。
@@ -59,6 +60,7 @@ export function ControllerConfigPanel() {
   const [action, setAction] = useState<null | "validate" | "save" | "apply" | "restart">(null);
   const [pending, setPending] = useState<Pending | null>(null);
   const [pendingLoading, setPendingLoading] = useState(false);
+  const [wifiOpen, setWifiOpen] = useState(false);
 
   // 供轮询/异步回调读取最新值,避免闭包过期。
   const cidRef = useRef<string | null>(null);
@@ -143,6 +145,7 @@ export function ControllerConfigPanel() {
     setLoadedSha("");
     setValidateResult(null);
     setExternal(null);
+    setWifiOpen(false);
   }, []);
 
   const discover = useCallback(async () => {
@@ -371,6 +374,9 @@ export function ControllerConfigPanel() {
           <Button disabled={!connected} onClick={discover}>
             {t("cfgDiscover")}
           </Button>
+          <Button disabled={!connected} onClick={() => setWifiOpen(true)}>
+            {t("wifiSettings")}
+          </Button>
         </div>
         <div className="cfg-discovery">
           <Typography.Text type="secondary">
@@ -525,6 +531,12 @@ export function ControllerConfigPanel() {
           </>
         )}
       </Modal>
+      <WifiSettingsDrawer
+        open={wifiOpen}
+        connected={connected}
+        fallbackCids={controllers.map((controller) => controller.cid)}
+        onClose={() => setWifiOpen(false)}
+      />
     </div>
   );
 }

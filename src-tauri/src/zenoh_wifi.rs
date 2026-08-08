@@ -1,6 +1,6 @@
-//! Robot Console Wi-Fi client.
+//! Controller Config Wi-Fi client.
 //!
-//! Reuses the console's single Zenoh session. The wire format is the public
+//! Reuses Controller Config's controller-level Zenoh session. The wire format is the public
 //! hex-wifi JSON protocol; passphrases are write-only and never appear in a
 //! response DTO or log message.
 

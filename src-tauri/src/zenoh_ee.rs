@@ -148,10 +148,6 @@ pub struct ZenohEeConn {
 }
 
 impl ZenohEeConn {
-    pub(crate) fn session(&self) -> zenoh::Session {
-        self.session.clone()
-    }
-
     pub async fn open(connect: &str) -> anyhow::Result<Self> {
         let mut cfg = zenoh::Config::default();
         cfg.insert_json5("mode", "\"peer\"").unwrap();
