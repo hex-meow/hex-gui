@@ -15,7 +15,7 @@
 #   1. hex-arm-dynamics — publish it to crates.io. Cargo.toml now uses
 #      `hex-arm-dynamics = "0.1.0"` (no longer a path dep).
 #   2. The shared proto — build.rs compiles `../../hex-robot-proto/proto` by
-#      default. CI checks out hex-robot-proto/master into `_proto` and points
+#      default. CI checks out the pinned hex-robot-proto contract into `_proto` and points
 #      ROBOT_PROTO_DIR at it.
 #
 # ⚠️ Bundles here are UNSIGNED. macOS users hit Gatekeeper (right-click → Open);
@@ -84,7 +84,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: hex-meow/hex-robot-proto
-          ref: master
+          ref: d60ebe8f16ffeb144e6c0059bff5f5a97606e8c4
           path: _proto
       - name: Install Linux build dependencies
         run: |
@@ -132,12 +132,12 @@ jobs:
       - uses: actions/checkout@v4
 
       # Shared proto contract lives in a sibling repo. CI consumes only the
-      # verified contract on master; build.rs compiles it via ROBOT_PROTO_DIR.
+      # Pinned verified contract; build.rs compiles it via ROBOT_PROTO_DIR.
       - name: Check out shared proto (hex-robot-proto)
         uses: actions/checkout@v4
         with:
           repository: hex-meow/hex-robot-proto
-          ref: master
+          ref: d60ebe8f16ffeb144e6c0059bff5f5a97606e8c4
           path: _proto
       - name: Verify shared proto inputs
         shell: bash

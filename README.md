@@ -216,8 +216,8 @@ The draft Release is driven entirely by pushing a tag that matches `v*`
 ```bash
 # src-tauri/Cargo.toml is the only manually maintained application version.
 # Bump it, refresh src-tauri/Cargo.lock with cargo metadata, commit, then:
-git tag v1.2.0
-git push origin v1.2.0
+git tag v1.3.0
+git push origin v1.3.0
 ```
 
 Each platform's job appends its bundles to the same Release. When all three
@@ -232,7 +232,7 @@ a maintainer may explicitly delete and recreate both.
 >
 > **Green-build prerequisites** (see the header comment in the workflow):
 > `hex-arm-dynamics` must be available from crates.io. CI checks out the verified
-> shared contract from `hex-meow/hex-robot-proto/master` via `ROBOT_PROTO_DIR`.
+> shared contract from pinned `hex-meow/hex-robot-proto` commit `d60ebe8` via `ROBOT_PROTO_DIR`.
 
 ## Usage
 

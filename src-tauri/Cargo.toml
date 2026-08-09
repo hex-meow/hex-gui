@@ -1,6 +1,6 @@
 [package]
 name = "hex-motor-gui"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2021"
 description = "Tauri GUI for the hex-motor CiA402 driver."
 license = "MIT OR Apache-2.0"
@@ -43,7 +43,7 @@ anyhow = "1"
 getrandom = "0.3"
 chrono = "0.4"
 # Published Meow Motor driver and host services.
-hex-motor = "0.2.2"
+hex-motor = "0.2.4"
 
 # Public, secret-free runtime for the current HPM USB Bootloader. It owns the
 # strict legacy profile/package parser and flash state machine; the Tauri
@@ -57,7 +57,7 @@ cobs-can-iap = { path = "crates/cobs-can-iap" }
 canopen-sdo = { version = "0.1.1", default-features = false, features = ["tokio"] }
 
 # Base(Zenoh):连 hex-controller 暴露的 robot_api。
-zenoh = "1"
+zenoh = { version = "1", default-features = false, features = ["transport_tcp", "transport_udp"] }
 prost = "0.13"
 # 机械臂动力学(重力 G(q)):host 端 tau_ff 前馈,与控制器 GRAVITY_COMP 共用同一 crate(仅依赖 urdf-rs)。
 # crates.io 版(CI 需要)。本地开发未发布改动时可临时改回 { path = "../../hex-arm-dynamics" }。
