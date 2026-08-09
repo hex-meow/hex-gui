@@ -440,10 +440,10 @@ function readKeyboard(keys: Set<string>, linear: number, angular: number): Twist
     switch (KEY_MAP[key]) {
       case "fwd": fx += 1; break;
       case "back": fx -= 1; break;
-      case "left": fy -= 1; break;
-      case "right": fy += 1; break;
-      case "ccw": fz -= 1; break;
-      case "cw": fz += 1; break;
+      case "left": fy += 1; break;
+      case "right": fy -= 1; break;
+      case "ccw": fz += 1; break;
+      case "cw": fz -= 1; break;
     }
   }
   if (fx === 0 && fy === 0 && fz === 0) return null;
