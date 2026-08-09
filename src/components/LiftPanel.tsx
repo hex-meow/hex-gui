@@ -695,22 +695,25 @@ export function LiftPanel({ connected }: { connected: boolean }) {
             <Card title={t("liftIdentity")} size="small">
               <MetricGrid
                 items={[
-                  [t("liftDeviceName"), state.device_name || "—"],
-                  [t("liftFirmware"), state.firmware_version || "—"],
-                  [t("liftNodeId"), String(state.node_id)],
+                  [t("liftDeviceName"), state.device_name || "—", "0x1008"],
+                  [t("liftFirmware"), state.firmware_version || "—", "0x100A"],
+                  [t("liftNodeId"), String(state.node_id), "0x2101"],
                   [
                     t("liftOnline"),
                     state.online ? t("liftYes") : t("liftNo"),
+                    "HB 0x700+n",
                   ],
                   [
                     t("liftTpdo1Fresh"),
                     state.tpdo1_fresh ? t("liftYes") : t("liftNo"),
+                    "TPDO1 0x180+n",
                   ],
                   [
                     t("liftTpdo2Fresh"),
                     state.tpdo2_fresh ? t("liftYes") : t("liftNo"),
+                    "TPDO2 0x280+n",
                   ],
-                  [t("liftNmt"), nmtName(state.nmt_state)],
+                  [t("liftNmt"), nmtName(state.nmt_state) + " (0x" + state.nmt_state.toString(16).toUpperCase().padStart(2, "0") + ")", "HB 0x700+n"],
                   [
                     t("liftWorker"),
                     state.running ? t("liftRunning") : t("liftStopped"),
@@ -722,14 +725,15 @@ export function LiftPanel({ connected }: { connected: boolean }) {
             <Card title={t("liftNameplate")} size="small">
               <MetricGrid
                 items={[
-                  [t("liftKind"), String(state.nameplate_kind)],
-                  [t("liftModel"), state.model || "—"],
-                  [t("liftLayout"), hex(state.layout_id, 8)],
-                  [t("liftUsed"), String(state.nameplate_used)],
-                  [t("liftCrc"), hex(state.nameplate_crc32, 8)],
+                  [t("liftKind"), String(state.nameplate_kind), "0x5F00"],
+                  [t("liftModel"), state.model || "—", "0x5F01"],
+                  [t("liftLayout"), hex(state.layout_id, 8), "0x5F02"],
+                  [t("liftUsed"), String(state.nameplate_used), "0x5F02"],
+                  [t("liftCrc"), hex(state.nameplate_crc32, 8), "0x5F03"],
                   [
                     t("liftCrcValid"),
                     state.nameplate_crc_ok ? t("liftYes") : t("liftNo"),
+                    "0x5F03 校验",
                   ],
                 ]}
               />
@@ -755,17 +759,18 @@ export function LiftPanel({ connected }: { connected: boolean }) {
             >
               <MetricGrid
                 items={[
-                  [t("liftModeCommand"), modeName(state.mode_command)],
-                  [t("liftModeDisplay"), modeName(state.mode_display)],
-                  [t("liftStatusWord"), hex(state.status_word, 4)],
+                  [t("liftModeCommand"), modeName(state.mode_command) + " (" + hex(state.mode_command, 2) + ")", "0x4401"],
+                  [t("liftModeDisplay"), modeName(state.mode_display) + " (" + hex(state.mode_display, 2) + ")", "0x4402"],
+                  [t("liftStatusWord"), hex(state.status_word, 4) + " 0b" + state.status_word.toString(2).padStart(8, "0"), "0x4403"],
                   [
                     t("liftDetailedFault"),
                     state.detailed_fault === 0
-                      ? t("liftFaultNone")
+                      ? t("liftFaultNone") + " (0x0000)"
                       : faultName(state.detailed_fault) +
                         " (" +
                         hex(state.detailed_fault, 4) +
                         ")",
+                    "0x453F",
                   ],
                 ]}
               />
@@ -779,10 +784,16 @@ export function LiftPanel({ connected }: { connected: boolean }) {
                     >
                       {active ? "● " : "○ "}
                       {t(key)}
+                      <span className="lift-metric__od">
+                        {"b" + Math.log2(mask)}
+                      </span>
                     </Tag>
                   );
                 })}
               </div>
+              <Typography.Text type="secondary" className="lift-inline-blocker">
+                {t("liftStatusWordSource")}
+              </Typography.Text>
             </Card>
           </div>
 
@@ -1010,11 +1021,11 @@ export function LiftPanel({ connected }: { connected: boolean }) {
                 <MetricGrid
                   large
                   items={[
-                    [t("liftActualPosition"), finite(state.actual_position_m, 4, " m")],
-                    [t("liftActualVelocity"), finite(state.actual_velocity_mps, 4, " m/s")],
-                    [t("liftEncoder"), integer(state.encoder_count)],
-                    [t("liftTimestamp"), integer(state.sample_timestamp_us) + " µs"],
-                    [t("liftDuty"), finite(state.duty_command_permille, 1, " ‰")],
+                    [t("liftActualPosition"), finite(state.actual_position_m, 4, " m"), "0x4564"],
+                    [t("liftActualVelocity"), finite(state.actual_velocity_mps, 4, " m/s"), "0x456C"],
+                    [t("liftEncoder"), integer(state.encoder_count), "0x4601:03"],
+                    [t("liftTimestamp"), integer(state.sample_timestamp_us) + " µs", "0x4713"],
+                    [t("liftDuty"), finite(state.duty_command_permille, 1, " ‰"), "0x4601:04"],
                   ]}
                 />
               </Card>
@@ -1064,12 +1075,14 @@ export function LiftPanel({ connected }: { connected: boolean }) {
                       [
                         t("liftBusVoltage"),
                         electricalValue(finite(state.bus_voltage_v, 3, " V")),
+                        "0x4601:01",
                       ],
                       [
                         t("liftBusCurrent"),
                         electricalValue(finite(state.bus_current_a, 3, " A")),
+                        "0x4601:02",
                       ],
-                      [t("liftSensorStatus"), hex(state.sensor_status, 2)],
+                      [t("liftSensorStatus"), hex(state.sensor_status, 2) + " 0b" + state.sensor_status.toString(2).padStart(5, "0"), "0x4601:05"],
                     ]}
                   />
                   <div className="lift-status-bits">
@@ -1082,34 +1095,49 @@ export function LiftPanel({ connected }: { connected: boolean }) {
                         >
                           {active ? "● " : "○ "}
                           {t(key)}
+                          <span className="lift-metric__od">
+                            {"b" + Math.log2(mask)}
+                          </span>
                         </Tag>
                       );
                     })}
                   </div>
+                  <Typography.Text type="secondary" className="lift-inline-blocker">
+                    {t("liftSensorStatusSource")}
+                  </Typography.Text>
                   <Typography.Text strong>{t("liftInaDiagnostics")}</Typography.Text>
                   <div className="lift-status-bits">
                     <Tag color={state.ina_diagnostics.ina_error === 0 ? "green" : "red"}>
                       {t("liftInaCurrentError")}: {inaErrorName(state.ina_diagnostics.ina_error)}
+                      {" (" + state.ina_diagnostics.ina_error + ")"}
+                      <span className="lift-metric__od">0x4601:06</span>
                     </Tag>
                     <Tag color={state.ina_diagnostics.last_error === 0 ? "default" : "orange"}>
                       {t("liftInaLastError")}: {inaErrorName(state.ina_diagnostics.last_error)}
+                      {" (" + state.ina_diagnostics.last_error + ")"}
+                      <span className="lift-metric__od">0x4601:0F</span>
                     </Tag>
                   </div>
                   <MetricGrid
                     items={[
                       [
                         t("liftInaTransportError"),
-                        inaTransportErrorName(state.ina_diagnostics.ina_transport_error),
+                        inaTransportErrorName(state.ina_diagnostics.ina_transport_error) +
+                          " (" + state.ina_diagnostics.ina_transport_error + ")",
+                        "0x4601:07",
                       ],
                       [
                         t("liftInaLastTransportError"),
-                        inaTransportErrorName(state.ina_diagnostics.last_transport_error),
+                        inaTransportErrorName(state.ina_diagnostics.last_transport_error) +
+                          " (" + state.ina_diagnostics.last_transport_error + ")",
+                        "0x4601:10",
                       ],
-                      [t("liftInaDiag"), hex(state.ina_diagnostics.diag_alert, 4)],
-                      [t("liftInaFaultCount"), integer(state.ina_diagnostics.fault_count)],
+                      [t("liftInaDiag"), hex(state.ina_diagnostics.diag_alert, 4), "0x4601:08"],
+                      [t("liftInaFaultCount"), integer(state.ina_diagnostics.fault_count), "0x4601:09"],
                       [
                         t("liftInaLastAttemptAge"),
                         ageMs(state.ina_diagnostics.last_attempt_age_ms, t("liftNever")),
+                        "0x4601:0B",
                       ],
                       [
                         t("liftInaLastSuccessAge"),
@@ -1117,26 +1145,34 @@ export function LiftPanel({ connected }: { connected: boolean }) {
                           state.ina_diagnostics.last_success_age_ms,
                           t("liftNoSuccessfulSample")
                         ),
+                        "0x4601:0C",
                       ],
                       [
                         t("liftInaConsecutiveGood"),
                         integer(state.ina_diagnostics.consecutive_good),
+                        "0x4601:0D",
                       ],
                       [
                         t("liftInaConsecutiveErrors"),
                         integer(state.ina_diagnostics.consecutive_errors),
+                        "0x4601:0E",
                       ],
                       [
                         t("liftInaFingerprintMismatch"),
-                        inaMismatchName(state.ina_diagnostics.fingerprint_mismatch),
+                        inaMismatchName(state.ina_diagnostics.fingerprint_mismatch) +
+                          " (" + hex(state.ina_diagnostics.fingerprint_mismatch, 4) + ")",
+                        "0x4601:0A",
                       ],
                       [
                         t("liftInaLastFingerprintMismatch"),
-                        inaMismatchName(state.ina_diagnostics.last_fingerprint_mismatch),
+                        inaMismatchName(state.ina_diagnostics.last_fingerprint_mismatch) +
+                          " (" + hex(state.ina_diagnostics.last_fingerprint_mismatch, 4) + ")",
+                        "0x4601:11",
                       ],
                       [
                         t("liftInaLastErrorAge"),
                         ageMs(state.ina_diagnostics.last_error_age_ms, t("liftNever")),
+                        "0x4601:12",
                       ],
                     ]}
                   />
@@ -1146,16 +1182,17 @@ export function LiftPanel({ connected }: { connected: boolean }) {
               <Card title={t("liftEffectiveParameters")}>
                 <MetricGrid
                   items={[
-                    [t("liftCountsPerMeter"), finite(state.counts_per_meter, 3)],
+                    [t("liftCountsPerMeter"), finite(state.counts_per_meter, 3), "0x4600:01"],
                     [
                       t("liftPositionRange"),
                       finite(state.position_min_m, 4) +
                         " … " +
                         finite(state.position_max_m, 4) +
                         " m",
+                      "0x4600:02/03",
                     ],
-                    [t("liftVelocityMax"), finite(state.velocity_max_mps, 4, " m/s")],
-                    [t("liftVelocityMin"), finite(state.velocity_min_mps, 4, " m/s")],
+                    [t("liftVelocityMax"), finite(state.velocity_max_mps, 4, " m/s"), "0x4600:04"],
+                    [t("liftVelocityMin"), finite(state.velocity_min_mps, 4, " m/s"), "0x4600:05"],
                   ]}
                 />
                 <Typography.Text type="secondary" className="lift-inline-blocker">
@@ -1170,18 +1207,28 @@ export function LiftPanel({ connected }: { connected: boolean }) {
   );
 }
 
+/// 一格指标:`[人类可读名, 值, 来源对象字典条目?]`。
+///
+/// 第三项是**这个值到底从哪个 OD 条目读出来的**。排查现场问题时,人类名帮不上忙 ——
+/// 需要的是能直接对着 `lift-driver/docs/lift-object-dictionary.md` 查、或者拿 SDO
+/// 手动读回来的那个索引。写在标签旁边,省掉"这个数是哪来的"这一步反查。
+type Metric = [string, string] | [string, string, string];
+
 function MetricGrid({
   items,
   large = false,
 }: {
-  items: Array<[string, string]>;
+  items: Metric[];
   large?: boolean;
 }) {
   return (
     <div className={large ? "lift-metrics lift-metrics--large" : "lift-metrics"}>
-      {items.map(([label, value]) => (
+      {items.map(([label, value, od]) => (
         <div className="lift-metric" key={label}>
-          <span>{label}</span>
+          <span>
+            {label}
+            {od && <span className="lift-metric__od" title={`OD ${od}`}>{od}</span>}
+          </span>
           <strong title={value}>{value}</strong>
         </div>
       ))}

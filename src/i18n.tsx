@@ -503,6 +503,14 @@ const STRINGS = {
     en: "The device clears its home state on every reset, and the controller refuses ACTIVE until homing completes. Home first, then height control unlocks.",
     zh: "设备每次复位都会清掉回零状态,控制器在回零完成前拒绝进入 ACTIVE。先回零,高度控制随即解锁。",
   },
+  liftStatusWordSource: {
+    en: "Bits above are StatusWord 0x4403 (see docs/lift-object-dictionary.md §4).",
+    zh: "以上各位来自 StatusWord 0x4403(位表见 docs/lift-object-dictionary.md §4)。",
+  },
+  liftSensorStatusSource: {
+    en: "Bits above are sensor_status 0x4601:05 (see §8).",
+    zh: "以上各位来自 sensor_status 0x4601:05(位表见 §8)。",
+  },
   liftApiDisable: { en: "Disable", zh: "去使能" },
   liftHeight: { en: "Height", zh: "当前高度" },
   liftSoftLimits: { en: "Soft limits", zh: "软限位" },

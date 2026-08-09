@@ -191,6 +191,17 @@
   white-space: nowrap;
 }
 
+/* 该数值来自哪个对象字典条目。等宽 + 更暗,便于对着 docs/lift-object-dictionary.md
+   直接查,同时不与人类可读的字段名抢视线。 */
+.lift-metric__od {
+  margin-left: 6px;
+  color: rgba(120, 200, 255, 0.62);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
 .lift-metric strong {
   overflow: hidden;
   color: rgba(255, 255, 255, 0.94);
