@@ -435,6 +435,14 @@ const STRINGS = {
     en: "Configure a known device's Node-ID and CAN timing. Motors also provide a separate position preset.",
     zh: "配置已知设备的 Node-ID 与 CAN 时序；电机另提供独立的位置预设。",
   },
+  toolCalibrationUpdate: {
+    en: "Update Motor Calibration",
+    zh: "更新电机校准数据",
+  },
+  toolCalibrationUpdateDesc: {
+    en: "Verify one Meow Motor, preserve its issuance token, and safely replace torque/friction calibration from result JSON.",
+    zh: "验证一台 Meow Motor，保留其签发 token，并根据结果 JSON 安全更新力矩/摩擦力校准。",
+  },
   switchTool: { en: "Switch tool", zh: "切换工具" },
 
   // Tool categories + Robot Application

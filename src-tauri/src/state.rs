@@ -80,6 +80,10 @@ pub struct AppState {
     /// Read-only source-proof snapshots keyed by `(node-id, heartbeat session
     /// epoch)`. Public registration re-reads the live device before use.
     pub authenticity: crate::authenticity::AuthenticityState,
+    /// Developer-only attended user recalibration. Unlike the transient proof
+    /// cache, this remains in memory across a CAN disconnect so the operator
+    /// can power-cycle/reconnect and verify the persisted readback.
+    pub calibration_update: crate::calibration_update::CalibrationUpdateState,
     /// Serializes the cross-tool check/start transition so friction and torque
     /// calibration cannot race into concurrent ownership of one motor bus.
     pub calibration_start_gate: Mutex<()>,

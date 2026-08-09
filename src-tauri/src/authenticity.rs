@@ -1,4 +1,4 @@
-//! Public, read-only device authenticity and first-registration workflow.
+//! Public device authenticity and first-registration workflow.
 //!
 //! Discovery remains heartbeat driven. This module re-reads the complete
 //! `0x1018` record on the same transport, gates proprietary reads on an exact
@@ -28,7 +28,7 @@ use crate::{
 const API_ORIGIN: &str = "https://product-auth.hexmeow.com";
 const DEVICE_AUTH_DOMAIN: &[u8; 28] = b"hex-meow/device-auth/sign/v1";
 const CRC_DOMAIN: &[u8; 23] = b"hex-meow/0x4001/crc/v1\0";
-const MANIFEST_UPPER_V1: u16 = 0x0106;
+pub(crate) const MANIFEST_UPPER_V1: u16 = 0x0106;
 const SDO_TIMEOUT: Duration = Duration::from_millis(700);
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -53,7 +53,7 @@ pub struct Identity {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
-struct FactoryWords([u32; 7]);
+pub(crate) struct FactoryWords(pub(crate) [u32; 7]);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -89,8 +89,8 @@ impl DeviceProof {
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuthTarget {
-    node_id: u8,
-    session_epoch: u64,
+    pub(crate) node_id: u8,
+    pub(crate) session_epoch: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -285,7 +285,10 @@ async fn inspect_live(
     }
 }
 
-async fn target_identity(state: &AppState, target: AuthTarget) -> Result<Identity, String> {
+pub(crate) async fn target_identity(
+    state: &AppState,
+    target: AuthTarget,
+) -> Result<Identity, String> {
     let manager = state
         .manager()
         .await
@@ -338,7 +341,7 @@ async fn ensure_targets_current(
     Ok(())
 }
 
-async fn read_identity(bus: &Arc<dyn CanBus>, node: u8) -> Result<Identity, String> {
+pub(crate) async fn read_identity(bus: &Arc<dyn CanBus>, node: u8) -> Result<Identity, String> {
     let count = read_exact::<1>(bus, node, 0x1018, 0).await?[0];
     if count != 4 {
         return Err(format!("0x1018:00 must equal 4, got {count}"));
@@ -541,7 +544,7 @@ fn view(
     }
 }
 
-fn validate_meow_v1(identity: Identity, words: &FactoryWords) -> Result<(), String> {
+pub(crate) fn validate_meow_v1(identity: Identity, words: &FactoryWords) -> Result<(), String> {
     if (words.0[0] >> 16) as u16 != MANIFEST_UPPER_V1 {
         return Err("0x4001 manifest is not format v1 / payload length 6".into());
     }
@@ -584,7 +587,7 @@ fn validate_meow_v1(identity: Identity, words: &FactoryWords) -> Result<(), Stri
     Ok(())
 }
 
-fn meow_crc(identity: Identity, words: &FactoryWords) -> u16 {
+pub(crate) fn meow_crc(identity: Identity, words: &FactoryWords) -> u16 {
     let mut transcript = Vec::with_capacity(61);
     transcript.extend_from_slice(CRC_DOMAIN);
     transcript.extend_from_slice(&identity.vendor_id.to_le_bytes());
@@ -612,7 +615,7 @@ fn crc16(bytes: &[u8]) -> u16 {
     crc
 }
 
-fn decode_e4m11(raw: u16) -> Result<f64, String> {
+pub(crate) fn decode_e4m11(raw: u16) -> Result<f64, String> {
     let sign = if raw & 0x8000 != 0 { -1.0 } else { 1.0 };
     let exponent = (raw >> 11) & 0x0F;
     let fraction = raw & 0x07FF;
@@ -625,6 +628,66 @@ fn decode_e4m11(raw: u16) -> Result<f64, String> {
         2f64.powi(i32::from(exponent) - 7) * (1.0 + f64::from(fraction) / 2048.0)
     };
     Ok(sign * magnitude)
+}
+
+pub(crate) fn encode_e4m11(value: f64) -> Result<u16, String> {
+    if !value.is_finite() {
+        return Err("e4m11 value must be finite".into());
+    }
+    if value == 0.0 {
+        return Ok(0);
+    }
+    let sign = if value.is_sign_negative() { 0x8000 } else { 0 };
+    let magnitude = value.abs();
+    if magnitude > 255.9375 {
+        return Err(format!("e4m11 value {value} exceeds 255.9375"));
+    }
+    if magnitude < 2f64.powi(-6) {
+        let fraction = (magnitude * 2f64.powi(17)).round_ties_even() as u16;
+        if fraction == 0 {
+            return Ok(0);
+        }
+        if fraction >= 2048 {
+            return Ok(sign | 0x0800);
+        }
+        return Ok(sign | fraction);
+    }
+
+    let exponent_unbiased = magnitude.log2().floor() as i32;
+    let mut exponent = exponent_unbiased + 7;
+    let scaled = magnitude / 2f64.powi(exponent_unbiased);
+    let mut fraction = ((scaled - 1.0) * 2048.0).round_ties_even() as i32;
+    if fraction == 2048 {
+        exponent += 1;
+        fraction = 0;
+    }
+    if exponent >= 15 {
+        return Err(format!("e4m11 value {value} overflows"));
+    }
+    Ok(sign | ((exponent as u16) << 11) | fraction as u16)
+}
+
+pub(crate) async fn verify_meow_words_online(
+    identity: Identity,
+    words: FactoryWords,
+) -> Result<String, String> {
+    validate_meow_v1(identity, &words)?;
+    let response: VerifyResponse = post_json(
+        "/v1/devices/verify",
+        &ProofRequest {
+            proofs: vec![DeviceProof::MeowMotor {
+                proof: MotorProof {
+                    identity,
+                    factory_words: words,
+                },
+            }],
+        },
+    )
+    .await?;
+    match response.statuses.as_slice() {
+        [status] => Ok(status.clone()),
+        _ => Err("verification server returned a mismatched status count".into()),
+    }
 }
 
 fn verify_signed(
@@ -941,5 +1004,24 @@ mod tests {
         append_response_chunk(&mut bytes, &[1]).unwrap();
         assert_eq!(bytes.len(), HTTP_RESPONSE_MAX_BYTES);
         assert!(append_response_chunk(&mut bytes, &[2]).is_err());
+    }
+
+    #[test]
+    fn e4m11_encoder_matches_frozen_values_and_round_trips() {
+        for (value, raw) in [
+            (0.0, 0x0000),
+            (0.1, 0x1ccd),
+            (0.5, 0x3000),
+            (0.85, 0x359a),
+            (1.0, 0x3800),
+            (2.0, 0x4000),
+            (25.0, 0x5c80),
+            (255.9375, 0x77ff),
+        ] {
+            assert_eq!(encode_e4m11(value).unwrap(), raw);
+            assert!(decode_e4m11(raw).unwrap().is_finite());
+        }
+        assert!(encode_e4m11(f64::NAN).is_err());
+        assert!(encode_e4m11(256.0).is_err());
     }
 }

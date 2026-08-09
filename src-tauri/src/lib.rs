@@ -7,6 +7,7 @@ mod analyzer;
 mod authenticity;
 mod backend;
 mod calibration_transport;
+mod calibration_update;
 mod can_lease;
 mod cobs_can_iap_profiles;
 mod commands;
@@ -32,8 +33,8 @@ mod zenoh_base;
 mod zenoh_config;
 mod zenoh_discovery;
 mod zenoh_ee;
-mod zenoh_lift;
 mod zenoh_hw;
+mod zenoh_lift;
 mod zenoh_wifi;
 
 use std::sync::atomic::Ordering;
@@ -123,6 +124,10 @@ pub fn run() {
             authenticity::authenticity_inspect,
             authenticity::authenticity_verify_online,
             authenticity::authenticity_register,
+            calibration_update::calibration_update_prepare,
+            calibration_update::calibration_update_preview,
+            calibration_update::calibration_update_write,
+            calibration_update::calibration_update_verify_persisted,
             commands::identify,
             commands::initialize,
             commands::initialize_all,

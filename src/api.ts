@@ -3,7 +3,7 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, ArmUrdf, AuthenticityDeviceView, AuthenticityOnlineStatus, AuthenticityRegistrationResult, AuthenticityTarget, BaseInfo, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ConnectionInfo, ControllerInfo, DeviceSettingsRequest, DeviceSettingsResult, EventsSnapshot, FrictionCalibrationRequest, FrictionCalibrationView, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftFactoryCalibrationResult, LiftState, LiveState, LogLine, MeowCanSettingsRequest, MeowMotorSnapshot, MeowMotorTarget, MeowProfileLimits, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, TorqueCalibrationRequest, TorqueCalibrationView, ZenohArmState, ZenohBaseState, LiftRobotInfo, ZenohLiftState, EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
+import type { ArmInfo, ArmUrdf, AuthenticityDeviceView, AuthenticityOnlineStatus, AuthenticityRegistrationResult, AuthenticityTarget, BaseInfo, CalibrationUpdatePersistedResult, CalibrationUpdatePrepared, CalibrationUpdatePreview, CalibrationUpdatePreviewRequest, CalibrationUpdateVerifyRequest, CalibrationUpdateWriteRequest, CalibrationUpdateWriteResult, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ConnectionInfo, ControllerInfo, DeviceSettingsRequest, DeviceSettingsResult, EventsSnapshot, FrictionCalibrationRequest, FrictionCalibrationView, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftFactoryCalibrationResult, LiftState, LiveState, LogLine, MeowCanSettingsRequest, MeowMotorSnapshot, MeowMotorTarget, MeowProfileLimits, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, TorqueCalibrationRequest, TorqueCalibrationView, ZenohArmState, ZenohBaseState, LiftRobotInfo, ZenohLiftState, EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
 
 export const api = {
   connect: (iface: string, dataBitrate: number, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -18,6 +18,14 @@ export const api = {
     invoke<AuthenticityOnlineStatus[]>("authenticity_verify_online", { targets }),
   authenticityRegister: (targets: AuthenticityTarget[]) =>
     invoke<AuthenticityRegistrationResult>("authenticity_register", { targets }),
+  calibrationUpdatePrepare: (target: AuthenticityTarget) =>
+    invoke<CalibrationUpdatePrepared>("calibration_update_prepare", { target }),
+  calibrationUpdatePreview: (request: CalibrationUpdatePreviewRequest) =>
+    invoke<CalibrationUpdatePreview>("calibration_update_preview", { request }),
+  calibrationUpdateWrite: (request: CalibrationUpdateWriteRequest) =>
+    invoke<CalibrationUpdateWriteResult>("calibration_update_write", { request }),
+  calibrationUpdateVerifyPersisted: (request: CalibrationUpdateVerifyRequest) =>
+    invoke<CalibrationUpdatePersistedResult>("calibration_update_verify_persisted", { request }),
   identify: (nid: number) => invoke<void>("identify", { nid }),
   initialize: (nid: number) => invoke<void>("initialize", { nid }),
   initializeAll: () =>

@@ -11,6 +11,7 @@ import { ImuPanel } from "./components/ImuPanel";
 import { DeviceSettingsTool } from "./components/DeviceSettingsTool";
 import { MotorFrictionCalibrationPanel } from "./components/MotorFrictionCalibrationPanel";
 import { MotorTorqueCalibrationPanel } from "./components/MotorTorqueCalibrationPanel";
+import { MotorCalibrationUpdatePanel } from "./components/MotorCalibrationUpdatePanel";
 import { Hopea3Panel } from "./components/Hopea3Panel";
 import { LiftPanel } from "./components/LiftPanel";
 import { SmartKnobPanel } from "./components/SmartKnobPanel";
@@ -42,6 +43,7 @@ type Tool =
   | "authenticity"
   | "calibration"
   | "torqueCalibration"
+  | "calibrationUpdate"
   | "console";
 
 const DEVICE_POLL_MS = 700;
@@ -66,6 +68,7 @@ export default function App() {
   // locked until the backend command has actually returned.
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [calibrationBusy, setCalibrationBusy] = useState(false);
+  const [calibrationUpdateBusy, setCalibrationUpdateBusy] = useState(false);
 
   useEffect(() => {
     let disposed = false;
@@ -142,6 +145,10 @@ export default function App() {
       message.warning(t("calibrationBusyLeave"));
       return;
     }
+    if (tool === "calibrationUpdate" && calibrationUpdateBusy) {
+      message.warning(t("settingsBusyLeave"));
+      return;
+    }
     try {
       if (tool === "dfu") {
         await Promise.all([hpmDfuApi.leave(), canDfuApi.leave()]);
@@ -158,7 +165,7 @@ export default function App() {
     setDevices([]);
     setTutorialOpen(false);
     setTool(null);
-  }, [calibrationBusy, dfuBusy, message, settingsBusy, t, tool]);
+  }, [calibrationBusy, calibrationUpdateBusy, dfuBusy, message, settingsBusy, t, tool]);
 
   const onToggleLog = useCallback(
     async (nid: number, on: boolean, meowMotor = false) => {
@@ -205,6 +212,10 @@ export default function App() {
       title: t("toolTorqueCalibration"),
       desc: t("toolTorqueCalibrationDesc"),
     },
+    calibrationUpdate: {
+      title: t("toolCalibrationUpdate"),
+      desc: t("toolCalibrationUpdateDesc"),
+    },
     liftApi: { title: t("toolLiftZenoh"), desc: t("toolLiftZenohDesc") },
     console: { title: t("toolConsole"), desc: t("toolConsoleDesc") },
   } satisfies Record<Tool, { title: string; desc: string }>;
@@ -228,7 +239,8 @@ export default function App() {
     tool !== "dfu" &&
     tool !== "authenticity" &&
     tool !== "calibration" &&
-    tool !== "torqueCalibration";
+    tool !== "torqueCalibration" &&
+    tool !== "calibrationUpdate";
   const showConnectBar =
     tool !== "console" &&
     tool !== "zenoh" &&
@@ -249,6 +261,7 @@ export default function App() {
               (tool === "dfu" && dfuBusy) ||
               (tool === "settings" && settingsBusy) ||
               ((tool === "calibration" || tool === "torqueCalibration") && calibrationBusy)
+              || (tool === "calibrationUpdate" && calibrationUpdateBusy)
             }
             onClick={switchTool}
           >
@@ -281,6 +294,7 @@ export default function App() {
               disconnectDisabled={
                 (tool === "settings" && settingsBusy) ||
                 ((tool === "calibration" || tool === "torqueCalibration") && calibrationBusy)
+                || (tool === "calibrationUpdate" && calibrationUpdateBusy)
               }
             />
           </section>
@@ -338,6 +352,12 @@ export default function App() {
               connected={connected}
               devices={devices}
               onRunningChange={setCalibrationBusy}
+            />
+          ) : tool === "calibrationUpdate" ? (
+            <MotorCalibrationUpdatePanel
+              connected={connected}
+              devices={devices}
+              onBusyChange={setCalibrationUpdateBusy}
             />
           ) : tool === "settings" ? (
             selected?.device_type === "meow_motor" ? (
@@ -546,6 +566,13 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
                 tag={t("tagCalibration")}
                 accent="orange"
                 onClick={() => onPick("torqueCalibration")}
+              />
+              <ToolCard
+                title={t("toolCalibrationUpdate")}
+                desc={t("toolCalibrationUpdateDesc")}
+                tag={t("tagCalibration")}
+                accent="blue"
+                onClick={() => onPick("calibrationUpdate")}
               />
             </>
           )}

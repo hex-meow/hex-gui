@@ -51,6 +51,95 @@ export interface AuthenticityRegistrationResult {
   device_count: number;
 }
 
+export interface CalibrationRawWord {
+  subindex: number;
+  value_u32: number;
+  value_hex: string;
+}
+
+export interface CalibrationFrictionPayload {
+  static_pos_raw_nm: number;
+  static_neg_raw_nm: number;
+  kinetic_pos_raw_nm: number;
+  kinetic_neg_raw_nm: number;
+  reference_speed_rad_per_s: number;
+  calibration_temperature_c: number;
+}
+
+export interface CalibrationPayload {
+  torque_factor: number;
+  torque_fit_rmse_nm: number;
+  friction: CalibrationFrictionPayload | null;
+}
+
+export interface CalibrationSource {
+  vendor_id: number;
+  product_code: number;
+  revision_number: number;
+  serial_number: number;
+}
+
+export interface CalibrationUpdatePrepared {
+  node_id: number;
+  session_epoch: number;
+  identity: AuthenticityIdentity;
+  online_status: "issued_unregistered" | "registered";
+  token_decimal: string;
+  token_hex: string;
+  highest_subindex: number;
+  backup_words: CalibrationRawWord[];
+  current_calibration: CalibrationPayload;
+}
+
+export interface CalibrationUpdatePreviewRequest {
+  target: AuthenticityTarget;
+  torqueJson: string;
+  frictionJson: string | null;
+}
+
+export interface CalibrationUpdatePreview {
+  preview_id: string;
+  node_id: number;
+  identity: AuthenticityIdentity;
+  token_decimal: string;
+  token_hex: string;
+  torque_source: CalibrationSource;
+  friction_source: CalibrationSource | null;
+  requested: CalibrationPayload;
+  quantized: CalibrationPayload;
+  new_words: CalibrationRawWord[];
+  warnings: string[];
+}
+
+export interface CalibrationUpdateWriteRequest {
+  target: AuthenticityTarget;
+  previewId: string;
+  backupAcknowledged: boolean;
+}
+
+export interface CalibrationUpdateWriteResult {
+  node_id: number;
+  identity: AuthenticityIdentity;
+  preview_id: string;
+  written_words: CalibrationRawWord[];
+  ram_readback_confirmed: boolean;
+  power_cycle_required: boolean;
+}
+
+export interface CalibrationUpdateVerifyRequest {
+  target: AuthenticityTarget;
+  previewId: string;
+}
+
+export interface CalibrationUpdatePersistedResult {
+  node_id: number;
+  session_epoch: number;
+  identity: AuthenticityIdentity;
+  preview_id: string;
+  online_status: "issued_unregistered" | "registered";
+  persisted_words: CalibrationRawWord[];
+}
+
 export interface CanBitTiming {
   bitrate: number | null;
   /** Per-mille: 800 means a 0.800 sample point. */

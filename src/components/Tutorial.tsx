@@ -381,6 +381,7 @@ export const TUTORIALS: Record<string, Slide[]> = {
   authenticity: AUTHENTICITY_SLIDES,
   calibration: CALIBRATION_SLIDES,
   torqueCalibration: TORQUE_CALIBRATION_SLIDES,
+  calibrationUpdate: placeholderSlides("calibrationUpdate"),
 };
 
 // Renders the slide's image/video, falling back to the placeholder caption if
