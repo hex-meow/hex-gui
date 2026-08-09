@@ -1,6 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "hex-motor-gui",
+  "productName": "hexmeow-gui",
+  "mainBinaryName": "hex-motor-gui",
   "identifier": "com.hexmecha.hex-motor-gui",
   "build": {
     "frontendDist": "../dist",
@@ -12,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "hex-motor",
+        "title": "hexmeow-gui",
         "width": 960,
         "height": 680,
         "resizable": true,
@@ -27,13 +28,28 @@
     "active": true,
     "targets": "all",
     "category": "Utility",
-    "shortDescription": "Host GUI for HexFellow CiA402 CAN motors",
+    "shortDescription": "Service GUI for hexmeow motors, robots, and firmware",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "provides": ["hex-motor-gui"],
+        "conflicts": ["hex-motor-gui"],
+        "replaces": ["hex-motor-gui"]
+      }
+    },
+    "windows": {
+      "wix": {
+        "upgradeCode": "58092ba2-2394-5e69-bbb4-5fd81b134dc5"
+      },
+      "nsis": {
+        "installerHooks": "windows/nsis-hooks.nsh"
+      }
+    }
   }
 }

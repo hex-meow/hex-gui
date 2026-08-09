@@ -481,7 +481,7 @@ impl ZenohLiftConn {
             }
         }
         let req = pb::AcquireSessionRequest {
-            client_name: Some("hex-motor-gui".into()),
+            client_name: Some("hexmeow-gui".into()),
             liveliness_key: None,
         };
         let resp: pb::AcquireSessionResponse = query_one(

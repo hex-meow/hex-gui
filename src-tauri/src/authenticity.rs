@@ -829,7 +829,7 @@ async fn post_json<T: for<'de> Deserialize<'de>>(
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(HTTP_CONNECT_TIMEOUT)
         .timeout(HTTP_TIMEOUT)
-        .user_agent(concat!("hex-motor-gui/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("hexmeow-gui/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|error| format!("building authenticity HTTPS client: {error}"))?;
     let url = format!("{API_ORIGIN}{path}");

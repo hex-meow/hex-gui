@@ -422,12 +422,15 @@ export default function App() {
   );
 }
 
+// Keep the pre-v1.3 key so developer-mode state survives the product rename.
+const DEVELOPER_TOOLS_STORAGE_KEY = "hex-motor-gui.developer-tools";
+
 function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
   const { message } = AntdApp.useApp();
   const { t, lang, toggle } = useI18n();
   const [developerMode, setDeveloperMode] = useState(() => {
     try {
-      return window.localStorage.getItem("hex-motor-gui.developer-tools") === "enabled";
+      return window.localStorage.getItem(DEVELOPER_TOOLS_STORAGE_KEY) === "enabled";
     } catch {
       return false;
     }
@@ -443,7 +446,7 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
     const remaining = 7 - titleTap.current.count;
     if (remaining <= 0) {
       try {
-        window.localStorage.setItem("hex-motor-gui.developer-tools", "enabled");
+        window.localStorage.setItem(DEVELOPER_TOOLS_STORAGE_KEY, "enabled");
       } catch {
         // The mode remains enabled for this WebView session.
       }

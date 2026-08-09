@@ -301,7 +301,7 @@ const STRINGS = {
   logFailed: { en: "Log action failed", zh: "日志操作失败" },
 
   // App
-  appTitle: { en: "hex-motor host", zh: "hex-motor 上位机" },
+  appTitle: { en: "hexmeow GUI", zh: "hexmeow 上位机" },
   backToTools: { en: "Tools", zh: "工具" },
   connectionDock: { en: "CAN connection", zh: "CAN 连接" },
   selectMotor: { en: "Select a motor on the left", zh: "在左侧选择一个电机" },

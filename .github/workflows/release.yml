@@ -40,7 +40,7 @@ jobs:
     outputs:
       app_version: ${{ steps.read.outputs.app_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Read and validate the single application version
         id: read
@@ -79,9 +79,9 @@ jobs:
     needs: version
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Check out shared proto (hex-robot-proto)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: hex-meow/hex-robot-proto
           ref: d60ebe8f16ffeb144e6c0059bff5f5a97606e8c4
@@ -99,7 +99,7 @@ jobs:
             build-essential pkg-config libssl-dev \
             libfuse2
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -129,12 +129,12 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Shared proto contract lives in a sibling repo. CI consumes only the
       # Pinned verified contract; build.rs compiles it via ROBOT_PROTO_DIR.
       - name: Check out shared proto (hex-robot-proto)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: hex-meow/hex-robot-proto
           ref: d60ebe8f16ffeb144e6c0059bff5f5a97606e8c4
@@ -181,7 +181,7 @@ jobs:
           key: ${{ matrix.platform }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -200,12 +200,12 @@ jobs:
         with:
           args: ${{ matrix.args }}
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          releaseName: "hex-motor-gui v${{ needs.version.outputs.app_version }}"
+          releaseName: "hexmeow-gui v${{ needs.version.outputs.app_version }}"
           releaseDraft: true
           releaseBody: |
             Unsigned builds for Linux / Windows / macOS.
 
-            - **Linux** — `.deb` (`sudo apt install ./hex-motor-gui_*.deb`) or `.AppImage` (`chmod +x` then run).
+            - **Linux** — `.deb` (`sudo apt install ./hexmeow-gui_*.deb`) or `.AppImage` (`chmod +x` then run).
             - **Windows** — `.msi` or the NSIS `.exe` installer.
             - **macOS** — `.dmg` (universal, Intel + Apple Silicon). Unsigned: right-click → Open the first time to get past Gatekeeper.
 
@@ -214,7 +214,7 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
         with:
-          name: hex-motor-gui-v${{ needs.version.outputs.app_version }}-${{ matrix.platform }}
+          name: hexmeow-gui-v${{ needs.version.outputs.app_version }}-${{ matrix.platform }}
           path: |
             src-tauri/target/release/bundle/**/*
             src-tauri/target/*/release/bundle/**/*

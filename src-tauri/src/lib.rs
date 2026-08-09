@@ -1,4 +1,4 @@
-//! Tauri entry point for the hex-motor GUI.
+//! Tauri entry point for hexmeow GUI.
 //!
 //! Wires the [`AppState`] into Tauri-managed state and registers every
 //! `#[tauri::command]` defined in [`commands`].

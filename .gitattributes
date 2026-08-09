@@ -1,0 +1,3 @@
+# Vendored robot descriptions are content-addressed. Keep their checked-out
+# bytes identical on every platform so Windows does not rewrite LF to CRLF.
+*.urdf text eol=lf

@@ -1,11 +1,9 @@
-# hex-motor GUI (Tauri)
+# hexmeow GUI (Tauri)
 
-A Tauri 2.x desktop GUI on top of the local [`hex-motor`](../hex-motor)
-crate. Connect to a CAN bus, browse discovered CiA402 motors in a sidebar,
-watch each motor's PDO feedback (position / host-filtered velocity / torque /
-status word / temps / motor timestamp) as a numeric panel or rolling 2-D
-chart, record any motor's full-rate stream to CSV, and drive its CiA402 state
-machine (enable / disable / mode switch / targets / max-torque limit).
+A Tauri 2.x desktop service GUI for hexmeow devices. It includes the original
+CiA402 motor host plus robot/controller discovery, arm/base/lift/end-effector
+tools, commissioning and configuration flows, firmware updates, CAN analysis,
+diagnostics, and device-authenticity checks.
 
 Frontend: **Vite + React + TypeScript + Ant Design + ECharts**.
 Backend: **pure Rust** (Tauri commands over `hex-motor`).
@@ -114,7 +112,7 @@ together:
 
 ```bash
 cargo install tauri-cli --version "^2" --locked   # once
-cd hex-motor-gui/src-tauri
+cd hex-gui/src-tauri
 cargo tauri dev
 ```
 
@@ -123,7 +121,7 @@ cargo tauri dev
 Build the frontend, then run the Rust binary directly (it embeds `dist/`):
 
 ```bash
-cd hex-motor-gui
+cd hex-gui
 npm run build
 cd src-tauri && cargo run
 ```
@@ -149,7 +147,7 @@ does.
 
 **Quick confirmation:** install GNOME Web (`sudo apt install epiphany-browser`),
 maximize it, and scroll a long page. If Epiphany is *also* laggy when large,
-it's this WebKitGTK/X11 limitation (not hex-motor-gui), and switching to Wayland
+it's this WebKitGTK/X11 limitation (not hexmeow-gui), and switching to Wayland
 is the fix.
 
 ## Packaging (Ubuntu x64)
@@ -168,13 +166,21 @@ cargo tauri build --bundles appimage
 
 Outputs land in `src-tauri/target/release/bundle/{deb,appimage}/`.
 
-- **`.deb`** (~5 MB) — `sudo apt install ./hex-motor-gui_*.deb`. It declares
+- **`.deb`** (~5 MB) — `sudo apt install ./hexmeow-gui_*.deb`. It declares
   `libwebkit2gtk-4.1-0` + `libgtk-3-0` as dependencies, so apt pulls the
   **WebKitGTK 4.1** runtime automatically. Recommended for Ubuntu.
 - **`.AppImage`** (~77 MB) — bundles WebKitGTK, so it runs without installing
-  anything: `chmod +x hex-motor-gui_*.AppImage && ./hex-motor-gui_*.AppImage`.
+  anything: `chmod +x hexmeow-gui_*.AppImage && ./hexmeow-gui_*.AppImage`.
   On Ubuntu 22.04+ you may need FUSE: `sudo apt install libfuse2` (or run with
   `--appimage-extract-and-run`).
+
+> **Rename compatibility (v1.3.0):** the user-facing product is now
+> `hexmeow-gui`, while the bundle identifier, WebView data identity, internal
+> executable name, and legacy local-storage keys remain stable. The Windows MSI
+> UpgradeCode is pinned to the previous value, the NSIS installer migrates the
+> old registration in place, and the Debian package replaces `hex-motor-gui`.
+> On macOS the new `.app` has a different filename; after copying it, remove the
+> old `hex-motor-gui.app` manually. Preferences remain under the same bundle ID.
 
 > **glibc / build host:** an AppImage links against the build machine's glibc
 > and is **not** forward-compatible. Build releases on the **oldest** target

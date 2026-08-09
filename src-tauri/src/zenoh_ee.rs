@@ -419,7 +419,7 @@ impl ZenohEeConn {
             let cur = self.ctrl.prefix.lock().unwrap().clone();
             if cur.as_deref() != Some(prefix) { self.release().await; }
         }
-        let req = pb::AcquireSessionRequest { client_name: Some("hex-motor-gui".into()), liveliness_key: None };
+        let req = pb::AcquireSessionRequest { client_name: Some("hexmeow-gui".into()), liveliness_key: None };
         let resp: pb::AcquireSessionResponse = query_one(&self.session, &format!("{prefix}/rpc/acquire_session"), enc(&req))
             .await.ok_or_else(|| anyhow!("acquire 无回复"))?;
         if !resp.ok {

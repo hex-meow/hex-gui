@@ -2,7 +2,7 @@
 name = "hex-motor-gui"
 version = "1.3.0"
 edition = "2021"
-description = "Tauri GUI for the hex-motor CiA402 driver."
+description = "Desktop service GUI for hexmeow motors, robots, and firmware."
 license = "MIT OR Apache-2.0"
 
 [lib]

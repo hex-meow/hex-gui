@@ -520,7 +520,7 @@ fn r2_client() -> CmdResult<reqwest::Client> {
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(R2_CONNECT_TIMEOUT)
         .timeout(R2_REQUEST_TIMEOUT)
-        .user_agent(concat!("hex-motor-gui/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("hexmeow-gui/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|error| format!("building the R2 HTTPS client: {error}"))
 }
