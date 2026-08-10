@@ -1774,18 +1774,16 @@ async fn tpdo1_loop(
         let remaining = valid_deadline.saturating_duration_since(Instant::now());
         match tokio::time::timeout(remaining, rx.recv()).await {
             Ok(Ok(frame)) => {
-                if frame.kind() == FrameKind::Data {
-                    if let Some((position, timestamp, mode, status)) = parse_tpdo1(frame.data()) {
-                        let now = Instant::now();
-                        valid_deadline = now + TPDO_TIMEOUT;
-                        freshness.lock().unwrap().last_valid_tpdo1 = Some(now);
-                        let mut state = state.lock().unwrap();
-                        state.tpdo1_fresh = true;
-                        state.actual_position_m = position;
-                        state.sample_timestamp_us = timestamp;
-                        state.mode_display = mode;
-                        state.status_word = status;
-                    }
+                if let Some((position, timestamp, mode, status)) = parse_tpdo1_frame(&frame) {
+                    let now = Instant::now();
+                    valid_deadline = now + TPDO_TIMEOUT;
+                    freshness.lock().unwrap().last_valid_tpdo1 = Some(now);
+                    let mut state = state.lock().unwrap();
+                    state.tpdo1_fresh = true;
+                    state.actual_position_m = position;
+                    state.sample_timestamp_us = timestamp;
+                    state.mode_display = mode;
+                    state.status_word = status;
                 }
             }
             Ok(Err(error)) => {
@@ -1816,16 +1814,14 @@ async fn tpdo2_loop(
         let remaining = valid_deadline.saturating_duration_since(Instant::now());
         match tokio::time::timeout(remaining, rx.recv()).await {
             Ok(Ok(frame)) => {
-                if frame.kind() == FrameKind::Data {
-                    if let Some((voltage, current)) = parse_tpdo2(frame.data()) {
-                        let now = Instant::now();
-                        valid_deadline = now + TPDO_TIMEOUT;
-                        freshness.lock().unwrap().last_valid_tpdo2 = Some(now);
-                        let mut state = state.lock().unwrap();
-                        state.tpdo2_fresh = true;
-                        state.bus_voltage_v = voltage;
-                        state.bus_current_a = current;
-                    }
+                if let Some((voltage, current)) = parse_tpdo2_frame(&frame) {
+                    let now = Instant::now();
+                    valid_deadline = now + TPDO_TIMEOUT;
+                    freshness.lock().unwrap().last_valid_tpdo2 = Some(now);
+                    let mut state = state.lock().unwrap();
+                    state.tpdo2_fresh = true;
+                    state.bus_voltage_v = voltage;
+                    state.bus_current_a = current;
                 }
             }
             Ok(Err(error)) => {
@@ -2130,6 +2126,21 @@ fn parse_bcd_date(value: &str) -> anyhow::Result<u32> {
     Ok(encoded)
 }
 
+/// Return the payload of a TPDO data frame regardless of its CAN wire format.
+///
+/// `0x2100:03` may switch every TPDO between Classic CAN and CAN FD+BRS at
+/// runtime. Remote frames are never valid PDOs and carry no payload.
+pub(crate) fn tpdo_payload(frame: &CanFrame) -> Option<&[u8]> {
+    match frame.kind() {
+        FrameKind::Data | FrameKind::Fd { .. } => Some(frame.data()),
+        FrameKind::Remote => None,
+    }
+}
+
+fn parse_tpdo1_frame(frame: &CanFrame) -> Option<(f32, u16, u8, u8)> {
+    tpdo_payload(frame).and_then(parse_tpdo1)
+}
+
 fn parse_tpdo1(data: &[u8]) -> Option<(f32, u16, u8, u8)> {
     if data.len() != 8 {
         return None;
@@ -2140,6 +2151,10 @@ fn parse_tpdo1(data: &[u8]) -> Option<(f32, u16, u8, u8)> {
         data[6],
         data[7],
     ))
+}
+
+fn parse_tpdo2_frame(frame: &CanFrame) -> Option<(f32, f32)> {
+    tpdo_payload(frame).and_then(parse_tpdo2)
 }
 
 fn parse_tpdo2(data: &[u8]) -> Option<(f32, f32)> {
@@ -2228,6 +2243,38 @@ mod tests {
         tpdo2[4..].copy_from_slice(&1.5f32.to_le_bytes());
         assert_eq!(parse_tpdo2(&tpdo2), Some((24.0, 1.5)));
         assert!(parse_tpdo2(&tpdo2[..4]).is_none());
+    }
+
+    #[test]
+    fn tpdo1_and_tpdo2_accept_classic_and_fd_frames() {
+        let mut tpdo1 = [0u8; 8];
+        tpdo1[..4].copy_from_slice(&0.25f32.to_le_bytes());
+        tpdo1[4..6].copy_from_slice(&1234u16.to_le_bytes());
+        tpdo1[6] = 2;
+        tpdo1[7] = 0x4B;
+        for frame in [
+            CanFrame::new_data(tpdo1_cob_id(20), &tpdo1).unwrap(),
+            CanFrame::new_fd(tpdo1_cob_id(20), &tpdo1, false).unwrap(),
+            CanFrame::new_fd(tpdo1_cob_id(20), &tpdo1, true).unwrap(),
+        ] {
+            assert_eq!(parse_tpdo1_frame(&frame), Some((0.25, 1234, 2, 0x4B)));
+        }
+
+        let mut tpdo2 = [0u8; 8];
+        tpdo2[..4].copy_from_slice(&24.0f32.to_le_bytes());
+        tpdo2[4..].copy_from_slice(&1.5f32.to_le_bytes());
+        for frame in [
+            CanFrame::new_data(tpdo2_cob_id(20), &tpdo2).unwrap(),
+            CanFrame::new_fd(tpdo2_cob_id(20), &tpdo2, false).unwrap(),
+            CanFrame::new_fd(tpdo2_cob_id(20), &tpdo2, true).unwrap(),
+        ] {
+            assert_eq!(parse_tpdo2_frame(&frame), Some((24.0, 1.5)));
+        }
+
+        let remote = CanFrame::new_remote(tpdo1_cob_id(20), 8).unwrap();
+        assert!(parse_tpdo1_frame(&remote).is_none());
+        let short_fd = CanFrame::new_fd(tpdo2_cob_id(20), &tpdo2[..7], true).unwrap();
+        assert!(parse_tpdo2_frame(&short_fd).is_none());
     }
 
     #[test]

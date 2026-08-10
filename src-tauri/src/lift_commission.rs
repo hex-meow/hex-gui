@@ -10,13 +10,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use can_transport::{CanBus, CanFilter, CanFrame, CanRx, FrameKind};
+use can_transport::{CanBus, CanFilter, CanFrame, CanRx};
 use hex_motor::canopen::sdo;
 use serde::Serialize;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
 
-use crate::lift::LiftState;
+use crate::lift::{tpdo_payload, LiftState};
 
 const OD: u16 = 0x4700;
 const HIGHEST_SUBINDEX: u8 = 27;
@@ -1911,8 +1911,8 @@ async fn tpdo3_loop(
 ) {
     while running.load(Ordering::SeqCst) {
         match tokio::time::timeout(TPDO_TIMEOUT, rx.recv()).await {
-            Ok(Ok(frame)) if frame.kind() == FrameKind::Data => {
-                if let Some(sample) = parse_tpdo3(frame.data()) {
+            Ok(Ok(frame)) => {
+                if let Some(sample) = parse_tpdo3_frame(&frame) {
                     freshness.lock().unwrap().tpdo3 = Some(Instant::now());
                     let joined = telemetry.lock().unwrap().joiner.push_tpdo3(sample);
                     if let Some(joined) = joined {
@@ -1928,7 +1928,6 @@ async fn tpdo3_loop(
                     }
                 }
             }
-            Ok(Ok(_)) => {}
             Ok(Err(error)) => {
                 freshness.lock().unwrap().tpdo3 = None;
                 base_state.lock().unwrap().last_error =
@@ -1956,8 +1955,8 @@ async fn tpdo4_loop(
 ) {
     while running.load(Ordering::SeqCst) {
         match tokio::time::timeout(TPDO_TIMEOUT, rx.recv()).await {
-            Ok(Ok(frame)) if frame.kind() == FrameKind::Data => {
-                if let Some(sample) = parse_tpdo4(frame.data()) {
+            Ok(Ok(frame)) => {
+                if let Some(sample) = parse_tpdo4_frame(&frame) {
                     freshness.lock().unwrap().tpdo4 = Some(Instant::now());
                     let joined = telemetry.lock().unwrap().joiner.push_tpdo4(sample);
                     if let Some(joined) = joined {
@@ -1973,7 +1972,6 @@ async fn tpdo4_loop(
                     }
                 }
             }
-            Ok(Ok(_)) => {}
             Ok(Err(error)) => {
                 freshness.lock().unwrap().tpdo4 = None;
                 base_state.lock().unwrap().last_error =
@@ -2060,6 +2058,10 @@ fn is_fresh(last: Option<Instant>, now: Instant) -> bool {
     last.is_some_and(|last| now.saturating_duration_since(last) < TPDO_TIMEOUT)
 }
 
+fn parse_tpdo3_frame(frame: &CanFrame) -> Option<Tpdo3> {
+    tpdo_payload(frame).and_then(parse_tpdo3)
+}
+
 fn parse_tpdo3(data: &[u8]) -> Option<Tpdo3> {
     if data.len() != 8 {
         return None;
@@ -2069,6 +2071,10 @@ fn parse_tpdo3(data: &[u8]) -> Option<Tpdo3> {
         raw_count: i32::from_le_bytes(data[2..6].try_into().ok()?),
         applied_duty_permille: i16::from_le_bytes(data[6..8].try_into().ok()?),
     })
+}
+
+fn parse_tpdo4_frame(frame: &CanFrame) -> Option<Tpdo4> {
+    tpdo_payload(frame).and_then(parse_tpdo4)
 }
 
 fn parse_tpdo4(data: &[u8]) -> Option<Tpdo4> {
@@ -2278,6 +2284,48 @@ mod tests {
         assert!(parse_tpdo4(&raw4[..7]).is_none());
         raw4[2..6].copy_from_slice(&f32::NAN.to_le_bytes());
         assert!(parse_tpdo4(&raw4).is_none());
+    }
+
+    #[test]
+    fn commission_tpdo3_and_tpdo4_accept_classic_and_fd_frames() {
+        let mut raw3 = [0u8; 8];
+        raw3[0..2].copy_from_slice(&0xfffeu16.to_le_bytes());
+        raw3[2..6].copy_from_slice(&(-123i32).to_le_bytes());
+        raw3[6..8].copy_from_slice(&45i16.to_le_bytes());
+        let expected3 = Tpdo3 {
+            tick: 0xfffe,
+            raw_count: -123,
+            applied_duty_permille: 45,
+        };
+        for frame in [
+            CanFrame::new_data(tpdo3_cob_id(20), &raw3).unwrap(),
+            CanFrame::new_fd(tpdo3_cob_id(20), &raw3, false).unwrap(),
+            CanFrame::new_fd(tpdo3_cob_id(20), &raw3, true).unwrap(),
+        ] {
+            assert_eq!(parse_tpdo3_frame(&frame), Some(expected3));
+        }
+
+        let mut raw4 = [0u8; 8];
+        raw4[0..2].copy_from_slice(&0xfffeu16.to_le_bytes());
+        raw4[2..6].copy_from_slice(&4.25f32.to_le_bytes());
+        raw4[6..8].copy_from_slice(&50i16.to_le_bytes());
+        let expected4 = Tpdo4 {
+            tick: 0xfffe,
+            current_a: 4.25,
+            requested_duty_permille: 50,
+        };
+        for frame in [
+            CanFrame::new_data(tpdo4_cob_id(20), &raw4).unwrap(),
+            CanFrame::new_fd(tpdo4_cob_id(20), &raw4, false).unwrap(),
+            CanFrame::new_fd(tpdo4_cob_id(20), &raw4, true).unwrap(),
+        ] {
+            assert_eq!(parse_tpdo4_frame(&frame), Some(expected4));
+        }
+
+        let remote = CanFrame::new_remote(tpdo3_cob_id(20), 8).unwrap();
+        assert!(parse_tpdo3_frame(&remote).is_none());
+        let short_fd = CanFrame::new_fd(tpdo4_cob_id(20), &raw4[..7], true).unwrap();
+        assert!(parse_tpdo4_frame(&short_fd).is_none());
     }
 
     #[test]
