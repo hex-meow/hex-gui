@@ -7,7 +7,21 @@ fn main() {
     }
     let proto_dir = std::env::var("ROBOT_PROTO_DIR")
         .unwrap_or_else(|_| "../../hex-robot-proto/proto".to_string());
-    let files = ["common.proto", "controller.proto", "robot.proto", "base.proto", "arm.proto", "ee.proto", "lift.proto", "events.proto"];
+    // `ROBOT_PROTO_DIR` is used by CI to pin a checked-out contract and by
+    // local development to switch back to the sibling repository. Without
+    // this directive Cargo can reuse generated Rust from the previous path
+    // even after the environment override disappears.
+    println!("cargo:rerun-if-env-changed=ROBOT_PROTO_DIR");
+    let files = [
+        "common.proto",
+        "controller.proto",
+        "robot.proto",
+        "base.proto",
+        "arm.proto",
+        "ee.proto",
+        "lift.proto",
+        "events.proto",
+    ];
     let paths: Vec<String> = files.iter().map(|f| format!("{proto_dir}/{f}")).collect();
     prost_build::compile_protos(&paths, &[&proto_dir]).expect("compile protos");
     for p in &paths {

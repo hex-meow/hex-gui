@@ -1,14 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { App as AntdApp, Button, Input, InputNumber, Select, Switch, Tag, Typography } from "antd";
+import { App as AntdApp, Button, Input, InputNumber, Select, Slider, Switch, Tag, Typography } from "antd";
 import { api, errMsg } from "../api";
 import { useI18n } from "../i18n";
-import type { BaseInfo, ZenohBaseState } from "../types";
+import type { BaseInfo, BaseLimitAxisDto, BaseLimitsDto, ZenohBaseState } from "../types";
 import { BasePoseViewer } from "./BasePoseViewer";
 import { DiagnosticsCard, FaultAlert, RobotModeTag } from "./DiagnosticsPanel";
 import "./ZenohPanel.css";
 
 const POLL_MS = 10;
 const MANUAL_MS = 33;
+
+interface LimitDraft {
+  linear: number | null;
+  angular: number | null;
+}
+
+const EMPTY_LIMIT_DRAFT: LimitDraft = { linear: null, angular: null };
 
 const KEY_MAP: Record<string, "fwd" | "back" | "left" | "right" | "ccw" | "cw"> = {
   w: "fwd",
@@ -34,8 +41,41 @@ export function ZenohPanel({ embedded }: { embedded?: { endpoint: string; prefix
   const [busy, setBusy] = useState(false);
   const [armed, setArmed] = useState(false);
   const [keyboardEnabled, setKeyboardEnabled] = useState(true);
+  const [limits, setLimits] = useState<BaseLimitsDto | null>(null);
+  const [limitDraft, setLimitDraft] = useState<LimitDraft>(EMPTY_LIMIT_DRAFT);
+  const [limitsLoading, setLimitsLoading] = useState(false);
+  const [limitsWriting, setLimitsWriting] = useState(false);
   const keysDown = useRef<Set<string>>(new Set());
   const manualWasActive = useRef(false);
+  const limitsReadRequest = useRef(0);
+  const limitsWriteInFlight = useRef(false);
+  const selectedRef = useRef<string | null>(selected);
+  selectedRef.current = selected;
+  const limitsBusy = limitsLoading || limitsWriting;
+
+  const acceptLimits = useCallback((next: BaseLimitsDto | null) => {
+    setLimits(next);
+    setLimitDraft({
+      linear: next?.linear?.current ?? null,
+      angular: next?.angular?.current ?? null,
+    });
+  }, []);
+
+  const loadLimits = useCallback(async (prefix: string) => {
+    const request = ++limitsReadRequest.current;
+    setLimitsLoading(true);
+    try {
+      const next = await api.zenohGetLimits(prefix);
+      if (limitsReadRequest.current === request) acceptLimits(next);
+    } catch (error) {
+      if (limitsReadRequest.current === request) {
+        acceptLimits(null);
+        message.error(errMsg(error));
+      }
+    } finally {
+      if (limitsReadRequest.current === request) setLimitsLoading(false);
+    }
+  }, [acceptLimits, message]);
 
   useEffect(() => {
     if (!connected) {
@@ -86,6 +126,21 @@ export function ZenohPanel({ embedded }: { embedded?: { endpoint: string; prefix
   useEffect(() => {
     if (connected && selected) api.zenohSetDiagFocus(selected).catch(() => {});
   }, [connected, selected]);
+
+  // New controllers describe their own supported acceleration axes/ranges. Older controllers
+  // simply return null here, so driving remains backward compatible and the card stays hidden.
+  useEffect(() => {
+    if (!connected || !selected) {
+      limitsReadRequest.current += 1;
+      acceptLimits(null);
+      setLimitsLoading(false);
+      return;
+    }
+    void loadLimits(selected);
+    return () => {
+      limitsReadRequest.current += 1;
+    };
+  }, [acceptLimits, connected, loadLimits, selected]);
 
   // FATAL 时控制器已把电机失能(clear_fault 也置 enabled=false),而它不在 status 里回传 enabled。
   // 故障灯亮即把 Active 开关复位到 off,避免清障后开关仍"假 on" → 拖动无效却看不出原因。
@@ -170,6 +225,49 @@ export function ZenohPanel({ embedded }: { embedded?: { endpoint: string; prefix
     }
   }, [message]);
 
+  const writeLimits = useCallback(async (next: LimitDraft) => {
+    if (
+      !selected ||
+      limitsWriteInFlight.current ||
+      (next.linear == null && next.angular == null)
+    ) {
+      return;
+    }
+    const target = selected;
+    limitsWriteInFlight.current = true;
+    setLimitsWriting(true);
+    try {
+      const applied = await api.zenohSetLimits(target, next.linear, next.angular);
+      if (selectedRef.current === target) acceptLimits(applied);
+      message.success(`${t("zAccelApplied")} (${target})`);
+    } catch (error) {
+      message.error(`${target}: ${errMsg(error)}`);
+      // A rejection includes the controller's unchanged value, but Tauri
+      // errors cannot carry that typed payload. Re-read it so stale drafts do
+      // not linger after holder/range races.
+      if (selectedRef.current === target) void loadLimits(target);
+    } finally {
+      limitsWriteInFlight.current = false;
+      setLimitsWriting(false);
+    }
+  }, [acceptLimits, loadLimits, message, selected, t]);
+
+  const applyLimits = useCallback(() => {
+    if (!limits) return;
+    void writeLimits({
+      linear: axisChanged(limits.linear, limitDraft.linear) ? limitDraft.linear : null,
+      angular: axisChanged(limits.angular, limitDraft.angular) ? limitDraft.angular : null,
+    });
+  }, [limitDraft, limits, writeLimits]);
+
+  const restoreLimits = useCallback(() => {
+    if (!limits) return;
+    void writeLimits({
+      linear: limits.linear?.default_value ?? null,
+      angular: limits.angular?.default_value ?? null,
+    });
+  }, [limits, writeLimits]);
+
   const cmd = useCallback((vx: number, vy: number, wz: number) => {
     api.zenohSetCmd(vx, vy, wz).catch(() => {});
   }, []);
@@ -186,6 +284,14 @@ export function ZenohPanel({ embedded }: { embedded?: { endpoint: string; prefix
   // 观察对象的身份取自发现列表 + 选中项(权威):只读观察别台时,不复用取控作用域的 st.model/st.prefix。
   const selInfo = bases.find((b) => b.prefix === selected);
   const driveReady = controlling && armed;
+  const controlsSelectedBase = controlling && st?.prefix === selected;
+  const canWriteLimits =
+    !!limits && !!st && (controlsSelectedBase || (!controlling && st.holder === 0));
+  const limitsChanged =
+    axisChanged(limits?.linear ?? null, limitDraft.linear) ||
+    axisChanged(limits?.angular ?? null, limitDraft.angular);
+  const limitsAtDefaults =
+    axisAtDefault(limits?.linear ?? null) && axisAtDefault(limits?.angular ?? null);
   const statusTag = controlling
     ? <Tag color="green">{t("zControlling")}</Tag>
     : st && st.holder !== 0
@@ -259,11 +365,11 @@ export function ZenohPanel({ embedded }: { embedded?: { endpoint: string; prefix
         </label>)}
         <div className="zenoh-connect-panel__actions">
           {!embedded && (connected ? (
-            <Button onClick={disconnect}>{t("zDisconnect")}</Button>
+            <Button disabled={limitsBusy} onClick={disconnect}>{t("zDisconnect")}</Button>
           ) : (
             <Button type="primary" loading={busy} onClick={connect}>{t("zConnect")}</Button>
           ))}
-          <Button disabled={!connected} onClick={discover}>{t("zDiscover")}</Button>
+          <Button disabled={!connected || limitsBusy} onClick={discover}>{t("zDiscover")}</Button>
         </div>
         <div className="zenoh-discovery">
           <Typography.Text type="secondary">{t("zFound")}: {bases.length}</Typography.Text>
@@ -272,13 +378,13 @@ export function ZenohPanel({ embedded }: { embedded?: { endpoint: string; prefix
             value={selected ?? undefined}
             onChange={setSelected}
             placeholder={t("zNoBase")}
-            disabled={!connected || bases.length === 0 || controlling}
+            disabled={!connected || bases.length === 0 || controlling || limitsBusy}
             options={bases.map((b) => ({ value: b.prefix, label: `${b.model} - ${b.prefix}` }))}
           />
           {controlling ? (
-            <Button danger onClick={release}>{t("zRelease")}</Button>
+            <Button danger disabled={limitsBusy} onClick={release}>{t("zRelease")}</Button>
           ) : (
-            <Button type="primary" disabled={!selected} onClick={acquire}>{t("zAcquire")}</Button>
+            <Button type="primary" disabled={!selected || limitsBusy} onClick={acquire}>{t("zAcquire")}</Button>
           )}
           <span className="zenoh-dock-status">
             {connected ? <Tag color="blue">{t("zConnected")}</Tag> : <Tag>{t("zDisconnected")}</Tag>}
@@ -393,6 +499,75 @@ export function ZenohPanel({ embedded }: { embedded?: { endpoint: string; prefix
         </section>
       </div>
 
+      {connected && selected && limits && (limits.linear || limits.angular) && (
+        <section className="zenoh-card zenoh-limits">
+          <div className="zenoh-card__heading">
+            <div>
+              <h2>{t("zAccelTitle")}</h2>
+              <Typography.Text type="secondary">{t("zAccelHint")}</Typography.Text>
+            </div>
+            <div className="zenoh-limits__actions">
+              <Button
+                type="primary"
+                loading={limitsBusy}
+                disabled={!canWriteLimits || !limitsChanged}
+                onClick={applyLimits}
+              >
+                {t("zAccelApply")}
+              </Button>
+              <Button
+                disabled={!canWriteLimits || limitsAtDefaults || limitsBusy}
+                onClick={restoreLimits}
+              >
+                {t("zAccelRestore")}
+              </Button>
+              <Button
+                disabled={limitsBusy}
+                onClick={() => void loadLimits(selected)}
+              >
+                {t("zAccelRefresh")}
+              </Button>
+            </div>
+          </div>
+
+          <div className="zenoh-limits__grid">
+            {limits.linear && (
+              <LimitAxisControl
+                label={t("zAccelLinear")}
+                unit="m/s²"
+                axis={limits.linear}
+                value={limitDraft.linear ?? limits.linear.current}
+                disabled={!canWriteLimits || limitsBusy}
+                currentLabel={t("zAccelCurrent")}
+                defaultLabel={t("zAccelDefault")}
+                onChange={(linear) => setLimitDraft((draft) => ({ ...draft, linear }))}
+              />
+            )}
+            {limits.angular && (
+              <LimitAxisControl
+                label={t("zAccelAngular")}
+                unit="rad/s²"
+                axis={limits.angular}
+                value={limitDraft.angular ?? limits.angular.current}
+                disabled={!canWriteLimits || limitsBusy}
+                currentLabel={t("zAccelCurrent")}
+                defaultLabel={t("zAccelDefault")}
+                onChange={(angular) => setLimitDraft((draft) => ({ ...draft, angular }))}
+              />
+            )}
+          </div>
+
+          {!canWriteLimits && st && st.holder !== 0 && !controlling && (
+            <Typography.Text type="warning" className="zenoh-limits__notice">
+              {t("zAccelBusyHint")}
+            </Typography.Text>
+          )}
+          <Typography.Text type="secondary" className="zenoh-limits__notice">
+            {t("zAccelSemantics")}
+          </Typography.Text>
+        </section>
+      )}
+
       {connected && (
         <DiagnosticsCard
           enabled={!!selected}
@@ -403,6 +578,82 @@ export function ZenohPanel({ embedded }: { embedded?: { endpoint: string; prefix
       )}
     </div>
   );
+}
+
+function LimitAxisControl({
+  label,
+  unit,
+  axis,
+  value,
+  disabled,
+  currentLabel,
+  defaultLabel,
+  onChange,
+}: {
+  label: string;
+  unit: string;
+  axis: BaseLimitAxisDto;
+  value: number;
+  disabled: boolean;
+  currentLabel: string;
+  defaultLabel: string;
+  onChange: (value: number) => void;
+}) {
+  const step = limitStep(axis);
+  return (
+    <div className="zenoh-limit-axis">
+      <div className="zenoh-limit-axis__heading">
+        <Typography.Text strong>{label}</Typography.Text>
+        <Typography.Text type="secondary">
+          {currentLabel} {formatLimit(axis.current)} · {defaultLabel} {formatLimit(axis.default_value)} {unit}
+        </Typography.Text>
+      </div>
+      <div className="zenoh-limit-axis__control">
+        <Slider
+          min={axis.min}
+          max={axis.max}
+          step={step}
+          value={value}
+          disabled={disabled}
+          tooltip={{ formatter: (next) => `${formatLimit(next ?? value)} ${unit}` }}
+          onChange={onChange}
+        />
+        <InputNumber
+          min={axis.min}
+          max={axis.max}
+          step={step}
+          value={value}
+          disabled={disabled}
+          addonAfter={unit}
+          onChange={(next) => {
+            if (next != null) onChange(Math.min(axis.max, Math.max(axis.min, next)));
+          }}
+        />
+      </div>
+      <Typography.Text type="secondary" className="zenoh-limit-axis__range">
+        {formatLimit(axis.min)} – {formatLimit(axis.max)} {unit}
+      </Typography.Text>
+    </div>
+  );
+}
+
+function limitStep(axis: BaseLimitAxisDto): number {
+  const span = axis.max - axis.min;
+  if (!Number.isFinite(span) || span <= 0) return 0.01;
+  return 10 ** Math.floor(Math.log10(span / 100));
+}
+
+function formatLimit(value: number): string {
+  if (!Number.isFinite(value)) return "—";
+  return Number(value.toFixed(3)).toString();
+}
+
+function axisChanged(axis: BaseLimitAxisDto | null, draft: number | null): boolean {
+  return axis != null && draft != null && Math.abs(axis.current - draft) > 1e-6;
+}
+
+function axisAtDefault(axis: BaseLimitAxisDto | null): boolean {
+  return axis == null || Math.abs(axis.current - axis.default_value) <= 1e-6;
 }
 
 function MetricGroup({ title, items }: { title: string; items: Array<[string, string]> }) {

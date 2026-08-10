@@ -310,6 +310,12 @@ const STRINGS = {
   meowIdentifyFailed: { en: "Dedicated motor identification failed", zh: "专用电机识别失败" },
   meowPowerCycleRequired: { en: "Power-cycle the motor before continuing", zh: "继续前请给电机重新上电" },
   meowTpdoRate: { en: "Device TPDO rate (Hz)", zh: "电机 TPDO 频率 (Hz)" },
+  meowTpdoPeriod: { en: "Device TPDO period", zh: "电机 TPDO 周期" },
+  meowTpdoEffectiveRate: { en: "Effective rate", zh: "实际频率" },
+  meowTpdoProfileHint: {
+    en: "1–100 ms. The event timer, inhibit time, and velocity-estimation window are adjusted together.",
+    zh: "可设 1–100 ms；事件定时器、抑制时间和速度估计窗口会一起调整。",
+  },
   meowRefreshHint: {
     en: "The display polls the latest driver snapshot at 50 or 100 Hz. CSV logging records the full driver publication stream.",
     zh: "界面以 50 或 100 Hz 读取驱动层最新快照；CSV 日志会记录驱动层发布的完整数据流。",
@@ -657,6 +663,27 @@ const STRINGS = {
   zDriveHint: { en: "Pointer controls send velocity while held.", zh: "按住按钮发送速度，松开即停止。" },
   zSpeedLin: { en: "Linear speed (m/s)", zh: "线速度 (m/s)" },
   zSpeedAng: { en: "Angular speed (rad/s)", zh: "角速度 (rad/s)" },
+  zAccelTitle: { en: "Drive response", zh: "底盘响应" },
+  zAccelHint: {
+    en: "Runtime command-ramp limits reported by this base.",
+    zh: "由底盘上报的运行时命令斜坡限制。",
+  },
+  zAccelLinear: { en: "Linear acceleration", zh: "线加速度" },
+  zAccelAngular: { en: "Angular acceleration", zh: "角加速度" },
+  zAccelCurrent: { en: "Current", zh: "当前" },
+  zAccelDefault: { en: "Factory default", zh: "出厂默认" },
+  zAccelApply: { en: "Apply limits", zh: "应用限制" },
+  zAccelRestore: { en: "Restore defaults", zh: "恢复默认" },
+  zAccelRefresh: { en: "Refresh limits", zh: "刷新限制" },
+  zAccelApplied: { en: "Acceleration limits applied", zh: "加速度限制已应用" },
+  zAccelBusyHint: {
+    en: "Another client holds this base; only the holder may change limits.",
+    zh: "底盘正由其他客户端控制，只有当前控制方可以修改限制。",
+  },
+  zAccelSemantics: {
+    en: "This limits commanded twist changes, not measured physical acceleration. Normal acceleration and deceleration share the limits; E-stop and fault stops remain immediate. Runtime values reset when the controller process restarts.",
+    zh: "这里限制的是速度命令变化率，并非实测物理加速度。普通加速与减速共用限制；急停和故障停车仍立即归零。控制器进程重启后会恢复启动配置。",
+  },
   zKeyboard: { en: "Keyboard", zh: "键盘" },
   zKeyHint: {
     en: "W/S forward/back, A/D strafe, Q/E rotate.",

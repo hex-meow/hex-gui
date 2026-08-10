@@ -36,6 +36,41 @@ async fn query_one<Resp: Message + Default>(session: &zenoh::Session, key: &str,
     None
 }
 
+/// Optional capability query with strict reply decoding.
+///
+/// A receiver closing without a reply means that no queryable matched (the
+/// expected result when talking to a pre-0.2 controller). Once a reply exists,
+/// however, a remote error, wrong reply key, or malformed protobuf is a broken
+/// contract and must not be silently downgraded to "unsupported".
+async fn query_optional_strict<Resp: Message + Default>(
+    session: &zenoh::Session,
+    key: &str,
+    payload: Vec<u8>,
+) -> anyhow::Result<Option<Resp>> {
+    let replies = session
+        .get(key)
+        .payload(payload)
+        .timeout(Duration::from_secs(2))
+        .await
+        .map_err(|e| anyhow!("查询 {key}: {e}"))?;
+    let reply = match replies.recv_async().await {
+        Ok(reply) => reply,
+        Err(_) => return Ok(None),
+    };
+    let sample = reply
+        .result()
+        .map_err(|e| anyhow!("{key} 返回 Zenoh 错误: {e}"))?;
+    if sample.key_expr().as_str() != key {
+        return Err(anyhow!(
+            "{key} 返回了意外的 reply key {}",
+            sample.key_expr().as_str()
+        ));
+    }
+    Resp::decode(&*sample.payload().to_bytes())
+        .map(Some)
+        .map_err(|e| anyhow!("{key} 返回了畸形 protobuf: {e}"))
+}
+
 /// 汇聚一次 query 的**全部**回复(key, payload)。用于 `.../log/recent`(每进程一个 queryable → 多回复)。
 async fn query_all(session: &zenoh::Session, key: &str) -> Vec<(String, Vec<u8>)> {
     let mut out = Vec::new();
@@ -62,6 +97,268 @@ fn to_event(ev: pb::Event) -> diag::RobotEvent {
 pub struct BaseInfo {
     pub prefix: String,
     pub model: String,
+}
+
+/// One runtime-settable base acceleration axis.
+///
+/// All four numbers come from the controller: `default_value`, `min`, and
+/// `max` from `base/description`; `current` from `base/limits` (or the
+/// `rpc/set_limits` response). The GUI therefore never bakes model constants
+/// into its controls.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct BaseLimitAxisDto {
+    pub current: f64,
+    pub default_value: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+/// Runtime-settable acceleration capabilities of a base.
+///
+/// An axis is `None` when that controller does not advertise it as settable.
+/// The whole query returns `None` for old controllers that expose neither the
+/// range declaration nor the current-value queryable.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct BaseLimitsDto {
+    pub linear: Option<BaseLimitAxisDto>,
+    pub angular: Option<BaseLimitAxisDto>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BaseLimitAxisSchema {
+    default_value: f64,
+    min: f64,
+    max: f64,
+}
+
+#[derive(Clone, Debug)]
+struct BaseLimitsSchema {
+    linear: Option<BaseLimitAxisSchema>,
+    angular: Option<BaseLimitAxisSchema>,
+}
+
+fn parse_limit_axis_schema(
+    name: &str,
+    default_value: Option<f32>,
+    min: Option<f32>,
+    max: Option<f32>,
+) -> anyhow::Result<Option<BaseLimitAxisSchema>> {
+    let (min, max) = match (min, max) {
+        (None, None) => return Ok(None),
+        (Some(min), Some(max)) => (f64::from(min), f64::from(max)),
+        _ => {
+            return Err(anyhow!(
+                "base/description 的 {name} 范围不完整(settable_min/max 必须成对出现)"
+            ));
+        }
+    };
+    let default_value = default_value
+        .map(f64::from)
+        .ok_or_else(|| anyhow!("base/description 缺少 {name} 的默认值"))?;
+    for (field, value) in [
+        ("default", default_value),
+        ("settable_min", min),
+        ("settable_max", max),
+    ] {
+        if !value.is_finite() {
+            return Err(anyhow!(
+                "base/description 的 {name}.{field} 不是有限值: {value}"
+            ));
+        }
+    }
+    if min <= 0.0 || min >= max {
+        return Err(anyhow!(
+            "base/description 的 {name} 范围非法: [{min}, {max}](要求 0 < min < max)"
+        ));
+    }
+    if !(min..=max).contains(&default_value) {
+        return Err(anyhow!(
+            "base/description 的 {name} 默认值 {default_value} 不在 [{min}, {max}] 内"
+        ));
+    }
+    Ok(Some(BaseLimitAxisSchema {
+        default_value,
+        min,
+        max,
+    }))
+}
+
+/// Decode the static capability declaration. `Ok(None)` is deliberately
+/// reserved for a well-formed old/unsupported description; partial new fields
+/// are errors rather than a reason to hide a broken controller response.
+fn parse_limits_schema(
+    description: &pb::BaseDescription,
+) -> anyhow::Result<Option<BaseLimitsSchema>> {
+    let (min, max) = match (
+        description.settable_min.as_ref(),
+        description.settable_max.as_ref(),
+    ) {
+        (None, None) => return Ok(None),
+        (Some(min), Some(max)) => (min, max),
+        _ => {
+            return Err(anyhow!(
+                "base/description 的 settable_min/settable_max 必须成对出现"
+            ));
+        }
+    };
+    if min.session_id != 0 || max.session_id != 0 {
+        return Err(anyhow!("base/description 的范围错误地携带了 session_id"));
+    }
+
+    let defaults = description.default_limits.as_ref();
+    if defaults.is_some_and(|limits| limits.session_id != 0) {
+        return Err(anyhow!(
+            "base/description 的默认限位错误地携带了 session_id"
+        ));
+    }
+    let linear = parse_limit_axis_schema(
+        "linear",
+        defaults.and_then(|v| v.accel_max),
+        min.accel_max,
+        max.accel_max,
+    )?;
+    let angular = parse_limit_axis_schema(
+        "angular",
+        defaults.and_then(|v| v.angular_accel_max),
+        min.angular_accel_max,
+        max.angular_accel_max,
+    )?;
+
+    if linear.is_none() && angular.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(BaseLimitsSchema { linear, angular }))
+}
+
+fn build_limit_axis_dto(
+    source: &str,
+    name: &str,
+    schema: Option<BaseLimitAxisSchema>,
+    current: Option<f32>,
+) -> anyhow::Result<Option<BaseLimitAxisDto>> {
+    let Some(schema) = schema else {
+        return Ok(None);
+    };
+    let current = current
+        .map(f64::from)
+        .ok_or_else(|| anyhow!("{source} 缺少已声明可设置的 {name} 当前值"))?;
+    if !current.is_finite() {
+        return Err(anyhow!("{source} 的 {name} 当前值不是有限值: {current}"));
+    }
+    if !(schema.min..=schema.max).contains(&current) {
+        return Err(anyhow!(
+            "{source} 的 {name} 当前值 {current} 不在声明范围 [{}, {}] 内",
+            schema.min,
+            schema.max
+        ));
+    }
+    Ok(Some(BaseLimitAxisDto {
+        current,
+        default_value: schema.default_value,
+        min: schema.min,
+        max: schema.max,
+    }))
+}
+
+fn build_limits_dto(
+    source: &str,
+    schema: &BaseLimitsSchema,
+    current: &pb::BaseLimits,
+) -> anyhow::Result<BaseLimitsDto> {
+    if current.session_id != 0 {
+        return Err(anyhow!("{source} 响应错误地携带了 session_id"));
+    }
+    Ok(BaseLimitsDto {
+        linear: build_limit_axis_dto(source, "linear", schema.linear, current.accel_max)?,
+        angular: build_limit_axis_dto(
+            source,
+            "angular",
+            schema.angular,
+            current.angular_accel_max,
+        )?,
+    })
+}
+
+fn validate_requested_limit(
+    name: &str,
+    requested: Option<f64>,
+    schema: Option<BaseLimitAxisSchema>,
+) -> anyhow::Result<Option<f32>> {
+    let Some(value) = requested else {
+        return Ok(None);
+    };
+    let schema =
+        schema.ok_or_else(|| anyhow!("unsupported:控制器未声明 {name} 加速度为可运行时设置"))?;
+    if !value.is_finite() {
+        return Err(anyhow!("{name} 加速度必须是有限值,收到 {value}"));
+    }
+
+    // The contract is f32, including its advertised bounds. Validate the
+    // value after narrowing so a natural decimal such as 0.2 is accepted at
+    // an advertised 0.2_f32 boundary, while the exact bytes sent on the wire
+    // can never land outside the controller's range.
+    let wire = value as f32;
+    let wire_value = f64::from(wire);
+    if !wire.is_finite() || !(schema.min..=schema.max).contains(&wire_value) {
+        return Err(anyhow!(
+            "{name} 加速度 {value} 无法在协议精度下表示为范围 [{}, {}] 内的值",
+            schema.min,
+            schema.max
+        ));
+    }
+    Ok(Some(wire))
+}
+
+fn limits_session_id(held_session: u32, held_prefix: Option<&str>, target_prefix: &str) -> u32 {
+    if held_session != 0 && held_prefix == Some(target_prefix) {
+        held_session
+    } else {
+        0
+    }
+}
+
+fn validate_set_limits_response(
+    schema: &BaseLimitsSchema,
+    response: &pb::SetBaseLimitsResponse,
+    requested_linear: Option<f32>,
+    requested_angular: Option<f32>,
+) -> anyhow::Result<BaseLimitsDto> {
+    let applied = response
+        .applied
+        .as_ref()
+        .ok_or_else(|| anyhow!("rpc/set_limits 响应缺少 applied 当前值"))?;
+    let dto = build_limits_dto("rpc/set_limits.applied", schema, applied)?;
+
+    if !response.ok {
+        let error = response
+            .error
+            .as_deref()
+            .map(str::trim)
+            .filter(|error| !error.is_empty())
+            .ok_or_else(|| anyhow!("rpc/set_limits 拒绝请求但未提供 error"))?;
+        return Err(anyhow!("rpc/set_limits 被拒绝:{error}"));
+    }
+    if response.error.is_some() {
+        return Err(anyhow!("rpc/set_limits 成功响应不应携带 error"));
+    }
+
+    for (name, requested, axis) in [
+        ("linear", requested_linear, dto.linear.as_ref()),
+        ("angular", requested_angular, dto.angular.as_ref()),
+    ] {
+        if let Some(requested) = requested {
+            let applied = axis
+                .ok_or_else(|| anyhow!("rpc/set_limits.applied 缺少请求的 {name} 当前值"))?
+                .current;
+            if applied != f64::from(requested) {
+                return Err(anyhow!(
+                    "rpc/set_limits.applied 的 {name}={applied} 与请求值 {} 不一致",
+                    f64::from(requested)
+                ));
+            }
+        }
+    }
+    Ok(dto)
 }
 
 fn decode_base_info_reply(key: &str, payload: &[u8]) -> Option<BaseInfo> {
@@ -106,6 +403,7 @@ struct Ctrl {
 }
 
 /// 一条到控制器网络的连接(持久 Session + 常驻任务)。
+#[derive(Clone)]
 pub struct ZenohConn {
     session: zenoh::Session,
     ctrl: Arc<Ctrl>,
@@ -237,6 +535,99 @@ impl ZenohConn {
             }
         }
         out
+    }
+
+    /// Fetch the static acceleration capability and its current value as one
+    /// coherent frontend snapshot. Missing capability/queryables are normal
+    /// for old controllers and return `None`; malformed replies are errors.
+    async fn fetch_limits_snapshot(
+        &self,
+        prefix: &str,
+    ) -> anyhow::Result<Option<(BaseLimitsSchema, BaseLimitsDto)>> {
+        if prefix.is_empty() {
+            return Err(anyhow!("底盘 prefix 不能为空"));
+        }
+        let description_key = format!("{prefix}/base/description");
+        let Some(description) = query_optional_strict::<pb::BaseDescription>(
+            &self.session,
+            &description_key,
+            Vec::new(),
+        )
+        .await?
+        else {
+            return Ok(None);
+        };
+        let Some(schema) = parse_limits_schema(&description)? else {
+            return Ok(None);
+        };
+
+        let current_key = format!("{prefix}/base/limits");
+        let current = query_optional_strict::<pb::BaseLimits>(
+            &self.session,
+            &current_key,
+            Vec::new(),
+        )
+        .await?
+        .ok_or_else(|| {
+            anyhow!(
+                "{current_key} 无回复，但 base/description 已声明运行时可设置范围"
+            )
+        })?;
+        let dto = build_limits_dto("base/limits", &schema, &current)?;
+        Ok(Some((schema, dto)))
+    }
+
+    /// Read controller-advertised defaults/ranges plus the live acceleration
+    /// limits. `None` means that this (usually old) controller does not support
+    /// the runtime acceleration-limit API.
+    pub async fn get_limits(&self, prefix: &str) -> anyhow::Result<Option<BaseLimitsDto>> {
+        Ok(self
+            .fetch_limits_snapshot(prefix)
+            .await?
+            .map(|(_, dto)| dto))
+    }
+
+    /// Apply one or both runtime acceleration limits.
+    ///
+    /// When this connection holds `prefix`, the holder session is sent. When
+    /// it does not hold that base, session 0 is sent so an idle controller can
+    /// still be configured. An occupied controller will reject session 0 and
+    /// its error is returned unchanged to the frontend.
+    pub async fn set_limits(
+        &self,
+        prefix: &str,
+        linear: Option<f64>,
+        angular: Option<f64>,
+    ) -> anyhow::Result<BaseLimitsDto> {
+        if linear.is_none() && angular.is_none() {
+            return Err(anyhow!("set_limits 至少需要 linear 或 angular 中的一项"));
+        }
+        let Some((schema, _before)) = self.fetch_limits_snapshot(prefix).await? else {
+            return Err(anyhow!("unsupported:控制器不支持运行时底盘加速度限制"));
+        };
+        let requested_linear = validate_requested_limit("linear", linear, schema.linear)?;
+        let requested_angular = validate_requested_limit("angular", angular, schema.angular)?;
+
+        let held_session = self.ctrl.session_id.load(Ordering::Relaxed);
+        let held_prefix = self.ctrl.prefix.lock().unwrap().clone();
+        let session_id = limits_session_id(held_session, held_prefix.as_deref(), prefix);
+        let request = pb::BaseLimits {
+            accel_max: requested_linear,
+            angular_accel_max: requested_angular,
+            session_id,
+            ..Default::default()
+        };
+        let rpc_key = format!("{prefix}/rpc/set_limits");
+        let Some(response) = query_optional_strict::<pb::SetBaseLimitsResponse>(
+            &self.session,
+            &rpc_key,
+            enc(&request),
+        )
+        .await?
+        else {
+            return Err(anyhow!("unsupported:控制器没有响应 rpc/set_limits"));
+        };
+        validate_set_limits_response(&schema, &response, requested_linear, requested_angular)
     }
 
     pub async fn acquire(&self, prefix: &str, model: &str) -> anyhow::Result<()> {
@@ -378,6 +769,7 @@ mod tests {
             kinematics: "diff2".into(),
             wheel_count: 2,
             default_limits: Some(pb::BaseLimits::default()),
+            ..Default::default()
         };
         let mut payload = Vec::new();
         nested.encode(&mut payload).unwrap();
@@ -405,5 +797,198 @@ mod tests {
                 .expect("valid robot description");
         assert_eq!(info.prefix, "hexmeow/controller-1/base0");
         assert_eq!(info.model, "conway_a2");
+    }
+
+    fn accel_limits(linear: Option<f32>, angular: Option<f32>) -> pb::BaseLimits {
+        pb::BaseLimits {
+            accel_max: linear,
+            angular_accel_max: angular,
+            ..Default::default()
+        }
+    }
+
+    fn valid_limits_description() -> pb::BaseDescription {
+        pb::BaseDescription {
+            default_limits: Some(accel_limits(Some(2.0), Some(6.0))),
+            settable_min: Some(accel_limits(Some(0.2), Some(0.5))),
+            settable_max: Some(accel_limits(Some(10.0), Some(30.0))),
+            ..Default::default()
+        }
+    }
+
+    fn valid_limits_schema() -> BaseLimitsSchema {
+        parse_limits_schema(&valid_limits_description())
+            .expect("valid description")
+            .expect("supported limits")
+    }
+
+    #[test]
+    fn old_base_description_is_a_cleanly_unsupported_capability() {
+        let old = pb::BaseDescription {
+            default_limits: Some(accel_limits(Some(2.0), None)),
+            ..Default::default()
+        };
+        assert!(parse_limits_schema(&old).unwrap().is_none());
+    }
+
+    #[test]
+    fn controller_values_build_the_complete_limits_dto() {
+        let schema = valid_limits_schema();
+        let dto =
+            build_limits_dto("base/limits", &schema, &accel_limits(Some(1.25), Some(3.5))).unwrap();
+
+        assert_eq!(
+            dto.linear,
+            Some(BaseLimitAxisDto {
+                current: 1.25,
+                default_value: 2.0,
+                min: f64::from(0.2_f32),
+                max: 10.0,
+            })
+        );
+        assert_eq!(
+            dto.angular,
+            Some(BaseLimitAxisDto {
+                current: 3.5,
+                default_value: 6.0,
+                min: 0.5,
+                max: 30.0,
+            })
+        );
+    }
+
+    #[test]
+    fn a_controller_may_advertise_only_one_settable_axis() {
+        let description = pb::BaseDescription {
+            default_limits: Some(accel_limits(Some(2.0), Some(6.0))),
+            settable_min: Some(accel_limits(Some(0.2), None)),
+            settable_max: Some(accel_limits(Some(10.0), None)),
+            ..Default::default()
+        };
+        let schema = parse_limits_schema(&description)
+            .unwrap()
+            .expect("linear-only capability");
+        let dto = build_limits_dto(
+            "base/limits",
+            &schema,
+            &accel_limits(Some(1.0), None),
+        )
+        .unwrap();
+        assert!(dto.linear.is_some());
+        assert!(dto.angular.is_none());
+    }
+
+    #[test]
+    fn malformed_description_ranges_are_not_downgraded_to_unsupported() {
+        let mut missing_pair = valid_limits_description();
+        missing_pair.settable_max = None;
+        assert!(parse_limits_schema(&missing_pair)
+            .unwrap_err()
+            .to_string()
+            .contains("必须成对出现"));
+
+        let mut inverted = valid_limits_description();
+        inverted.settable_min.as_mut().unwrap().accel_max = Some(10.0);
+        inverted.settable_max.as_mut().unwrap().accel_max = Some(0.2);
+        assert!(parse_limits_schema(&inverted)
+            .unwrap_err()
+            .to_string()
+            .contains("范围非法"));
+
+        let mut non_finite = valid_limits_description();
+        non_finite.settable_max.as_mut().unwrap().angular_accel_max = Some(f32::NAN);
+        assert!(parse_limits_schema(&non_finite)
+            .unwrap_err()
+            .to_string()
+            .contains("不是有限值"));
+    }
+
+    #[test]
+    fn malformed_current_limits_are_rejected() {
+        let schema = valid_limits_schema();
+        for current in [
+            accel_limits(Some(1.0), None),
+            accel_limits(Some(11.0), Some(3.0)),
+            accel_limits(Some(f32::NAN), Some(3.0)),
+        ] {
+            assert!(build_limits_dto("base/limits", &schema, &current).is_err());
+        }
+
+        let mut carries_session = accel_limits(Some(1.0), Some(3.0));
+        carries_session.session_id = 7;
+        assert!(build_limits_dto("base/limits", &schema, &carries_session).is_err());
+    }
+
+    #[test]
+    fn requested_values_follow_the_advertised_axis_and_range() {
+        let schema = valid_limits_schema();
+        assert_eq!(
+            validate_requested_limit("linear", Some(1.5), schema.linear).unwrap(),
+            Some(1.5)
+        );
+        assert!(validate_requested_limit("linear", Some(0.0), schema.linear).is_err());
+        assert!(validate_requested_limit("linear", Some(f64::NAN), schema.linear).is_err());
+        assert!(validate_requested_limit("angular", Some(1.0), None)
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported"));
+    }
+
+    #[test]
+    fn natural_decimal_bounds_are_validated_at_wire_precision() {
+        let schema = valid_limits_schema();
+        assert_eq!(
+            validate_requested_limit("linear", Some(0.2_f64), schema.linear).unwrap(),
+            Some(0.2_f32)
+        );
+        assert_eq!(
+            validate_requested_limit("angular", Some(0.5_f64), schema.angular).unwrap(),
+            Some(0.5_f32)
+        );
+        assert!(validate_requested_limit("linear", Some(0.19), schema.linear).is_err());
+        assert!(validate_requested_limit("angular", Some(30.01), schema.angular).is_err());
+    }
+
+    #[test]
+    fn set_limits_uses_our_session_only_for_the_held_base() {
+        assert_eq!(limits_session_id(0, None, "base-a"), 0);
+        assert_eq!(limits_session_id(42, Some("base-a"), "base-a"), 42);
+        assert_eq!(limits_session_id(42, Some("base-b"), "base-a"), 0);
+        assert_eq!(limits_session_id(0, Some("base-a"), "base-a"), 0);
+    }
+
+    #[test]
+    fn set_limits_response_must_be_complete_and_echo_the_applied_value() {
+        let schema = valid_limits_schema();
+        let ok = pb::SetBaseLimitsResponse {
+            ok: true,
+            error: None,
+            applied: Some(accel_limits(Some(1.5), Some(4.0))),
+        };
+        let dto = validate_set_limits_response(&schema, &ok, Some(1.5), None).unwrap();
+        assert_eq!(dto.linear.unwrap().current, 1.5);
+
+        let missing_applied = pb::SetBaseLimitsResponse {
+            ok: true,
+            ..Default::default()
+        };
+        assert!(validate_set_limits_response(&schema, &missing_applied, Some(1.5), None).is_err());
+
+        let wrong_applied = pb::SetBaseLimitsResponse {
+            ok: true,
+            error: None,
+            applied: Some(accel_limits(Some(1.0), Some(4.0))),
+        };
+        assert!(validate_set_limits_response(&schema, &wrong_applied, Some(1.5), None).is_err());
+
+        let rejection_without_error = pb::SetBaseLimitsResponse {
+            ok: false,
+            error: None,
+            applied: Some(accel_limits(Some(1.0), Some(4.0))),
+        };
+        assert!(
+            validate_set_limits_response(&schema, &rejection_without_error, Some(1.5), None)
+                .is_err()
+        );
     }
 }

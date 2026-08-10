@@ -11,8 +11,9 @@ use std::time::{Duration, Instant};
 
 use can_transport::CanBus;
 use hex_motor::canopen::sdo;
+use hex_motor::cia402::PdoProfile;
 use hex_motor::meow_motor::{
-    MeowMotorLifecycle, MeowMotorManager, MeowMotorTarget, MeowProfileLimits, Tpdo1Rate,
+    MeowMotorLifecycle, MeowMotorManager, MeowMotorTarget, MeowProfileLimits,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -325,7 +326,7 @@ async fn run_sequence(
     check_cancel(cancel)?;
     verify_identity(manager, request)?;
     manager
-        .initialize(request.node_id, Tpdo1Rate::Hz1000)
+        .initialize(request.node_id, PdoProfile::default())
         .await
         .map_err(to_string)?;
     let info = verify_identity(manager, request)?;

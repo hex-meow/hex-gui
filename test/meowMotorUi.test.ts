@@ -7,9 +7,11 @@ import {
   RADIANS_PER_REVOLUTION,
   formatMeowDetailedError,
   formatMeowModeDisplay,
+  formatPdoRateHz,
   meowMitGainLimitSi,
   meowMitTargetFromSi,
   meowVelocityLimit,
+  pdoRateHz,
   torquePermilleToNm,
   torqueNmToPermille,
 } from "../src/meowMotorUi.ts";
@@ -18,6 +20,16 @@ test("PV limits follow the exact Meow Motor product", () => {
   assert.equal(meowVelocityLimit(MEOW_MOTOR_4310_PRODUCT_CODE), 8);
   assert.equal(meowVelocityLimit(MEOW_MOTOR_4342_PRODUCT_CODE), 3);
   assert.equal(meowVelocityLimit(null), 3);
+});
+
+test("PDO profiles expose the exact rate represented by an integer millisecond timer", () => {
+  assert.equal(pdoRateHz(1), 1000);
+  assert.equal(pdoRateHz(2), 500);
+  assert.equal(pdoRateHz(4), 250);
+  assert.equal(formatPdoRateHz(3), "333.3");
+  assert.throws(() => pdoRateHz(0), RangeError);
+  assert.throws(() => pdoRateHz(101), RangeError);
+  assert.throws(() => pdoRateHz(1.5), RangeError);
 });
 
 test("N·m torque targets convert to signed permille and reject values beyond peak", () => {

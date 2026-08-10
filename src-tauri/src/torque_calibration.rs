@@ -14,10 +14,11 @@ use std::time::{Duration, Instant};
 use can_transport::{CanBus, CanFrame};
 use hex_motor::canopen::heartbeat::encode_consumer_heartbeat_entry;
 use hex_motor::canopen::sdo;
+use hex_motor::cia402::PdoProfile;
 use hex_motor::meow_motor::{
     host_tpdo_cob_id, CompressedMitMapping, CompressedMitTarget, MeowMotorCanSettingsStatus,
     MeowMotorInitializeOptions, MeowMotorLifecycle, MeowMotorLogic, MeowMotorManager,
-    MeowMotorMode, SharedHostPdoConfig, Tpdo1Rate,
+    MeowMotorMode, SharedHostPdoConfig,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -623,7 +624,7 @@ async fn run_measurement(
         .initialize_with_options(
             request.node_id,
             MeowMotorInitializeOptions {
-                tpdo1_rate: Tpdo1Rate::Hz1000,
+                pdo_profile: PdoProfile::default(),
                 configure_consumer_heartbeat: true,
                 shared_host_pdo: Some(SharedHostPdoConfig {
                     host_node_id,

@@ -186,6 +186,60 @@
   line-height: 1.45;
 }
 
+.zenoh-limits {
+  border-top-color: rgba(231, 91, 43, 0.5);
+}
+
+.zenoh-limits__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.zenoh-limits__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 410px), 1fr));
+  gap: 14px;
+}
+
+.zenoh-limit-axis {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.zenoh-limit-axis__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+
+.zenoh-limit-axis__control {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(170px, 220px);
+  gap: 18px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.zenoh-limit-axis__control .ant-input-number-group-wrapper,
+.zenoh-limit-axis__control .ant-input-number {
+  width: 100%;
+}
+
+.zenoh-limit-axis__range.ant-typography,
+.zenoh-limits__notice.ant-typography {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .zenoh-odom {
   display: flex;
   flex-direction: column;
@@ -271,6 +325,17 @@
 
   .zenoh-metric-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .zenoh-limits__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .zenoh-limit-axis__control {
+    grid-template-columns: 1fr;
+    gap: 8px;
   }
 }
 

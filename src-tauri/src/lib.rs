@@ -229,6 +229,8 @@ pub fn run() {
             commands::zenoh_set_active,
             commands::zenoh_set_cmd,
             commands::zenoh_get_state,
+            commands::zenoh_get_limits,
+            commands::zenoh_set_limits,
             commands::zenoh_release,
             commands::zenoh_set_diag_focus,
             commands::zenoh_refresh_diag,

@@ -42,8 +42,8 @@ env_logger = "0.11"
 anyhow = "1"
 getrandom = "0.3"
 chrono = "0.4"
-# Published Meow Motor driver and host services.
-hex-motor = "0.2.4"
+# Local until hex-motor 0.3.0 is published; then switch back to crates.io.
+hex-motor = { version = "0.3.0", path = "../../hex-motor" }
 
 # Public, secret-free runtime for the current HPM USB Bootloader. It owns the
 # strict legacy profile/package parser and flash state machine; the Tauri

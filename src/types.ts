@@ -727,6 +727,18 @@ export interface BaseInfo {
   model: string;
 }
 
+export interface BaseLimitAxisDto {
+  current: number;
+  default_value: number;
+  min: number;
+  max: number;
+}
+
+export interface BaseLimitsDto {
+  linear: BaseLimitAxisDto | null;
+  angular: BaseLimitAxisDto | null;
+}
+
 export interface ZenohBaseState {
   controlling: boolean;
   holder: number;

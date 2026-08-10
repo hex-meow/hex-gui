@@ -3,7 +3,7 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, ArmUrdf, AuthenticityDeviceView, AuthenticityOnlineStatus, AuthenticityRegistrationResult, AuthenticityTarget, BaseInfo, CalibrationUpdatePersistedResult, CalibrationUpdatePrepared, CalibrationUpdatePreview, CalibrationUpdatePreviewRequest, CalibrationUpdateVerifyRequest, CalibrationUpdateWriteRequest, CalibrationUpdateWriteResult, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ConnectionInfo, ControllerInfo, DeviceSettingsRequest, DeviceSettingsResult, EventsSnapshot, FrictionCalibrationRequest, FrictionCalibrationView, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftFactoryCalibrationResult, LiftState, LiveState, LogLine, MeowCanSettingsRequest, MeowMotorSnapshot, MeowMotorTarget, MeowProfileLimits, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, TorqueCalibrationRequest, TorqueCalibrationView, ZenohArmState, ZenohBaseState, LiftRobotInfo, ZenohLiftState, EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
+import type { ArmInfo, ArmUrdf, AuthenticityDeviceView, AuthenticityOnlineStatus, AuthenticityRegistrationResult, AuthenticityTarget, BaseInfo, BaseLimitsDto, CalibrationUpdatePersistedResult, CalibrationUpdatePrepared, CalibrationUpdatePreview, CalibrationUpdatePreviewRequest, CalibrationUpdateVerifyRequest, CalibrationUpdateWriteRequest, CalibrationUpdateWriteResult, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ConnectionInfo, ControllerInfo, DeviceSettingsRequest, DeviceSettingsResult, EventsSnapshot, FrictionCalibrationRequest, FrictionCalibrationView, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftFactoryCalibrationResult, LiftState, LiveState, LogLine, MeowCanSettingsRequest, MeowMotorSnapshot, MeowMotorTarget, MeowProfileLimits, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, TorqueCalibrationRequest, TorqueCalibrationView, ZenohArmState, ZenohBaseState, LiftRobotInfo, ZenohLiftState, EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus} from "./types";
 
 export const api = {
   connect: (iface: string, dataBitrate: number, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -45,8 +45,8 @@ export const api = {
     invoke<MeowMotorSnapshot>("meow_identify", { nid }),
   meowGetStatus: (nid: number) =>
     invoke<MeowMotorSnapshot>("meow_get_status", { nid }),
-  meowInitialize: (nid: number, rateHz: 500 | 1000) =>
-    invoke<MeowMotorSnapshot>("meow_initialize", { nid, rateHz }),
+  meowInitialize: (nid: number, eventTimerMs: number) =>
+    invoke<MeowMotorSnapshot>("meow_initialize", { nid, eventTimerMs }),
   meowActivateTarget: (nid: number, target: MeowMotorTarget) =>
     invoke<void>("meow_activate_target", { nid, target }),
   meowSetTarget: (nid: number, target: MeowMotorTarget) =>
@@ -258,6 +258,10 @@ export const api = {
   zenohSetActive: (on: boolean) => invoke<void>("zenoh_set_active", { on }),
   zenohSetCmd: (vx: number, vy: number, wz: number) =>
     invoke<void>("zenoh_set_cmd", { vx, vy, wz }),
+  zenohGetLimits: (prefix: string) =>
+    invoke<BaseLimitsDto | null>("zenoh_get_limits", { prefix }),
+  zenohSetLimits: (prefix: string, linear: number | null, angular: number | null) =>
+    invoke<BaseLimitsDto>("zenoh_set_limits", { prefix, linear, angular }),
   zenohGetState: () => invoke<ZenohBaseState>("zenoh_get_state"),
   zenohRelease: () => invoke<void>("zenoh_release"),
   zenohSetDiagFocus: (prefix: string) => invoke<void>("zenoh_set_diag_focus", { prefix }),

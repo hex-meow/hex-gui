@@ -8,10 +8,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use hex_motor::cia402::{Cia402Manager, Cia402ManagerOptions};
+use hex_motor::cia402::{Cia402Manager, Cia402ManagerOptions, PdoProfile};
 use hex_motor::meow_motor::{
     MeowMitTarget, MeowMotorCanSettings, MeowMotorInitializeOptions, MeowMotorManager,
-    MeowMotorManagerOptions, MeowMotorTarget, MeowProfileLimits, SignedQ8_24, Tpdo1Rate,
+    MeowMotorManagerOptions, MeowMotorTarget, MeowProfileLimits, SignedQ8_24,
 };
 use hex_motor::types::MotorMode;
 use tauri::State;
@@ -28,7 +28,7 @@ use crate::friction_calibration::{FrictionCalibrationRequest, FrictionCalibratio
 use crate::state::AppState;
 use crate::torque_calibration::{TorqueCalibrationRequest, TorqueCalibrationView};
 use crate::zenoh_arm::{ArmInfo, ArmUrdf, ZenohArmConn, ZenohArmState};
-use crate::zenoh_base::{BaseInfo, ZenohBaseState, ZenohConn};
+use crate::zenoh_base::{BaseInfo, BaseLimitsDto, ZenohBaseState, ZenohConn};
 use crate::zenoh_config::{
     ConfigGetDto, ConfigSetResult, ConfigValidateResult, ControllerInfoDto, RestartResult,
     ZenohConfigConn,
@@ -336,7 +336,7 @@ pub async fn initialize_all(state: State<'_, AppState>) -> CmdResult<Vec<(u8, Op
         let result = match kind {
             crate::device_registry::DeviceKind::Cia402Motor => mgr.initialize(nid).await,
             crate::device_registry::DeviceKind::MeowMotor => match meow_mgr.identify(nid).await {
-                Ok(_) => meow_mgr.initialize(nid, Tpdo1Rate::Hz1000).await,
+                Ok(_) => meow_mgr.initialize(nid, PdoProfile::default()).await,
                 Err(error) => Err(error),
             },
             _ => unreachable!("initialize_all filters non-motor device kinds"),
@@ -425,21 +425,23 @@ pub async fn meow_get_status(
 pub async fn meow_initialize(
     state: State<'_, AppState>,
     nid: u8,
-    rate_hz: u16,
+    event_timer_ms: u16,
 ) -> CmdResult<MeowMotorSnapshotDto> {
+    // Reject malformed IPC input before identification performs any SDO I/O
+    // or changes the cached lifecycle state.
+    let profile = meow_pdo_profile(event_timer_ms)?;
     let manager = meow_manager(&state).await?;
     manager.identify(nid).await.map_err(err)?;
-    let rate = match rate_hz {
-        500 => Tpdo1Rate::Hz500,
-        1000 => Tpdo1Rate::Hz1000,
-        _ => return Err(format!("TPDO1 rate must be 500 or 1000, got {rate_hz}")),
-    };
-    let options = MeowMotorInitializeOptions::new(rate);
+    let options = MeowMotorInitializeOptions::new(profile);
     manager
         .initialize_with_options(nid, options)
         .await
         .map_err(err)?;
     meow_snapshot_for(&manager, nid)
+}
+
+fn meow_pdo_profile(event_timer_ms: u16) -> CmdResult<PdoProfile> {
+    PdoProfile::from_event_timer_ms(event_timer_ms).map_err(err)
 }
 
 #[tauri::command]
@@ -509,6 +511,16 @@ mod meow_command_tests {
             Some(DeviceKind::Cia402Motor)
         );
         assert_eq!(motor_initialization_kind(0xDEAD_BEEF, 1), None);
+    }
+
+    #[test]
+    fn meow_initialization_accepts_the_full_pdo_profile_period_range() {
+        for event_timer_ms in [1, 2, 4, 10, 100] {
+            let profile = meow_pdo_profile(event_timer_ms).unwrap();
+            assert_eq!(profile.event_timer_ms(), event_timer_ms);
+        }
+        assert!(meow_pdo_profile(0).is_err());
+        assert!(meow_pdo_profile(101).is_err());
     }
 
     #[test]
@@ -1365,6 +1377,45 @@ pub async fn zenoh_get_state(state: State<'_, AppState>) -> CmdResult<ZenohBaseS
         .as_ref()
         .map(|c| c.state())
         .unwrap_or_default())
+}
+
+/// Read the selected base's controller-advertised acceleration defaults,
+/// ranges, and current values. Old controllers return `None` so their normal
+/// drive controls remain usable without showing unsupported limit controls.
+#[tauri::command]
+pub async fn zenoh_get_limits(
+    state: State<'_, AppState>,
+    prefix: String,
+) -> CmdResult<Option<BaseLimitsDto>> {
+    // Capability discovery may wait for its bounded Zenoh timeout on an old
+    // controller. Clone the cheap connection handle so drive/stop commands
+    // never queue behind that network wait on AppState's connection mutex.
+    let c = {
+        let g = state.zenoh.lock().await;
+        g.as_ref()
+            .cloned()
+            .ok_or_else(|| "未连接 Zenoh".to_string())?
+    };
+    c.get_limits(&prefix).await.map_err(err)
+}
+
+/// Apply one or both base acceleration limits. The transport chooses session
+/// 0 for an idle base or our real session ID when this GUI currently holds it.
+#[tauri::command]
+pub async fn zenoh_set_limits(
+    state: State<'_, AppState>,
+    prefix: String,
+    linear: Option<f64>,
+    angular: Option<f64>,
+) -> CmdResult<BaseLimitsDto> {
+    // Keep velocity/stop traffic independent from the multi-query RPC below.
+    let c = {
+        let g = state.zenoh.lock().await;
+        g.as_ref()
+            .cloned()
+            .ok_or_else(|| "未连接 Zenoh".to_string())?
+    };
+    c.set_limits(&prefix, linear, angular).await.map_err(err)
 }
 
 #[tauri::command]

@@ -20,11 +20,14 @@ import { nid2hex } from "../format";
 import { useI18n } from "../i18n";
 import {
   clampToRange,
+  formatPdoRateHz,
   formatMeowDetailedError,
   formatMeowModeDisplay,
+  MAX_PDO_EVENT_TIMER_MS,
   meowMitGainLimitSi,
   meowMitTargetFromSi,
   meowVelocityLimit,
+  MIN_PDO_EVENT_TIMER_MS,
   RADIANS_PER_REVOLUTION,
   torquePermilleToNm,
   torqueNmToPermille,
@@ -65,7 +68,7 @@ export function MeowMotorPanel({
   const [snapshot, setSnapshot] = useState<MeowMotorSnapshot | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [tpdoRateHz, setTpdoRateHz] = useState<500 | 1000>(1000);
+  const [tpdoEventTimerMs, setTpdoEventTimerMs] = useState<number | null>(1);
   const [refreshHz, setRefreshHz] = useState(50);
   const [view, setView] = useState<"panel" | "chart">("panel");
   const [windowSec, setWindowSec] = useState(10);
@@ -383,24 +386,46 @@ export function MeowMotorPanel({
               />
             )}
             <Space wrap align="end" style={{ marginBottom: 12 }}>
-              <Field label={t("meowTpdoRate")}>
-                <Segmented
-                  value={tpdoRateHz}
-                  onChange={(value) => setTpdoRateHz(value as 500 | 1000)}
-                  options={[500, 1000]}
+              <Field label={t("meowTpdoPeriod")}>
+                <InputNumber
+                  min={MIN_PDO_EVENT_TIMER_MS}
+                  max={MAX_PDO_EVENT_TIMER_MS}
+                  step={1}
+                  precision={0}
+                  value={tpdoEventTimerMs}
+                  addonAfter="ms"
+                  onChange={(value) => {
+                    if (value == null) {
+                      setTpdoEventTimerMs(null);
+                      return;
+                    }
+                    setTpdoEventTimerMs(
+                      clampToRange(
+                        Math.round(value),
+                        MIN_PDO_EVENT_TIMER_MS,
+                        MAX_PDO_EVENT_TIMER_MS,
+                      ),
+                    );
+                  }}
                 />
               </Field>
+              <Typography.Text type="secondary">
+                {t("meowTpdoEffectiveRate")}: {tpdoEventTimerMs == null
+                  ? "—"
+                  : formatPdoRateHz(tpdoEventTimerMs)} Hz
+              </Typography.Text>
               <Button
                 loading={busy}
-                disabled={!snapshot?.online}
-                onClick={() =>
-                  run(
+                disabled={!snapshot?.online || tpdoEventTimerMs == null}
+                onClick={() => {
+                  if (tpdoEventTimerMs == null) return;
+                  void run(
                     snapshot?.lifecycle.kind === "Initialized"
                       ? t("reinitialize")
                       : t("initialize"),
-                    () => api.meowInitialize(info.node_id, tpdoRateHz),
-                  )
-                }
+                    () => api.meowInitialize(info.node_id, tpdoEventTimerMs),
+                  );
+                }}
               >
                 {snapshot?.lifecycle.kind === "Initialized" ? t("reinitialize") : t("initialize")}
               </Button>
@@ -412,6 +437,7 @@ export function MeowMotorPanel({
                 {t("clearError")}
               </Button>
               <Typography.Text type="secondary">{t("meowModeTargetHint")}</Typography.Text>
+              <Typography.Text type="secondary">{t("meowTpdoProfileHint")}</Typography.Text>
             </Space>
 
             <div

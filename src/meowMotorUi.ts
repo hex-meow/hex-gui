@@ -2,6 +2,29 @@ export const MEOW_MOTOR_4310_PRODUCT_CODE = 0x6c64_bc78;
 export const MEOW_MOTOR_4342_PRODUCT_CODE = 0x6c64_bcaa;
 export const RADIANS_PER_REVOLUTION = 2 * Math.PI;
 
+/** `hex-motor::cia402::PdoProfile` accepts integer event timers in this range. */
+export const MIN_PDO_EVENT_TIMER_MS = 1;
+export const MAX_PDO_EVENT_TIMER_MS = 100;
+
+/** The CANopen event timer is authoritative; its corresponding rate may be fractional. */
+export function pdoRateHz(eventTimerMs: number): number {
+  if (
+    !Number.isInteger(eventTimerMs) ||
+    eventTimerMs < MIN_PDO_EVENT_TIMER_MS ||
+    eventTimerMs > MAX_PDO_EVENT_TIMER_MS
+  ) {
+    throw new RangeError(
+      `TPDO event timer must be an integer from ${MIN_PDO_EVENT_TIMER_MS} to ${MAX_PDO_EVENT_TIMER_MS} ms`,
+    );
+  }
+  return 1000 / eventTimerMs;
+}
+
+export function formatPdoRateHz(eventTimerMs: number): string {
+  const rate = pdoRateHz(eventTimerMs);
+  return Number.isInteger(rate) ? rate.toFixed(0) : rate.toFixed(1);
+}
+
 const U16_MAX = 65_535;
 
 export interface MeowMitSiTarget {
