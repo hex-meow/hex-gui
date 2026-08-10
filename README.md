@@ -236,9 +236,9 @@ a maintainer may explicitly delete and recreate both.
 > Windows users click through SmartScreen. Add signing later via `tauri-action`
 > env vars.
 >
-> **Green-build prerequisites** (see the header comment in the workflow):
-> `hex-arm-dynamics` must be available from crates.io. CI checks out the verified
-> shared contract from pinned `hex-meow/hex-robot-proto` commit `d60ebe8` via `ROBOT_PROTO_DIR`.
+> **Fresh-checkout inputs** (see the header comment in the workflow):
+> Rust library dependencies are resolved from crates.io. CI checks out the verified
+> shared contract from pinned `hex-meow/hex-robot-proto` commit `6848962` via `ROBOT_PROTO_DIR`.
 
 ## Usage
 

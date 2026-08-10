@@ -10,13 +10,9 @@
 #   • Windows (windows-latest) → .msi + .exe NSIS installer  (x86-64)
 #   • macOS (macos-latest) → .dmg + .app, built `universal` (Intel + Apple Silicon)
 #
-# ⚠️ PREREQUISITES for a green CI build — two things must resolve in a FRESH
-# checkout (hex-motor / can-transport / canopen-sdo are already crates.io deps):
-#   1. hex-arm-dynamics — publish it to crates.io. Cargo.toml now uses
-#      `hex-arm-dynamics = "0.1.0"` (no longer a path dep).
-#   2. The shared proto — build.rs compiles `../../hex-robot-proto/proto` by
-#      default. CI checks out the pinned hex-robot-proto contract into `_proto` and points
-#      ROBOT_PROTO_DIR at it.
+# Fresh checkouts resolve the Rust libraries from crates.io. The shared proto
+# remains a pinned source input: CI checks it out into `_proto` and points
+# ROBOT_PROTO_DIR at it instead of relying on a local sibling repository.
 #
 # ⚠️ Bundles here are UNSIGNED. macOS users hit Gatekeeper (right-click → Open);
 # Windows users hit SmartScreen. Add code signing later via tauri-action env.
@@ -84,7 +80,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: hex-meow/hex-robot-proto
-          ref: d60ebe8f16ffeb144e6c0059bff5f5a97606e8c4
+          ref: 6848962383fbb62a379b4a2a1522a3e7efb2bafd
           path: _proto
       - name: Install Linux build dependencies
         run: |
@@ -137,7 +133,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: hex-meow/hex-robot-proto
-          ref: d60ebe8f16ffeb144e6c0059bff5f5a97606e8c4
+          ref: 6848962383fbb62a379b4a2a1522a3e7efb2bafd
           path: _proto
       - name: Verify shared proto inputs
         shell: bash
