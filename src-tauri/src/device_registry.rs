@@ -1,35 +1,20 @@
-//! GUI device registry (CANopen `0x1018` identity → host device kind).
+//! GUI device classification backed by the shared firmware target catalog.
 //!
-//! Motor discovery + identity reading already lives in `hex-motor`
-//! (`KNOWN_DEVICES`). This table is the GUI-owned companion: it lists the
-//! **non-motor** hex-meow devices the GUI knows how to display. Classification
-//! always uses the exact `(vendor_id, product_code)` tuple; a vendor-wide
-//! wildcard must never make an unknown product safe to control as a motor.
-//!
-//! A device kind shares **one** frontend panel across all its product codes —
-//! add a row here for every new IMU (or other non-motor) product code and they
-//! all open the same IMU panel. See `docs/device-identity.md`.
+//! Exact CANopen `0x1018` vendor/product routing is owned by
+//! `hexmeow-dfu-targets`; this module retains the established GUI-facing
+//! `DeviceKind` capability API without maintaining a second identity table.
 
+use hexmeow_dfu_targets::{target_by_identity, DeviceClass};
 use serde::Serialize;
 
-/// hex-meow vendor id — ASCII "hexm" (`'h' 'e' 'x' 'm'`), i.e. `0x6865786D`.
-pub const VENDOR_HEXM: u32 = 0x6865_786D;
-
-pub const PRODUCT_IMU_G4: u32 = 0x0069_6D75;
-pub const PRODUCT_ARM_IMU: u32 = 0x6169_6D75;
-pub const PRODUCT_LIFT: u32 = 0x006C_6674;
-
-/// Exact identities that are safe to route to the legacy CiA402 controls.
-const CIA402_MOTOR_IDENTITIES: &[(u32, u32)] = &[
-    (0x4859_444C, 0xAAAA_0001),
-    (0x4859_444C, 0xAAAA_0002),
-    (0x4859_444C, 0xAAAA_0005),
-];
-
-/// Public product-family identities for the new, non-CiA402 motor driver.
-pub const MEOW_MOTOR_VENDOR_ID: u32 = 0x0068_6578;
-pub const MEOW_MOTOR_4310_PRODUCT_CODE: u32 = 0x6C64_BC78;
-pub const MEOW_MOTOR_4342_PRODUCT_CODE: u32 = 0x6C64_BCAA;
+// Compatibility exports for existing GUI modules and downstream tests. The
+// values themselves are owned by the central catalog above.
+#[allow(unused_imports)]
+pub use hexmeow_dfu_targets::{
+    CIA402_MOTOR_4310_PRODUCT_CODE, CIA402_MOTOR_4342_PRODUCT_CODE, CIA402_MOTOR_4360_PRODUCT_CODE,
+    CIA402_MOTOR_VENDOR_ID, MEOW_MOTOR_4310_PRODUCT_CODE, MEOW_MOTOR_4342_PRODUCT_CODE,
+    MEOW_MOTOR_VENDOR_ID, PRODUCT_ARM_IMU, PRODUCT_IMU_G4, PRODUCT_LIFT, VENDOR_HEXM,
+};
 
 /// Which panel a discovered device opens. Unknown exact tuples remain
 /// `Unknown`; neither motor type is an implicit vendor-level default.
@@ -76,90 +61,52 @@ impl DeviceKind {
     }
 }
 
-/// One exact non-motor device identity.
-pub struct KnownDevice {
-    pub vendor_id: u32,
-    pub product_code: u32,
-    pub kind: DeviceKind,
-    pub name: &'static str,
+impl From<DeviceClass> for DeviceKind {
+    fn from(class: DeviceClass) -> Self {
+        match class {
+            DeviceClass::Imu => Self::Imu,
+            DeviceClass::Lift => Self::Lift,
+            DeviceClass::Cia402Motor => Self::Cia402Motor,
+            DeviceClass::MeowMotor => Self::MeowMotor,
+        }
+    }
 }
-
-/// The non-motor devices this GUI can display. Every IMU product code routes to
-/// the single IMU panel — add new rows as new IMU variants ship.
-pub const NON_MOTOR_DEVICES: &[KnownDevice] = &[
-    KnownDevice {
-        vendor_id: VENDOR_HEXM,
-        product_code: PRODUCT_IMU_G4,
-        kind: DeviceKind::Imu,
-        name: "hex-meow IMU G4",
-    },
-    KnownDevice {
-        vendor_id: VENDOR_HEXM,
-        product_code: PRODUCT_ARM_IMU,
-        kind: DeviceKind::Imu,
-        name: "hex-meow arm IMU",
-    },
-    KnownDevice {
-        vendor_id: VENDOR_HEXM,
-        product_code: PRODUCT_LIFT,
-        kind: DeviceKind::Lift,
-        name: "hex-meow lift controller",
-    },
-];
-
-/// Exact identities and public display names for the new motor type.
-pub const MEOW_MOTOR_DEVICES: &[KnownDevice] = &[
-    KnownDevice {
-        vendor_id: MEOW_MOTOR_VENDOR_ID,
-        product_code: MEOW_MOTOR_4310_PRODUCT_CODE,
-        kind: DeviceKind::MeowMotor,
-        name: "hexmeow 4310",
-    },
-    KnownDevice {
-        vendor_id: MEOW_MOTOR_VENDOR_ID,
-        product_code: MEOW_MOTOR_4342_PRODUCT_CODE,
-        kind: DeviceKind::MeowMotor,
-        name: "hexmeow 4342",
-    },
-];
 
 /// Classify a node from its exact `0x1018` identity.
-///
-/// Only an exact legacy motor entry is safe to route to CiA402 controls; new
-/// motor identities remain a distinct type even before their driver is wired.
 pub fn classify(vendor_id: u32, product_code: u32) -> DeviceKind {
-    if let Some(device) = NON_MOTOR_DEVICES
-        .iter()
-        .find(|d| d.vendor_id == vendor_id && d.product_code == product_code)
-    {
-        return device.kind;
-    }
-
-    if let Some(device) = MEOW_MOTOR_DEVICES
-        .iter()
-        .find(|d| d.vendor_id == vendor_id && d.product_code == product_code)
-    {
-        return device.kind;
-    }
-
-    if CIA402_MOTOR_IDENTITIES.contains(&(vendor_id, product_code)) {
-        DeviceKind::Cia402Motor
-    } else {
-        DeviceKind::Unknown
-    }
+    target_by_identity(vendor_id, product_code)
+        .map(|target| target.device_class.into())
+        .unwrap_or(DeviceKind::Unknown)
 }
 
+/// Return the established general device-browser name, when one exists.
+///
+/// Partner CiA402 motors intentionally keep returning `None`, matching the
+/// previous registry behavior; firmware-profile labels remain available via
+/// `TargetDescriptor::display_name`.
 pub fn display_name(vendor_id: u32, product_code: u32) -> Option<&'static str> {
-    NON_MOTOR_DEVICES
-        .iter()
-        .chain(MEOW_MOTOR_DEVICES)
-        .find(|device| device.vendor_id == vendor_id && device.product_code == product_code)
-        .map(|device| device.name)
+    target_by_identity(vendor_id, product_code).and_then(|target| target.device_name)
 }
 
 #[cfg(test)]
 mod tests {
+    use hexmeow_dfu_targets::TARGETS;
+
     use super::*;
+
+    #[test]
+    fn every_catalog_identity_uses_its_central_device_class() {
+        for target in TARGETS {
+            assert_eq!(
+                classify(target.vendor_id, target.product_code),
+                target.device_class.into()
+            );
+            assert_eq!(
+                display_name(target.vendor_id, target.product_code),
+                target.device_name
+            );
+        }
+    }
 
     #[test]
     fn non_motor_products_require_exact_tuples() {
@@ -171,17 +118,32 @@ mod tests {
 
     #[test]
     fn vendor_wildcards_do_not_classify_unknown_products_as_motors() {
-        assert_eq!(classify(0x0068_6578, 0xDEAD_BEEF), DeviceKind::Unknown);
-        assert_eq!(classify(0x4859_444C, 0xDEAD_BEEF), DeviceKind::Unknown);
+        assert_eq!(
+            classify(MEOW_MOTOR_VENDOR_ID, 0xDEAD_BEEF),
+            DeviceKind::Unknown
+        );
+        assert_eq!(
+            classify(CIA402_MOTOR_VENDOR_ID, 0xDEAD_BEEF),
+            DeviceKind::Unknown
+        );
     }
 
     #[test]
     fn exact_motor_products_still_route_to_motor_controls() {
-        assert_eq!(classify(0x4859_444C, 0xAAAA_0001), DeviceKind::Cia402Motor);
+        for product_code in [
+            CIA402_MOTOR_4310_PRODUCT_CODE,
+            CIA402_MOTOR_4342_PRODUCT_CODE,
+            CIA402_MOTOR_4360_PRODUCT_CODE,
+        ] {
+            assert_eq!(
+                classify(CIA402_MOTOR_VENDOR_ID, product_code),
+                DeviceKind::Cia402Motor
+            );
+        }
     }
 
     #[test]
-    fn meow_motors_require_exact_tuples_and_have_fixed_public_names() {
+    fn meow_motors_require_exact_tuples_and_keep_public_names() {
         assert_eq!(
             classify(MEOW_MOTOR_VENDOR_ID, MEOW_MOTOR_4310_PRODUCT_CODE),
             DeviceKind::MeowMotor
@@ -211,7 +173,7 @@ mod tests {
 
     #[test]
     fn operation_capabilities_follow_exact_classification() {
-        let cia402_motor = classify(0x4859_444C, 0xAAAA_0002);
+        let cia402_motor = classify(CIA402_MOTOR_VENDOR_ID, CIA402_MOTOR_4342_PRODUCT_CODE);
         assert!(cia402_motor.supports_device_settings());
         assert!(cia402_motor.supports_position_preset());
         assert!(cia402_motor.supports_cia402_controls());

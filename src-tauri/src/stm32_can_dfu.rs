@@ -26,16 +26,23 @@ use cobs_can_iap::{
     SupportPolicy as CobsSupportPolicy, TargetClassification as CobsTargetClassification,
     TargetRegistry as CobsTargetRegistry,
 };
+use hexmeow_dfu_targets::{target_by_profile_id, PreflightPolicy, TargetBackend};
 use hexmeow_stm32_can_dfu::{
     authorize, flash, observe_identity, read_package_bytes, revalidate_prepared, AuthorizedTarget,
     CanBusSdo, CancellationToken, FlashError, FlashEvent, FlashOptions, FlashStage,
     IdentitySnapshot, PackageLimits, PreparedUpgrade, Stm32ImageMode, SupportPolicy,
     TargetClassification, TargetRegistry,
 };
+use motor_img_release::{
+    identity_root as motor_identity_root, parse_latest_json as parse_motor_latest_json,
+    parse_release_json as parse_motor_release_json, verify_latest as verify_motor_latest,
+    verify_release as verify_motor_release, LatestDocument as MotorLatestDocument,
+    ReleaseDocument as MotorReleaseDocument,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::ipc::{Channel, InvokeBody, Request};
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::can_lease::{CanOwner, CanTransportGate};
 use crate::cobs_can_iap_profiles::{
@@ -43,6 +50,10 @@ use crate::cobs_can_iap_profiles::{
     target_registry as cobs_target_registry,
 };
 use crate::dfu_gate::{DfuBackend, DfuMutationGate};
+use crate::motor_factory_backup::{
+    persist_backup, read_stable_snapshot, BackupArtifact, BackupContext, BackupIdentity,
+    PersistedBackup,
+};
 use crate::stm32_can_profiles::{display_name_for_profile, target_registry};
 
 type CmdResult<T> = std::result::Result<T, String>;
@@ -155,11 +166,26 @@ enum StagedArtifact {
     Stm32 {
         token: String,
         prepared: PreparedUpgrade,
+        dto: PreparedDto,
     },
     CobsIap {
         token: String,
         prepared: CobsPreparedUpgrade,
+        dto: PreparedDto,
     },
+}
+
+/// Evidence that lets the GUI compare an artifact's intended post-flash
+/// 0x1018:03 value with the complete identity read during discovery.
+///
+/// A supplier IMG header version is deliberately absent: that field is not
+/// proven to use the CANopen revision encoding. Only a signed online release
+/// can supply that binding for Motor IMG.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RevisionEvidence {
+    StandardMeowpkg(u32),
+    SignedMotorRelease(u32),
+    UnprovenLocalMotorImg,
 }
 
 impl StagedArtifact {
@@ -173,6 +199,18 @@ impl StagedArtifact {
         match self {
             Self::Stm32 { .. } => DfuBackend::Stm32Can,
             Self::CobsIap { .. } => DfuBackend::CobsCanIap,
+        }
+    }
+
+    fn dto(&self) -> &PreparedDto {
+        match self {
+            Self::Stm32 { dto, .. } | Self::CobsIap { dto, .. } => dto,
+        }
+    }
+
+    fn dto_mut(&mut self) -> &mut PreparedDto {
+        match self {
+            Self::Stm32 { dto, .. } | Self::CobsIap { dto, .. } => dto,
         }
     }
 }
@@ -276,15 +314,24 @@ pub struct PreparedDto {
     mcu: Option<String>,
     format_version: Option<u16>,
     encrypted: bool,
+    img_device_id: Option<u32>,
+    img_device_id_hex: Option<String>,
     firmware_id: u32,
     firmware_id_hex: String,
     firmware_version: u32,
     firmware_version_hex: String,
     plaintext_size: Option<usize>,
     wire_size: usize,
+    img_start_address_hex: Option<String>,
+    img_end_address_hex: Option<String>,
     version_warning: &'static str,
     artifact_source: &'static str,
     release_version: Option<String>,
+    expected_postflash_revision: Option<u32>,
+    expected_postflash_revision_hex: Option<String>,
+    manual_risk_required: bool,
+    manual_risk_acknowledged: bool,
+    factory_backup_required: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -300,6 +347,9 @@ pub struct OutcomeDto {
     status: &'static str,
     startup_confirmed: bool,
     recoverable_bootloader_expected: bool,
+    factory_backup_path: Option<String>,
+    factory_backup_sha256: Option<String>,
+    factory_data_status: Option<&'static str>,
 }
 
 /// Read-only CAN discovery. The bus is dropped before this command returns.
@@ -408,17 +458,51 @@ pub async fn stm32_can_dfu_prepare(
         }
     };
     let (target, device) = selected_context(&state)?;
-    let (staged, dto) = prepare_artifact_bytes(target, device, bytes, "local", None)?;
+    let (staged, dto) = prepare_artifact_bytes(target, device, bytes, "local", None, None)?;
     state.inner.lock().unwrap().staged = Some(staged);
     Ok(dto)
 }
 
-/// Download and stage the stable R2 release for the selected standard target.
+/// Record the attended user's one-use acknowledgement for a manually selected
+/// supplier IMG. The acknowledgement is held only in the Rust staged
+/// capability and is invalidated by any new discovery, target, or artifact.
+#[tauri::command]
+pub async fn stm32_can_dfu_acknowledge_manual(
+    state: State<'_, CanDfuState>,
+    token: String,
+) -> CmdResult<PreparedDto> {
+    let _session = state.session_lock.lock().await;
+    if state.is_active() {
+        return Err("an upgrade is already running".into());
+    }
+    let mut inner = state.inner.lock().unwrap();
+    let staged = inner
+        .staged
+        .as_mut()
+        .ok_or_else(|| "no validated local artifact is staged".to_owned())?;
+    if staged.token() != token {
+        return Err("artifact token is stale; select and validate the file again".into());
+    }
+    if !staged.dto().manual_risk_required {
+        return Err(
+            "the staged artifact does not require a manual IMG risk acknowledgement".into(),
+        );
+    }
+    if staged.dto().artifact_source != "local" || !matches!(staged, StagedArtifact::CobsIap { .. })
+    {
+        return Err("manual risk acknowledgement applies only to a local motor IMG".into());
+    }
+    staged.dto_mut().manual_risk_acknowledged = true;
+    Ok(staged.dto().clone())
+}
+
+/// Download and stage the stable R2 release for the selected exact target.
 ///
 /// The command accepts no URL or identity input. The complete identity and
 /// exact local profile were captured by discovery/selection; those values
-/// mechanically choose the sole allowed HTTPS path. Compatible and USB
-/// backends deliberately remain local-file only.
+/// mechanically choose the sole allowed HTTPS path and metadata schema. The
+/// meowpkg and supplier IMG schemas remain disjoint; online IMG additionally
+/// requires a build-time pinned HexMeow catalog verification key.
 #[tauri::command]
 pub async fn stm32_can_dfu_prepare_latest(state: State<'_, CanDfuState>) -> CmdResult<PreparedDto> {
     let _session = state.session_lock.lock().await;
@@ -426,8 +510,13 @@ pub async fn stm32_can_dfu_prepare_latest(state: State<'_, CanDfuState>) -> CmdR
         return Err("an upgrade is already running".into());
     }
     let (target, device) = selected_context(&state)?;
+    if matches!(&target, SelectedTarget::CobsIap(_)) {
+        let (staged, dto) = prepare_latest_motor_img(target, device).await?;
+        state.inner.lock().unwrap().staged = Some(staged);
+        return Ok(dto);
+    }
     let SelectedTarget::Stm32(authorized) = &target else {
-        return Err("online releases are not enabled for this compatible CAN backend".into());
+        unreachable!("the Motor IMG branch returned above")
     };
     let identity = *authorized.identity();
     let profile_id = authorized.target().profile_id().to_owned();
@@ -447,6 +536,10 @@ pub async fn stm32_can_dfu_prepare_latest(state: State<'_, CanDfuState>) -> CmdR
         &profile_id,
         identity.vendor_id(),
         identity.product_code(),
+    )?;
+    revision_warning(
+        RevisionEvidence::StandardMeowpkg(latest.firmware_version),
+        device.software_revision,
     )?;
 
     let release_url = format!("{identity_root}/{}", latest.release_path);
@@ -488,6 +581,7 @@ pub async fn stm32_can_dfu_prepare_latest(state: State<'_, CanDfuState>) -> CmdR
         artifact_bytes,
         "r2",
         Some(latest.version.clone()),
+        Some(latest.firmware_version),
     )?;
     if dto.firmware_version != latest.firmware_version {
         return Err(format!(
@@ -501,6 +595,173 @@ pub async fn stm32_can_dfu_prepare_latest(state: State<'_, CanDfuState>) -> CmdR
     }
     state.inner.lock().unwrap().staged = Some(staged);
     Ok(dto)
+}
+
+async fn prepare_latest_motor_img(
+    target: SelectedTarget,
+    device: DeviceDto,
+) -> CmdResult<(StagedArtifact, PreparedDto)> {
+    let SelectedTarget::CobsIap(authorized) = &target else {
+        return Err("internal online Motor IMG backend mismatch".into());
+    };
+    let profile_id = authorized.target().profile_id();
+    let descriptor = target_by_profile_id(profile_id)
+        .ok_or_else(|| "selected Motor IMG profile is absent from the target catalog".to_owned())?;
+    if !descriptor.is_enabled()
+        || descriptor.backend() != TargetBackend::MotorImg
+        || descriptor.vendor_id != device.vendor_id
+        || descriptor.product_code != device.product_code
+    {
+        return Err(
+            "selected Motor IMG profile no longer matches the local identity catalog".into(),
+        );
+    }
+    let policy = descriptor
+        .motor_img_policy()
+        .ok_or_else(|| "selected target has no enabled Motor IMG policy".to_owned())?;
+    let (catalog_key_id, catalog_public_key) = policy
+        .catalog_key_id
+        .zip(policy.catalog_public_key)
+        .ok_or_else(|| {
+            format!(
+                "online IMG releases for {profile_id} are locked until a production catalog verification key is provisioned; use the attended local IMG fallback"
+            )
+        })?;
+
+    let identity_root = motor_identity_root(device.vendor_id, device.product_code);
+    let identity_url = format!("{R2_ORIGIN}/{identity_root}");
+    let client = r2_client()?;
+
+    let latest_url = format!("{identity_url}/latest.json");
+    let latest_bytes = fetch_bounded(
+        &client,
+        &latest_url,
+        MAX_LATEST_BYTES,
+        "Motor IMG latest pointer",
+    )
+    .await?;
+    let latest: MotorLatestDocument = parse_motor_latest_json(&latest_bytes)
+        .map_err(|error| format!("invalid Motor IMG latest pointer: {error}"))?;
+    verify_motor_latest(
+        &latest,
+        profile_id,
+        device.vendor_id,
+        device.product_code,
+        catalog_key_id,
+        &catalog_public_key,
+    )
+    .map_err(|error| format!("Motor IMG latest signature/binding failed: {error}"))?;
+
+    let release_bytes_len = bounded_declared_size(
+        "Motor IMG release binding",
+        latest.release.bytes,
+        MAX_RELEASE_BYTES,
+    )?;
+    let release_url = format!("{identity_url}/{}", latest.release.path);
+    let release_bytes = fetch_bounded(
+        &client,
+        &release_url,
+        MAX_RELEASE_BYTES,
+        "Motor IMG release binding",
+    )
+    .await?;
+    verify_bound_bytes(
+        "Motor IMG release binding",
+        &release_bytes,
+        release_bytes_len,
+        &latest.release.sha256,
+    )?;
+    let release: MotorReleaseDocument = parse_motor_release_json(&release_bytes)
+        .map_err(|error| format!("invalid Motor IMG release binding: {error}"))?;
+    verify_motor_release(
+        &release,
+        profile_id,
+        device.vendor_id,
+        device.product_code,
+        catalog_key_id,
+        &catalog_public_key,
+    )
+    .map_err(|error| format!("Motor IMG release signature/binding failed: {error}"))?;
+
+    if release.sequence != latest.sequence
+        || release.release_id != latest.release_id
+        || release.native_img.firmware_version != latest.native_firmware_version
+    {
+        return Err("Motor IMG release changed sequence, release ID or native version after latest validation".into());
+    }
+    if release.expected_postflash.vendor_id != descriptor.expected_postflash_identity.vendor_id
+        || release.expected_postflash.product_code
+            != descriptor.expected_postflash_identity.product_code
+    {
+        return Err(
+            "Motor IMG release expected post-flash identity differs from the local profile".into(),
+        );
+    }
+    // Reject as soon as signed revision evidence is available. In particular,
+    // do this before fetching the IMG body, and long before opening a CAN bus
+    // for mutation. Equal revisions intentionally remain valid reinstalls.
+    revision_warning(
+        RevisionEvidence::SignedMotorRelease(release.expected_postflash.revision_number),
+        device.software_revision,
+    )?;
+
+    let artifact_bytes_len = bounded_declared_size(
+        "Motor IMG artifact",
+        release.artifact.bytes,
+        MAX_ARTIFACT_BYTES,
+    )?;
+    let artifact_url = format!(
+        "{identity_url}/{}/{}",
+        release.release_id, release.artifact.path
+    );
+    let artifact_bytes = fetch_bounded(
+        &client,
+        &artifact_url,
+        MAX_ARTIFACT_BYTES,
+        "Motor IMG artifact",
+    )
+    .await?;
+    verify_bound_bytes(
+        "Motor IMG artifact",
+        &artifact_bytes,
+        artifact_bytes_len,
+        &release.artifact.sha256,
+    )?;
+
+    let (staged, dto) = prepare_artifact_bytes(
+        target,
+        device,
+        artifact_bytes,
+        "r2",
+        Some(release.release_id.clone()),
+        Some(release.expected_postflash.revision_number),
+    )?;
+    let StagedArtifact::CobsIap { prepared, .. } = &staged else {
+        return Err("validated online IMG selected the wrong native backend".into());
+    };
+    let artifact = prepared.artifact();
+    let native_matches = artifact.device_id() == release.native_img.device_id
+        && artifact.firmware_id() == release.native_img.firmware_id
+        && artifact.firmware_version() == release.native_img.firmware_version
+        && matches!(
+            artifact.encryption(),
+            cobs_can_iap::EncryptionMode::Encrypted
+        ) == release.native_img.encrypted
+        && hex::encode(artifact.hash()) == release.native_img.protected_sha256
+        && hex::encode(artifact.signature()) == release.native_img.vendor_signature
+        && hex::encode(artifact.iv()) == release.native_img.iv
+        && artifact.start_address() == release.native_img.start_address
+        && artifact.end_address() == release.native_img.end_address
+        && artifact.bin_size() as u64 == release.native_img.bin_size;
+    if !native_matches
+        || dto.artifact_size != artifact_bytes_len
+        || dto.artifact_sha256 != release.artifact.sha256
+    {
+        return Err(
+            "parsed IMG no longer matches its signed release header and content binding".into(),
+        );
+    }
+    Ok((staged, dto))
 }
 
 fn r2_client() -> CmdResult<reqwest::Client> {
@@ -546,6 +807,7 @@ fn prepare_artifact_bytes(
     bytes: Vec<u8>,
     artifact_source: &'static str,
     release_version: Option<String>,
+    expected_postflash_revision: Option<u32>,
 ) -> CmdResult<(StagedArtifact, PreparedDto)> {
     let token = format!(
         "{:016x}",
@@ -575,6 +837,10 @@ fn prepare_artifact_bytes(
                 .as_ref()
                 .and_then(|format| format.stm32_header_version)
                 .ok_or_else(|| "validated STM32 package has no header version".to_owned())?;
+            let version_warning = revision_warning(
+                RevisionEvidence::StandardMeowpkg(manifest.firmware_version),
+                current_revision,
+            )?;
             let dto = PreparedDto {
                 token: token.clone(),
                 device,
@@ -585,25 +851,48 @@ fn prepare_artifact_bytes(
                 mcu: Some(manifest.mcu.clone()),
                 format_version: Some(format_version),
                 encrypted: matches!(summary.image_mode(), Stm32ImageMode::EncryptedV2),
+                img_device_id: None,
+                img_device_id_hex: None,
                 firmware_id: manifest.firmware_id,
                 firmware_id_hex: format!("0x{:08X}", manifest.firmware_id),
                 firmware_version: manifest.firmware_version,
                 firmware_version_hex: format!("0x{:08X}", manifest.firmware_version),
                 plaintext_size: Some(summary.plaintext_size()),
                 wire_size: summary.wire_size(),
-                version_warning: version_warning(manifest.firmware_version, current_revision),
+                img_start_address_hex: None,
+                img_end_address_hex: None,
+                version_warning,
                 artifact_source,
                 release_version,
+                expected_postflash_revision,
+                expected_postflash_revision_hex: expected_postflash_revision
+                    .map(|value| format!("0x{value:08X}")),
+                manual_risk_required: false,
+                manual_risk_acknowledged: true,
+                factory_backup_required: false,
             };
             (
                 StagedArtifact::Stm32 {
                     token: token.clone(),
                     prepared,
+                    dto: dto.clone(),
                 },
                 dto,
             )
         }
         SelectedTarget::CobsIap(target) => {
+            let descriptor =
+                target_by_profile_id(target.target().profile_id()).ok_or_else(|| {
+                    "selected motor IMG profile is absent from the build-time target catalog"
+                        .to_owned()
+                })?;
+            if descriptor.backend() != TargetBackend::MotorImg || !descriptor.is_enabled() {
+                return Err(
+                    "selected motor IMG profile is not enabled in the target catalog".into(),
+                );
+            }
+            let factory_backup_required =
+                descriptor.preflight == PreflightPolicy::BackupMeowFactory4001;
             let artifact = ImgArtifact::parse(
                 &bytes,
                 ImgLimits {
@@ -615,6 +904,23 @@ fn prepare_artifact_bytes(
             let prepared =
                 CobsPreparedUpgrade::bind(target, artifact).map_err(|error| error.to_string())?;
             let artifact = prepared.artifact();
+            let revision_evidence = match (artifact_source, expected_postflash_revision) {
+                ("r2", Some(revision)) => RevisionEvidence::SignedMotorRelease(revision),
+                ("r2", None) => {
+                    return Err(
+                        "online Motor IMG is missing its signed expected post-flash revision"
+                            .into(),
+                    )
+                }
+                ("local", None) => RevisionEvidence::UnprovenLocalMotorImg,
+                ("local", Some(_)) => {
+                    return Err(
+                        "local Motor IMG must not claim an unproven post-flash revision".into(),
+                    )
+                }
+                _ => return Err("internal firmware artifact source is invalid".into()),
+            };
+            let version_warning = revision_warning(revision_evidence, device.software_revision)?;
             let dto = PreparedDto {
                 token: token.clone(),
                 device,
@@ -628,22 +934,33 @@ fn prepare_artifact_bytes(
                     artifact.encryption(),
                     cobs_can_iap::EncryptionMode::Encrypted
                 ),
+                img_device_id: Some(artifact.device_id()),
+                img_device_id_hex: Some(format!("0x{:08X}", artifact.device_id())),
                 firmware_id: artifact.firmware_id(),
                 firmware_id_hex: format!("0x{:08X}", artifact.firmware_id()),
                 firmware_version: artifact.firmware_version(),
                 firmware_version_hex: format!("0x{:08X}", artifact.firmware_version()),
                 plaintext_size: None,
                 wire_size: artifact.bin_size(),
-                // This protocol's raw IMG version is not proven to use the
-                // same ordering/encoding as CANopen 0x1018:03.
-                version_warning: "unknown",
+                img_start_address_hex: Some(format!("0x{:08X}", artifact.start_address())),
+                img_end_address_hex: Some(format!("0x{:08X}", artifact.end_address())),
+                version_warning,
                 artifact_source,
                 release_version,
+                expected_postflash_revision,
+                expected_postflash_revision_hex: expected_postflash_revision
+                    .map(|value| format!("0x{value:08X}")),
+                manual_risk_required: artifact_source == "local",
+                manual_risk_acknowledged: artifact_source != "local",
+                // This gate comes only from the build-time identity catalog;
+                // neither the IMG nor remote release metadata may set it.
+                factory_backup_required,
             };
             (
                 StagedArtifact::CobsIap {
                     token: token.clone(),
                     prepared,
+                    dto: dto.clone(),
                 },
                 dto,
             )
@@ -652,11 +969,28 @@ fn prepare_artifact_bytes(
     Ok((staged, dto))
 }
 
-fn version_warning(target: u32, installed: u32) -> &'static str {
-    match target.cmp(&installed) {
-        std::cmp::Ordering::Less => "downgrade",
-        std::cmp::Ordering::Equal => "reinstall",
-        std::cmp::Ordering::Greater => "none",
+fn revision_warning(
+    evidence: RevisionEvidence,
+    installed_revision: u32,
+) -> CmdResult<&'static str> {
+    let (target_revision, evidence_label) = match evidence {
+        RevisionEvidence::StandardMeowpkg(revision) => {
+            (revision, ".meowpkg manifest firmware_version")
+        }
+        RevisionEvidence::SignedMotorRelease(revision) => (
+            revision,
+            "signed Motor IMG expected_postflash.revision_number",
+        ),
+        // The native IMG header version is intentionally ignored. Its numeric
+        // relationship to CANopen 0x1018:03 has not been established.
+        RevisionEvidence::UnprovenLocalMotorImg => return Ok("unknown"),
+    };
+    match target_revision.cmp(&installed_revision) {
+        std::cmp::Ordering::Less => Err(format!(
+            "{evidence_label} 0x{target_revision:08X} is older than the selected device's current 0x1018:03 revision 0x{installed_revision:08X}; firmware downgrade is refused"
+        )),
+        std::cmp::Ordering::Equal => Ok("reinstall"),
+        std::cmp::Ordering::Greater => Ok("none"),
     }
 }
 
@@ -929,6 +1263,7 @@ impl Drop for ActiveReset<'_> {
 /// before either backend can transmit its first protocol-specific mutation.
 #[tauri::command]
 pub async fn stm32_can_dfu_start(
+    app: tauri::AppHandle,
     state: State<'_, CanDfuState>,
     mutation_gate: State<'_, DfuMutationGate>,
     can_gate: State<'_, CanTransportGate>,
@@ -948,12 +1283,35 @@ pub async fn stm32_can_dfu_start(
         if staged.token() != token {
             return Err("artifact token is stale; select and validate the file again".into());
         }
+        if staged.dto().manual_risk_required && !staged.dto().manual_risk_acknowledged {
+            return Err(
+                "acknowledge the manually selected IMG risk after reviewing its identity and SHA-256"
+                    .into(),
+            );
+        }
         let spec = inner
             .spec
             .clone()
             .ok_or_else(|| "the CAN discovery session is stale".to_owned())?;
         (spec, staged.clone())
     };
+
+    // Defense in depth at the command boundary: no mutation permit, adapter,
+    // backup, Reset, or download stage is reached with an older proven target.
+    // The subsequent backend revalidation still rereads the complete 0x1018
+    // identity and proves it is unchanged from discovery.
+    let staged_evidence = match &staged {
+        StagedArtifact::Stm32 { dto, .. } => {
+            RevisionEvidence::StandardMeowpkg(dto.firmware_version)
+        }
+        StagedArtifact::CobsIap { dto, .. } if dto.artifact_source == "r2" => {
+            RevisionEvidence::SignedMotorRelease(dto.expected_postflash_revision.ok_or_else(
+                || "online Motor IMG is missing its signed expected post-flash revision".to_owned(),
+            )?)
+        }
+        StagedArtifact::CobsIap { .. } => RevisionEvidence::UnprovenLocalMotorImg,
+    };
+    revision_warning(staged_evidence, staged.dto().device.software_revision)?;
 
     let _mutation_permit = mutation_gate
         .try_acquire(staged.backend())
@@ -1000,8 +1358,27 @@ pub async fn stm32_can_dfu_start(
         (StagedArtifact::Stm32 { prepared, .. }, ActiveCancellation::Stm32(cancellation)) => {
             run_stm32_update(bus.as_ref(), prepared, cancellation, &on_event, &state).await
         }
-        (StagedArtifact::CobsIap { prepared, .. }, ActiveCancellation::CobsIap(cancellation)) => {
-            run_cobs_iap_update(bus.as_ref(), prepared, cancellation, &on_event, &state).await
+        (
+            StagedArtifact::CobsIap { prepared, dto, .. },
+            ActiveCancellation::CobsIap(cancellation),
+        ) => {
+            let backup_root = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("resolving application data directory: {error}"))?
+                .join("backups")
+                .join("firmware-update");
+            run_cobs_iap_update(
+                bus.as_ref(),
+                prepared,
+                dto,
+                &spec,
+                &backup_root,
+                cancellation,
+                &on_event,
+                &state,
+            )
+            .await
         }
         _ => Err("internal CAN update backend/cancellation mismatch".to_owned()),
     }
@@ -1034,6 +1411,9 @@ async fn run_stm32_update(
             status: "application_verified",
             startup_confirmed: true,
             recoverable_bootloader_expected: false,
+            factory_backup_path: None,
+            factory_backup_sha256: None,
+            factory_data_status: None,
         }),
         Err(FlashError::Cancelled {
             stage: FlashStage::Claiming,
@@ -1041,11 +1421,17 @@ async fn run_stm32_update(
             status: "cancelled_before_write",
             startup_confirmed: false,
             recoverable_bootloader_expected: false,
+            factory_backup_path: None,
+            factory_backup_sha256: None,
+            factory_data_status: None,
         }),
         Err(FlashError::Cancelled { .. }) => Ok(OutcomeDto {
             status: "cancelled_recoverable",
             startup_confirmed: false,
             recoverable_bootloader_expected: true,
+            factory_backup_path: None,
+            factory_backup_sha256: None,
+            factory_data_status: None,
         }),
         Err(error) => Err(format!(
             "{error}. If update writes had started, keep the device powered. It may be recoverable in Bootloader, or an application may have started but failed host confirmation; inspect its identity and run one complete qualified upgrade again if needed"
@@ -1056,6 +1442,9 @@ async fn run_stm32_update(
 async fn run_cobs_iap_update(
     bus: &dyn CanBus,
     prepared: CobsPreparedUpgrade,
+    dto: PreparedDto,
+    can_interface: &str,
+    backup_root: &std::path::Path,
     cancellation: CobsCancellationToken,
     on_event: &Channel<ProgressDto>,
     state: &CanDfuState,
@@ -1063,17 +1452,136 @@ async fn run_cobs_iap_update(
     let registry = cobs_target_registry().map_err(|error| error.to_string())?;
     let expected = prepared.target().identity();
     let sdo = CanBusSdo::new(bus);
-    let observed = observe_identity(&sdo, expected.node_id(), IDENTITY_TIMEOUT)
-        .await
-        .map_err(|error| error.to_string())?;
-    let actual = CobsCanopenIdentity::new(
-        expected.node_id(),
-        observed.vendor_id(),
-        observed.product_code(),
-        observed.revision_number(),
-        observed.serial_number(),
-    )
-    .map_err(|error| error.to_string())?;
+    let mut actual = observe_cobs_identity(&sdo, expected.node_id()).await?;
+    ensure_cobs_identity_unchanged(expected, actual)?;
+
+    // Only the two exact Meow Motor identities carry this build-time gate.
+    // The backup is complete, opaque and durable before Reset/Enter-IAP; IMG
+    // bytes and remote metadata cannot opt in or out of it.
+    let persisted_backup = if dto.factory_backup_required {
+        if cancellation.is_cancelled() {
+            return Ok(cobs_outcome(
+                "cancelled_before_write",
+                false,
+                false,
+                None,
+                None,
+            ));
+        }
+        // A stable full-record read and its durable commit form one read-only
+        // atomic preflight. Do not claim an immediate cancellation point in
+        // the middle: cancellation becomes available again before Reset.
+        state.cancellable.store(false, Ordering::SeqCst);
+        send_progress(
+            on_event,
+            ProgressDto {
+                stage: "backing_up_factory_data",
+                completed: 0,
+                total: 1,
+                cancellable: false,
+            },
+        );
+        let snapshot = read_stable_snapshot(&sdo, expected.node_id()).await?;
+        let artifact = prepared.artifact();
+        let context = BackupContext {
+            can_interface: can_interface.to_owned(),
+            node_id: expected.node_id(),
+            profile_id: prepared.target().target().profile_id().to_owned(),
+            identity: BackupIdentity {
+                vendor_id: expected.vendor_id(),
+                product_code: expected.product_code(),
+                revision_number: expected.revision_number(),
+                serial_number: expected.serial_number(),
+            },
+            artifact: BackupArtifact {
+                source: dto.artifact_source,
+                release_id: dto.release_version.clone(),
+                sha256: dto.artifact_sha256.clone(),
+                bytes: dto.artifact_size,
+                device_id: artifact.device_id(),
+                firmware_id: artifact.firmware_id(),
+                firmware_version: artifact.firmware_version(),
+                start_address: artifact.start_address(),
+                end_address: artifact.end_address(),
+                bin_size: artifact.bin_size(),
+            },
+        };
+        let root = backup_root.to_owned();
+        let persisted =
+            tokio::task::spawn_blocking(move || persist_backup(&root, &context, &snapshot))
+                .await
+                .map_err(|error| format!("joining 0x4001 backup persistence task: {error}"))??;
+
+        if cancellation.is_cancelled() {
+            return Ok(cobs_outcome(
+                "cancelled_before_write",
+                false,
+                false,
+                Some(&persisted),
+                Some("startup_unconfirmed"),
+            ));
+        }
+
+        // Prove that the durable snapshot still describes this exact device
+        // immediately before minting the short-lived ReadyToFlash capability.
+        send_progress(
+            on_event,
+            ProgressDto {
+                stage: "checking_factory_data",
+                completed: 0,
+                total: 1,
+                cancellable: false,
+            },
+        );
+        let final_snapshot = read_stable_snapshot(&sdo, expected.node_id())
+            .await
+            .map_err(|error| {
+                format!(
+                    "{error}; no IAP mutation was sent. Retained backup: {}",
+                    persisted.path.display()
+                )
+            })?;
+        if final_snapshot != persisted.snapshot {
+            return Err(format!(
+                "0x4001 changed after its backup was committed; no IAP mutation was sent. Retained backup: {}",
+                persisted.path.display()
+            ));
+        }
+        let final_identity = observe_cobs_identity(&sdo, expected.node_id())
+            .await
+            .map_err(|error| {
+                format!(
+                    "{error}; final identity revalidation failed before Reset. Retained backup: {}",
+                    persisted.path.display()
+                )
+            })?;
+        ensure_cobs_identity_unchanged(expected, final_identity)
+            .map_err(|error| format!("{error} Retained backup: {}", persisted.path.display()))?;
+        actual = final_identity;
+        Some(persisted)
+    } else {
+        None
+    };
+
+    state.cancellable.store(true, Ordering::SeqCst);
+    send_progress(
+        on_event,
+        ProgressDto {
+            stage: "revalidating",
+            completed: 1,
+            total: 1,
+            cancellable: true,
+        },
+    );
+    if cancellation.is_cancelled() {
+        return Ok(cobs_outcome(
+            "cancelled_before_write",
+            false,
+            false,
+            persisted_backup.as_ref(),
+            persisted_backup.as_ref().map(|_| "startup_unconfirmed"),
+        ));
+    }
     let ready = prepared
         .revalidate(actual, &registry)
         .map_err(|error| error.to_string())?;
@@ -1088,28 +1596,82 @@ async fn run_cobs_iap_update(
     .await;
 
     match result {
-        Ok(_) => Ok(OutcomeDto {
-            status: "verify_acked_startup_unconfirmed",
-            startup_confirmed: false,
-            recoverable_bootloader_expected: false,
-        }),
+        Ok(_) => {
+            let Some(backup) = persisted_backup.as_ref() else {
+                return Ok(cobs_outcome(
+                    "verify_acked_startup_unconfirmed",
+                    false,
+                    false,
+                    None,
+                    None,
+                ));
+            };
+
+            send_progress(
+                on_event,
+                ProgressDto {
+                    stage: "checking_factory_data",
+                    completed: 1,
+                    total: 1,
+                    cancellable: false,
+                },
+            );
+            match observe_postflash_factory_data(
+                &sdo,
+                expected,
+                dto.expected_postflash_revision,
+                &backup.snapshot,
+            )
+            .await
+            {
+                PostflashFactoryCheck::Preserved => Ok(cobs_outcome(
+                    "verify_acked_factory_data_preserved",
+                    true,
+                    false,
+                    Some(backup),
+                    Some("preserved"),
+                )),
+                PostflashFactoryCheck::RecoveryRequired => Ok(cobs_outcome(
+                    "verify_acked_factory_data_recovery_required",
+                    true,
+                    false,
+                    Some(backup),
+                    Some("recovery_required"),
+                )),
+                PostflashFactoryCheck::StartupUnconfirmed => Ok(cobs_outcome(
+                    "verify_acked_startup_unconfirmed",
+                    false,
+                    false,
+                    Some(backup),
+                    Some("startup_unconfirmed"),
+                )),
+            }
+        }
         Err(CobsFlashError::Cancelled {
             recovery_required: false,
             ..
-        }) => Ok(OutcomeDto {
-            status: "cancelled_before_write",
-            startup_confirmed: false,
-            recoverable_bootloader_expected: false,
-        }),
-        Err(CobsFlashError::Cancelled { .. }) => Ok(OutcomeDto {
-            status: "cancelled_recoverable",
-            startup_confirmed: false,
-            recoverable_bootloader_expected: true,
-        }),
+        }) => Ok(cobs_outcome(
+            "cancelled_before_write",
+            false,
+            false,
+            persisted_backup.as_ref(),
+            persisted_backup.as_ref().map(|_| "startup_unconfirmed"),
+        )),
+        Err(CobsFlashError::Cancelled { .. }) => Ok(cobs_outcome(
+            "cancelled_recoverable",
+            false,
+            true,
+            persisted_backup.as_ref(),
+            persisted_backup.as_ref().map(|_| "startup_unconfirmed"),
+        )),
         Err(error) => {
             let recovery = error.recovery_required();
+            let backup = persisted_backup
+                .as_ref()
+                .map(|backup| format!(" Retained 0x4001 backup: {}.", backup.path.display()))
+                .unwrap_or_default();
             Err(format!(
-                "{error}. {}",
+                "{error}.{backup} {}",
                 if recovery {
                     "The command outcome may be ambiguous after download began. Keep the device powered and do not retry blindly. This test backend intentionally refuses an unidentified all-0xFF recovery identity until a product-specific recovery path is hardware-qualified"
                 } else {
@@ -1118,6 +1680,89 @@ async fn run_cobs_iap_update(
             ))
         }
     }
+}
+
+fn cobs_outcome(
+    status: &'static str,
+    startup_confirmed: bool,
+    recoverable_bootloader_expected: bool,
+    backup: Option<&PersistedBackup>,
+    factory_data_status: Option<&'static str>,
+) -> OutcomeDto {
+    OutcomeDto {
+        status,
+        startup_confirmed,
+        recoverable_bootloader_expected,
+        factory_backup_path: backup.map(|backup| backup.path.to_string_lossy().into_owned()),
+        factory_backup_sha256: backup.map(|backup| backup.file_sha256.clone()),
+        factory_data_status,
+    }
+}
+
+async fn observe_cobs_identity(
+    sdo: &(impl hexmeow_stm32_can_dfu::SdoTransport + ?Sized),
+    node_id: u8,
+) -> CmdResult<CobsCanopenIdentity> {
+    let observed = observe_identity(sdo, node_id, IDENTITY_TIMEOUT)
+        .await
+        .map_err(|error| error.to_string())?;
+    CobsCanopenIdentity::new(
+        node_id,
+        observed.vendor_id(),
+        observed.product_code(),
+        observed.revision_number(),
+        observed.serial_number(),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn ensure_cobs_identity_unchanged(
+    expected: CobsCanopenIdentity,
+    actual: CobsCanopenIdentity,
+) -> CmdResult<()> {
+    if actual != expected {
+        return Err(
+            "complete 0x1018 identity changed before 0x4001 backup or Reset; no IAP mutation was sent"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+async fn observe_postflash_factory_data(
+    sdo: &(impl hexmeow_stm32_can_dfu::SdoTransport + ?Sized),
+    expected: CobsCanopenIdentity,
+    expected_revision: Option<u32>,
+    backup: &crate::motor_factory_backup::RawFactorySnapshot,
+) -> PostflashFactoryCheck {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let actual = loop {
+        match observe_cobs_identity(sdo, expected.node_id()).await {
+            Ok(identity) => break identity,
+            Err(error) if tokio::time::Instant::now() < deadline => {
+                let _ = error;
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            Err(_) => return PostflashFactoryCheck::StartupUnconfirmed,
+        }
+    };
+    if actual.vendor_id() != expected.vendor_id()
+        || actual.product_code() != expected.product_code()
+        || actual.serial_number() != expected.serial_number()
+        || expected_revision.is_some_and(|revision| actual.revision_number() != revision)
+    {
+        return PostflashFactoryCheck::RecoveryRequired;
+    }
+    match read_stable_snapshot(sdo, expected.node_id()).await {
+        Ok(after) if after == *backup => PostflashFactoryCheck::Preserved,
+        Ok(_) | Err(_) => PostflashFactoryCheck::RecoveryRequired,
+    }
+}
+
+enum PostflashFactoryCheck {
+    Preserved,
+    RecoveryRequired,
+    StartupUnconfirmed,
 }
 
 fn ready_artifact_size(prepared: &CobsPreparedUpgrade) -> usize {
@@ -1690,6 +2335,64 @@ mod tests {
         let standard = target_registry().unwrap();
         let compatible = cobs_target_registry().unwrap();
         ensure_disjoint_backend_routes(&standard, &compatible).unwrap();
+    }
+
+    #[test]
+    fn changed_identity_is_rejected_before_factory_backup() {
+        let expected = CobsCanopenIdentity::new(1, 0x0068_6578, 0x6C64_BC78, 1, 42).unwrap();
+        assert!(ensure_cobs_identity_unchanged(expected, expected).is_ok());
+
+        for changed in [
+            CobsCanopenIdentity::new(1, 0x4859_444C, 0xAAAA_0001, 1, 42).unwrap(),
+            CobsCanopenIdentity::new(1, 0x0068_6578, 0x6C64_BC78, 2, 42).unwrap(),
+            CobsCanopenIdentity::new(1, 0x0068_6578, 0x6C64_BC78, 1, 43).unwrap(),
+        ] {
+            assert!(ensure_cobs_identity_unchanged(expected, changed).is_err());
+        }
+    }
+
+    #[test]
+    fn meowpkg_revision_floor_rejects_older_but_allows_reinstall_and_upgrade() {
+        let installed = 0x0001_0002;
+        let error = revision_warning(RevisionEvidence::StandardMeowpkg(0x0001_0001), installed)
+            .unwrap_err();
+        assert!(error.contains(".meowpkg manifest firmware_version"));
+        assert!(error.contains("0x1018:03"));
+        assert!(error.contains("downgrade is refused"));
+        assert_eq!(
+            revision_warning(RevisionEvidence::StandardMeowpkg(installed), installed).unwrap(),
+            "reinstall"
+        );
+        assert_eq!(
+            revision_warning(RevisionEvidence::StandardMeowpkg(0x0001_0003), installed).unwrap(),
+            "none"
+        );
+    }
+
+    #[test]
+    fn signed_motor_release_revision_floor_rejects_only_older_targets() {
+        let installed = 0x6578_0002;
+        let error = revision_warning(RevisionEvidence::SignedMotorRelease(0x6578_0001), installed)
+            .unwrap_err();
+        assert!(error.contains("signed Motor IMG expected_postflash.revision_number"));
+        assert!(error.contains("0x65780001"));
+        assert!(error.contains("0x65780002"));
+        assert_eq!(
+            revision_warning(RevisionEvidence::SignedMotorRelease(installed), installed).unwrap(),
+            "reinstall"
+        );
+        assert_eq!(
+            revision_warning(RevisionEvidence::SignedMotorRelease(0x6578_0003), installed).unwrap(),
+            "none"
+        );
+    }
+
+    #[test]
+    fn local_motor_img_does_not_compare_unproven_header_version_to_1018() {
+        assert_eq!(
+            revision_warning(RevisionEvidence::UnprovenLocalMotorImg, 0xFFFF_FFFE).unwrap(),
+            "unknown"
+        );
     }
 
     #[test]

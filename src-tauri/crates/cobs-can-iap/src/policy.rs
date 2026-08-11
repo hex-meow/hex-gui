@@ -21,8 +21,6 @@ pub enum PolicyError {
     EmptyFirmwareIds(String),
     #[error("profile {0} repeats a firmware ID")]
     DuplicateFirmwareId(String),
-    #[error("profile {0} has a maximum bin size below four bytes")]
-    InvalidMaximumSize(String),
     #[error("duplicate profile ID {0}")]
     DuplicateProfileId(String),
     #[error("profiles {first} and {second} repeat the same exact CANopen vendor/product identity")]
@@ -37,8 +35,6 @@ pub enum PolicyError {
     FirmwareMismatch(u32),
     #[error("IMG start address {actual:#010x} does not match profile value {expected:#010x}")]
     StartAddressMismatch { expected: u32, actual: u32 },
-    #[error("IMG bin is {actual} bytes, above this profile's {maximum}-byte limit")]
-    ImageTooLarge { actual: usize, maximum: usize },
     #[error("this profile requires an encrypted IMG")]
     EncryptionRequired,
     #[error("the CANopen identity changed after artifact validation")]
@@ -54,7 +50,6 @@ pub struct IapPolicy {
     device_id: u32,
     firmware_ids: Vec<u32>,
     start_address: u32,
-    max_bin_size: usize,
     require_encrypted: bool,
 }
 
@@ -63,7 +58,6 @@ impl IapPolicy {
         device_id: u32,
         firmware_ids: Vec<u32>,
         start_address: u32,
-        max_bin_size: usize,
         require_encrypted: bool,
     ) -> Result<Self, PolicyError> {
         if firmware_ids.is_empty() {
@@ -73,14 +67,10 @@ impl IapPolicy {
         if unique.len() != firmware_ids.len() {
             return Err(PolicyError::DuplicateFirmwareId("<unbound>".into()));
         }
-        if max_bin_size < 4 {
-            return Err(PolicyError::InvalidMaximumSize("<unbound>".into()));
-        }
         Ok(Self {
             device_id,
             firmware_ids,
             start_address,
-            max_bin_size,
             require_encrypted,
         })
     }
@@ -95,10 +85,6 @@ impl IapPolicy {
 
     pub fn start_address(&self) -> u32 {
         self.start_address
-    }
-
-    pub fn max_bin_size(&self) -> usize {
-        self.max_bin_size
     }
 
     pub fn require_encrypted(&self) -> bool {
@@ -119,12 +105,6 @@ impl IapPolicy {
             return Err(PolicyError::StartAddressMismatch {
                 expected: self.start_address,
                 actual: artifact.start_address(),
-            });
-        }
-        if artifact.bin_size() > self.max_bin_size {
-            return Err(PolicyError::ImageTooLarge {
-                actual: artifact.bin_size(),
-                maximum: self.max_bin_size,
             });
         }
         if self.require_encrypted && artifact.encryption() != EncryptionMode::Encrypted {
@@ -413,7 +393,7 @@ mod tests {
             "compatible-motor-4310-v1",
             0x4859_444C,
             0xAAAA_0001,
-            IapPolicy::new(0xAAAA_0001, vec![0x2025_1025], 0x1000_C000, 176_424, true).unwrap(),
+            IapPolicy::new(0xAAAA_0001, vec![0x2025_1025], 0x1000_C000, true).unwrap(),
         )
         .unwrap()
     }
@@ -449,6 +429,15 @@ mod tests {
         let registry = TargetRegistry::new(vec![enabled()]).unwrap();
         let target = registry.authorize(identity(0xAAAA_0001)).unwrap();
         let bytes = make_image(0xAAAA_0001, 0x2025_1025, 0x1000_C000, 1024, true);
+        let artifact = ImgArtifact::parse(&bytes, ImgLimits::default()).unwrap();
+        assert!(PreparedUpgrade::bind(target, artifact).is_ok());
+    }
+
+    #[test]
+    fn binding_does_not_guess_a_device_specific_bin_capacity() {
+        let registry = TargetRegistry::new(vec![enabled()]).unwrap();
+        let target = registry.authorize(identity(0xAAAA_0001)).unwrap();
+        let bytes = make_image(0xAAAA_0001, 0x2025_1025, 0x1000_C000, 176_441, true);
         let artifact = ImgArtifact::parse(&bytes, ImgLimits::default()).unwrap();
         assert!(PreparedUpgrade::bind(target, artifact).is_ok());
     }

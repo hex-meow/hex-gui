@@ -113,19 +113,36 @@ export interface CanDfuPrepared {
   mcu: "stm32g431" | "stm32g474" | "stm32g0b1" | null;
   format_version: number | null;
   encrypted: boolean;
+  img_device_id: number | null;
+  img_device_id_hex: string | null;
   firmware_id: number;
   firmware_id_hex: string;
   firmware_version: number;
   firmware_version_hex: string;
   plaintext_size: number | null;
   wire_size: number;
-  version_warning: "unknown" | "none" | "reinstall" | "downgrade";
+  img_start_address_hex: string | null;
+  img_end_address_hex: string | null;
+  // Proven downgrade targets are rejected by Rust before staging. "unknown"
+  // is reserved for a local Motor IMG whose header version cannot prove the
+  // post-flash CANopen revision.
+  version_warning: "unknown" | "none" | "reinstall";
   artifact_source: "local" | "r2";
   release_version: string | null;
+  expected_postflash_revision: number | null;
+  expected_postflash_revision_hex: string | null;
+  // Local partner IMG files require an explicit, token-bound acknowledgement
+  // after their exact metadata has been shown to the operator.
+  manual_risk_required: boolean;
+  manual_risk_acknowledged: boolean;
+  // Meow Motor profiles require a verified 0x4001 factory-calibration backup
+  // before the first firmware mutation.
+  factory_backup_required: boolean;
 }
 
 export type CanDfuStage =
   | "revalidating"
+  | "backing_up_factory_data"
   | "entering_bootloader"
   | "writing_header"
   | "clearing"
@@ -137,7 +154,8 @@ export type CanDfuStage =
   | "validating_compatible_identity"
   | "starting_download"
   | "finalizing"
-  | "verifying";
+  | "verifying"
+  | "checking_factory_data";
 
 export interface CanDfuProgress {
   stage: CanDfuStage;
@@ -149,6 +167,8 @@ export interface CanDfuProgress {
 export type CanDfuOutcomeStatus =
   | "application_verified"
   | "verify_acked_startup_unconfirmed"
+  | "verify_acked_factory_data_preserved"
+  | "verify_acked_factory_data_recovery_required"
   | "cancelled_before_write"
   | "cancelled_recoverable";
 
@@ -156,6 +176,13 @@ export interface CanDfuOutcome {
   status: CanDfuOutcomeStatus;
   startup_confirmed: boolean;
   recoverable_bootloader_expected: boolean;
+  factory_backup_path: string | null;
+  factory_backup_sha256: string | null;
+  factory_data_status:
+    | null
+    | "preserved"
+    | "recovery_required"
+    | "startup_unconfirmed";
 }
 
 export const hpmDfuApi = {
@@ -195,6 +222,9 @@ export const canDfuApi = {
   // HTTPS R2 path. The WebView cannot supply an identity or arbitrary URL.
   prepareLatest: () =>
     invoke<CanDfuPrepared>("stm32_can_dfu_prepare_latest"),
+
+  acknowledgeManual: (token: string) =>
+    invoke<CanDfuPrepared>("stm32_can_dfu_acknowledge_manual", { token }),
 
   start: (
     token: string,

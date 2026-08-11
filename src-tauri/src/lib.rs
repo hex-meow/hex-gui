@@ -23,6 +23,7 @@ mod lift;
 mod lift_commission;
 mod logging;
 mod meow_calibration;
+mod motor_factory_backup;
 mod sdo_client;
 mod smartknob;
 mod state;
@@ -310,6 +311,7 @@ pub fn run() {
             stm32_can_dfu::stm32_can_dfu_discover,
             stm32_can_dfu::stm32_can_dfu_select,
             stm32_can_dfu::stm32_can_dfu_prepare,
+            stm32_can_dfu::stm32_can_dfu_acknowledge_manual,
             stm32_can_dfu::stm32_can_dfu_prepare_latest,
             stm32_can_dfu::stm32_can_dfu_start,
             stm32_can_dfu::stm32_can_dfu_cancel,

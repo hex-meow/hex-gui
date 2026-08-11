@@ -1844,9 +1844,11 @@ dependencies = [
  "hex",
  "hex-arm-dynamics",
  "hex-motor",
+ "hexmeow-dfu-targets",
  "hexmeow-stm32-can-dfu",
  "hpm-usb-dfu",
  "log",
+ "motor-img-release",
  "p256",
  "prost",
  "prost-build",
@@ -1860,6 +1862,16 @@ dependencies = [
  "tauri-build",
  "tokio",
  "zenoh",
+]
+
+[[package]]
+name = "hexmeow-dfu-targets"
+version = "0.1.0"
+dependencies = [
+ "cobs-can-iap",
+ "hexmeow-stm32-can-dfu",
+ "sha2",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2666,6 +2678,18 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "motor-img-release"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "p256",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

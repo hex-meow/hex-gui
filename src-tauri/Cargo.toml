@@ -13,6 +13,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 members = [
     "crates/cobs-can-iap",
     "crates/hexmeow-stm32-can-dfu",
+    "crates/hexmeow-dfu-targets",
+    "crates/motor-img-release",
     "crates/hpm-usb-dfu",
     "crates/image-container",
     "crates/mcu-series",
@@ -58,6 +60,8 @@ hex-motor = "0.3.1"
 hpm-usb-dfu = { path = "crates/hpm-usb-dfu" }
 hexmeow-stm32-can-dfu = { path = "crates/hexmeow-stm32-can-dfu" }
 cobs-can-iap = { path = "crates/cobs-can-iap" }
+hexmeow-dfu-targets = { path = "crates/hexmeow-dfu-targets" }
+motor-img-release = { path = "crates/motor-img-release" }
 
 # CAN Analyzer 的 SDO tab:纯 SDO 客户端(读/写对象字典),与 comeow CLI 同一引擎,
 # 跑在分析仪已持有的 Arc<dyn CanBus> 上。值编解码逻辑移植自 comeow(见 sdo_client.rs)。

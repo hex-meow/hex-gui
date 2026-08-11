@@ -669,7 +669,7 @@ mod tests {
             "compatible-motor-4310-v1",
             0x4859_444C,
             0xAAAA_0001,
-            IapPolicy::new(0xAAAA_0001, vec![0x2025_1025], 0x1000_C000, 176_424, true).unwrap(),
+            IapPolicy::new(0xAAAA_0001, vec![0x2025_1025], 0x1000_C000, true).unwrap(),
         )
         .unwrap()])
         .unwrap();

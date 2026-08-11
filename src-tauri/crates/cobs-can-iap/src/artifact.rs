@@ -168,7 +168,8 @@ impl ImgArtifact {
         hasher.update(&bytes[112..128]);
         hasher.update(&bytes[128..IMG_TAG_SIZE]);
         hasher.update(&bytes[IMG_TAG_SIZE..]);
-        if hasher.finalize().as_slice() != hash {
+        let actual_hash: [u8; 32] = hasher.finalize().into();
+        if actual_hash != hash {
             return Err(ArtifactError::HashMismatch);
         }
 
