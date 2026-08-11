@@ -73,14 +73,14 @@ test("online revision policy refuses downgrade while local IMG stays unproven", 
   );
   assert.match(
     ui,
-    /signed release target revision below the current 0x1018:03 is refused before the IMG download/,
+    /HTTPS release target revision below the current 0x1018:03 is refused before the IMG download/,
   );
   assert.match(ui, /等版本允许重刷/);
   assert.match(ui, /equal revision may be reflashed/);
   assert.match(ui, /无法仅凭本地 IMG 证明它属于你想要的固件族/);
   assert.match(ui, /prepared\.device\.software_revision_hex/);
   assert.match(ui, /prepared\.expected_postflash_revision_hex/);
-  assert.match(ui, /已验签目标 0x1018:03 revision/);
+  assert.match(ui, /HTTPS release 目标 0x1018:03 revision/);
 });
 
 test("0x4001 progress and outcome contracts distinguish preservation from recovery", async () => {

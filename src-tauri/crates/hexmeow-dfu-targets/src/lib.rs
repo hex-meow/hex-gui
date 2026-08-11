@@ -79,10 +79,6 @@ pub struct MotorImgPolicy {
     pub firmware_ids: &'static [u32],
     pub start_address: u32,
     pub require_encrypted: bool,
-    /// HexMeow catalog-signing key. `None` deliberately makes online IMG
-    /// publication/download fail closed until a production key is provisioned.
-    pub catalog_key_id: Option<u32>,
-    pub catalog_public_key: Option<[u8; 64]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +107,10 @@ pub enum TargetSupport {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TargetDescriptor {
+    /// Stable host-side update-contract identifier. A `-v1` suffix describes
+    /// this profile contract, not a firmware or CANopen revision. An
+    /// incompatible future trust/policy contract must migrate to a new
+    /// profile generation instead of changing v1 in place.
     pub profile_id: &'static str,
     pub display_name: &'static str,
     /// Optional general device-browser name. This remains distinct from the
@@ -206,13 +206,6 @@ const LIFT_FIRMWARE: &[StandardFirmwarePolicy] = &[StandardFirmwarePolicy {
 const MOTOR_4310_FIRMWARE_IDS: &[u32] = &[0x2025_1025];
 const MOTOR_4342_FIRMWARE_IDS: &[u32] = &[0x2025_1209];
 
-// Provision these two values together after generating the production Motor
-// IMG catalog key with hex-meow-fw/tools/motor-img-publish. The private scalar
-// never belongs in this or any other repository; rotating it requires a new
-// nonzero key ID.
-const MOTOR_IMG_CATALOG_KEY_ID: Option<u32> = None;
-const MOTOR_IMG_CATALOG_PUBLIC_KEY: Option<[u8; 64]> = None;
-
 const fn current_identity(vendor_id: u32, product_code: u32) -> IdentityKey {
     IdentityKey {
         vendor_id,
@@ -244,8 +237,6 @@ const fn motor_img_policy(device_id: u32, firmware_ids: &'static [u32]) -> Nativ
         firmware_ids,
         start_address: 0x1000_C000,
         require_encrypted: true,
-        catalog_key_id: MOTOR_IMG_CATALOG_KEY_ID,
-        catalog_public_key: MOTOR_IMG_CATALOG_PUBLIC_KEY,
     })
 }
 
@@ -426,8 +417,6 @@ pub enum CatalogError {
     InvalidPreflight(&'static str),
     #[error("profile {0} has a device class that is inconsistent with its firmware backend")]
     BackendDeviceClassMismatch(&'static str),
-    #[error("profile {0} configures only one half of its catalog signing key")]
-    IncompleteCatalogKey(&'static str),
 }
 
 /// Validate global invariants, including uniqueness across both backends.
@@ -494,11 +483,6 @@ pub fn validate_catalog() -> Result<(), CatalogError> {
             )
         ) {
             return Err(CatalogError::BackendDeviceClassMismatch(target.profile_id));
-        }
-        if let Some(policy) = target.motor_img_policy() {
-            if policy.catalog_key_id.is_some() != policy.catalog_public_key.is_some() {
-                return Err(CatalogError::IncompleteCatalogKey(target.profile_id));
-            }
         }
     }
     Ok(())
@@ -679,18 +663,6 @@ mod tests {
             let policy = target.motor_img_policy().unwrap();
             assert!(policy.require_encrypted);
             assert_eq!(policy.start_address, 0x1000_C000);
-            assert_eq!(policy.catalog_key_id, MOTOR_IMG_CATALOG_KEY_ID);
-            assert_eq!(policy.catalog_public_key, MOTOR_IMG_CATALOG_PUBLIC_KEY);
-            assert_eq!(
-                policy.catalog_key_id.is_some(),
-                policy.catalog_public_key.is_some()
-            );
-            if let Some(key_id) = policy.catalog_key_id {
-                assert_ne!(key_id, 0);
-            }
-            if let Some(public_key) = policy.catalog_public_key {
-                assert!(public_key.iter().any(|byte| *byte != 0));
-            }
         }
         assert!(!target_by_profile_id("compatible-motor-4360-v1")
             .unwrap()

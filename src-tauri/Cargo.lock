@@ -2684,11 +2684,8 @@ dependencies = [
 name = "motor-img-release"
 version = "0.1.0"
 dependencies = [
- "hex",
- "p256",
  "serde",
  "serde_json",
- "sha2",
  "thiserror 2.0.18",
 ]
 

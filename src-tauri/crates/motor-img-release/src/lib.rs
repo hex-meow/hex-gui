@@ -1,24 +1,16 @@
-//! Signed, identity-bound catalog documents for supplier Motor IMG releases.
+//! Strict identity-bound documents for supplier Motor IMG releases.
 //!
-//! Signatures cover a domain-separated binary transcript with fixed field
-//! tags and lengths. JSON serialization and object-key order are deliberately
-//! outside the signature contract.
+//! The v1 trust boundary is the fixed HTTPS origin and its R2 writers. This
+//! crate validates canonical paths, hashes, sizes, identities and local
+//! profile binding; it deliberately has no second catalog-signature layer.
 
-use p256::ecdsa::{
-    signature::hazmat::{PrehashSigner, PrehashVerifier},
-    Signature, SigningKey, VerifyingKey,
-};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub const RELEASE_FORMAT: &str = "hexmeow-cobs-iap-release/1";
 pub const LATEST_FORMAT: &str = "hexmeow-cobs-iap-latest/1";
 pub const STABLE_CHANNEL: &str = "stable";
 pub const SUPPLIER_IMG_SOURCE_KIND: &str = "supplier-img";
-
-const RELEASE_DOMAIN: &[u8] = b"hexmeow-cobs-iap-release-signature/v1\0";
-const LATEST_DOMAIN: &[u8] = b"hexmeow-cobs-iap-latest-signature/v1\0";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -36,8 +28,6 @@ pub struct ReleaseDocument {
     pub native_img: NativeImg,
     pub expected_postflash: ExpectedPostflash,
     pub publication: Publication,
-    pub catalog_key_id: u32,
-    pub catalog_signature: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -106,8 +96,6 @@ pub struct LatestDocument {
     pub native_firmware_version: u32,
     pub updated_at_utc: String,
     pub release: ArtifactRef,
-    pub catalog_key_id: u32,
-    pub catalog_signature: String,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -116,14 +104,6 @@ pub enum ReleaseError {
     Json(String),
     #[error("{0}")]
     Invalid(String),
-    #[error("catalog P-256 public key is invalid")]
-    InvalidPublicKey,
-    #[error("catalog P-256 signature is invalid")]
-    InvalidSignature,
-    #[error("catalog signature verification failed")]
-    SignatureMismatch,
-    #[error("catalog signing failed")]
-    SigningFailed,
 }
 
 pub fn identity_root(vendor_id: u32, product_code: u32) -> String {
@@ -192,151 +172,50 @@ pub fn parse_latest_json(bytes: &[u8]) -> Result<LatestDocument, ReleaseError> {
     Ok(document)
 }
 
-/// Return the raw uncompressed SEC1 coordinates (`x || y`) pinned by the
-/// build-time catalog.
-pub fn raw_public_key(signing_key: &SigningKey) -> [u8; 64] {
-    let encoded = VerifyingKey::from(signing_key).to_encoded_point(false);
-    encoded.as_bytes()[1..]
-        .try_into()
-        .expect("an uncompressed P-256 key has 64 coordinate bytes")
-}
-
-pub fn sign_release(
-    document: &mut ReleaseDocument,
-    signing_key: &SigningKey,
-) -> Result<(), ReleaseError> {
-    let digest = release_digest(document)?;
-    let signature: Signature = signing_key
-        .sign_prehash(&digest)
-        .map_err(|_| ReleaseError::SigningFailed)?;
-    let signature = signature.normalize_s().unwrap_or(signature);
-    document.catalog_signature = hex::encode(signature.to_bytes());
-    Ok(())
-}
-
-pub fn sign_latest(
-    document: &mut LatestDocument,
-    signing_key: &SigningKey,
-) -> Result<(), ReleaseError> {
-    let digest = latest_digest(document)?;
-    let signature: Signature = signing_key
-        .sign_prehash(&digest)
-        .map_err(|_| ReleaseError::SigningFailed)?;
-    let signature = signature.normalize_s().unwrap_or(signature);
-    document.catalog_signature = hex::encode(signature.to_bytes());
-    Ok(())
-}
-
+/// Validate that an HTTPS-fetched release is bound to the exact local profile
+/// selected from the build-time registry.
 pub fn verify_release(
     document: &ReleaseDocument,
     expected_profile_id: &str,
     expected_vendor_id: u32,
     expected_product_code: u32,
-    expected_key_id: u32,
-    raw_public_key: &[u8; 64],
 ) -> Result<(), ReleaseError> {
     validate_binding(
         "release",
-        CatalogBinding {
+        ProfileBinding {
             profile_id: &document.profile_id,
             vendor_id: document.vendor_id,
             product_code: document.product_code,
-            key_id: document.catalog_key_id,
         },
-        CatalogBinding {
+        ProfileBinding {
             profile_id: expected_profile_id,
             vendor_id: expected_vendor_id,
             product_code: expected_product_code,
-            key_id: expected_key_id,
         },
-    )?;
-    verify_digest(
-        release_digest(document)?,
-        &document.catalog_signature,
-        raw_public_key,
     )
 }
 
+/// Validate that an HTTPS-fetched latest pointer is bound to the exact local
+/// profile selected from the build-time registry.
 pub fn verify_latest(
     document: &LatestDocument,
     expected_profile_id: &str,
     expected_vendor_id: u32,
     expected_product_code: u32,
-    expected_key_id: u32,
-    raw_public_key: &[u8; 64],
 ) -> Result<(), ReleaseError> {
     validate_binding(
         "latest",
-        CatalogBinding {
+        ProfileBinding {
             profile_id: &document.profile_id,
             vendor_id: document.vendor_id,
             product_code: document.product_code,
-            key_id: document.catalog_key_id,
         },
-        CatalogBinding {
+        ProfileBinding {
             profile_id: expected_profile_id,
             vendor_id: expected_vendor_id,
             product_code: expected_product_code,
-            key_id: expected_key_id,
         },
-    )?;
-    verify_digest(
-        latest_digest(document)?,
-        &document.catalog_signature,
-        raw_public_key,
     )
-}
-
-pub fn release_digest(document: &ReleaseDocument) -> Result<[u8; 32], ReleaseError> {
-    validate_release_shape(document)?;
-    let mut transcript = Transcript::new(RELEASE_DOMAIN);
-    transcript.string(1, &document.format)?;
-    transcript.string(2, &document.profile_id)?;
-    transcript.u32(3, document.vendor_id);
-    transcript.u32(4, document.product_code);
-    transcript.string(5, &document.channel)?;
-    transcript.u64(6, document.sequence);
-    transcript.string(7, &document.release_id)?;
-    transcript.string(9, &document.artifact.path)?;
-    transcript.string(10, &document.artifact.sha256)?;
-    transcript.u64(11, document.artifact.bytes);
-    transcript.u32(12, document.native_img.device_id);
-    transcript.u32(13, document.native_img.firmware_id);
-    transcript.u32(14, document.native_img.firmware_version);
-    transcript.boolean(15, document.native_img.encrypted);
-    transcript.string(16, &document.native_img.protected_sha256)?;
-    transcript.string(17, &document.native_img.vendor_signature)?;
-    transcript.string(18, &document.native_img.iv)?;
-    transcript.u32(19, document.native_img.start_address);
-    transcript.u32(20, document.native_img.end_address);
-    transcript.u64(21, document.native_img.bin_size);
-    transcript.u32(22, document.expected_postflash.vendor_id);
-    transcript.u32(23, document.expected_postflash.product_code);
-    transcript.u32(24, document.expected_postflash.revision_number);
-    transcript.string(25, &document.publication.source_kind)?;
-    transcript.string(26, &document.publication.artifact_sha256)?;
-    transcript.string(27, &document.publication.published_by)?;
-    transcript.u32(29, document.catalog_key_id);
-    Ok(transcript.finish())
-}
-
-pub fn latest_digest(document: &LatestDocument) -> Result<[u8; 32], ReleaseError> {
-    validate_latest_shape(document)?;
-    let mut transcript = Transcript::new(LATEST_DOMAIN);
-    transcript.string(1, &document.format)?;
-    transcript.string(2, &document.profile_id)?;
-    transcript.u32(3, document.vendor_id);
-    transcript.u32(4, document.product_code);
-    transcript.string(5, &document.channel)?;
-    transcript.u64(6, document.sequence);
-    transcript.string(7, &document.release_id)?;
-    transcript.u32(8, document.native_firmware_version);
-    transcript.string(9, &document.updated_at_utc)?;
-    transcript.string(10, &document.release.path)?;
-    transcript.string(11, &document.release.sha256)?;
-    transcript.u64(12, document.release.bytes);
-    transcript.u32(13, document.catalog_key_id);
-    Ok(transcript.finish())
 }
 
 pub fn validate_release_shape(document: &ReleaseDocument) -> Result<(), ReleaseError> {
@@ -406,11 +285,7 @@ pub fn validate_release_shape(document: &ReleaseDocument) -> Result<(), ReleaseE
         &document.publication.published_by,
         1,
         256,
-    )?;
-    if document.catalog_key_id == 0 {
-        return invalid("catalog key ID must be nonzero");
-    }
-    validate_optional_signature(&document.catalog_signature)
+    )
 }
 
 pub fn validate_latest_shape(document: &LatestDocument) -> Result<(), ReleaseError> {
@@ -431,58 +306,30 @@ pub fn validate_latest_shape(document: &LatestDocument) -> Result<(), ReleaseErr
     if document.release.bytes == 0 {
         return invalid("latest release bytes must be nonzero");
     }
-    validate_text("latest update time", &document.updated_at_utc, 1, 64)?;
-    if document.catalog_key_id == 0 {
-        return invalid("catalog key ID must be nonzero");
-    }
-    validate_optional_signature(&document.catalog_signature)
+    validate_text("latest update time", &document.updated_at_utc, 1, 64)
 }
 
 #[derive(Clone, Copy)]
-struct CatalogBinding<'a> {
+struct ProfileBinding<'a> {
     profile_id: &'a str,
     vendor_id: u32,
     product_code: u32,
-    key_id: u32,
 }
 
 fn validate_binding(
     label: &str,
-    actual: CatalogBinding<'_>,
-    expected: CatalogBinding<'_>,
+    actual: ProfileBinding<'_>,
+    expected: ProfileBinding<'_>,
 ) -> Result<(), ReleaseError> {
     if actual.profile_id != expected.profile_id
         || actual.vendor_id != expected.vendor_id
         || actual.product_code != expected.product_code
-        || actual.key_id != expected.key_id
     {
         return invalid(format!(
-            "{label} is not bound to the selected local profile, identity and catalog key"
+            "{label} is not bound to the selected local profile and identity"
         ));
     }
     Ok(())
-}
-
-fn verify_digest(
-    digest: [u8; 32],
-    signature_hex: &str,
-    raw_public_key: &[u8; 64],
-) -> Result<(), ReleaseError> {
-    if signature_hex.len() != 128 || !is_lower_hex(signature_hex) {
-        return Err(ReleaseError::InvalidSignature);
-    }
-    let signature_bytes = hex::decode(signature_hex).map_err(|_| ReleaseError::InvalidSignature)?;
-    let signature =
-        Signature::from_slice(&signature_bytes).map_err(|_| ReleaseError::InvalidSignature)?;
-    if signature.normalize_s().is_some() {
-        return Err(ReleaseError::InvalidSignature);
-    }
-    let mut sec1 = [0u8; 65];
-    sec1[0] = 0x04;
-    sec1[1..].copy_from_slice(raw_public_key);
-    let key = VerifyingKey::from_sec1_bytes(&sec1).map_err(|_| ReleaseError::InvalidPublicKey)?;
-    key.verify_prehash(&digest, &signature)
-        .map_err(|_| ReleaseError::SignatureMismatch)
 }
 
 fn validate_profile(value: &str) -> Result<(), ReleaseError> {
@@ -519,15 +366,6 @@ fn validate_sha(label: &str, value: &str) -> Result<(), ReleaseError> {
     Ok(())
 }
 
-fn validate_optional_signature(value: &str) -> Result<(), ReleaseError> {
-    if !value.is_empty() && (value.len() != 128 || !is_lower_hex(value)) {
-        return invalid(
-            "catalog signature must be empty while signing or 128 lowercase hex characters",
-        );
-    }
-    Ok(())
-}
-
 fn validate_text(label: &str, value: &str, min: usize, max: usize) -> Result<(), ReleaseError> {
     if !(min..=max).contains(&value.len()) || value.chars().any(|character| character.is_control())
     {
@@ -553,49 +391,6 @@ fn is_lower_hex(value: &str) -> bool {
 
 fn invalid<T>(message: impl Into<String>) -> Result<T, ReleaseError> {
     Err(ReleaseError::Invalid(message.into()))
-}
-
-struct Transcript {
-    bytes: Vec<u8>,
-}
-
-impl Transcript {
-    fn new(domain: &[u8]) -> Self {
-        Self {
-            bytes: domain.to_vec(),
-        }
-    }
-
-    fn string(&mut self, tag: u16, value: &str) -> Result<(), ReleaseError> {
-        let length = u32::try_from(value.len())
-            .map_err(|_| ReleaseError::Invalid("transcript string is too large".into()))?;
-        self.bytes.extend_from_slice(&tag.to_be_bytes());
-        self.bytes.extend_from_slice(&length.to_be_bytes());
-        self.bytes.extend_from_slice(value.as_bytes());
-        Ok(())
-    }
-
-    fn u32(&mut self, tag: u16, value: u32) {
-        self.bytes.extend_from_slice(&tag.to_be_bytes());
-        self.bytes.extend_from_slice(&4u32.to_be_bytes());
-        self.bytes.extend_from_slice(&value.to_be_bytes());
-    }
-
-    fn u64(&mut self, tag: u16, value: u64) {
-        self.bytes.extend_from_slice(&tag.to_be_bytes());
-        self.bytes.extend_from_slice(&8u32.to_be_bytes());
-        self.bytes.extend_from_slice(&value.to_be_bytes());
-    }
-
-    fn boolean(&mut self, tag: u16, value: bool) {
-        self.bytes.extend_from_slice(&tag.to_be_bytes());
-        self.bytes.extend_from_slice(&1u32.to_be_bytes());
-        self.bytes.push(u8::from(value));
-    }
-
-    fn finish(self) -> [u8; 32] {
-        Sha256::digest(self.bytes).into()
-    }
 }
 
 mod hex_u32 {
@@ -664,8 +459,6 @@ mod tests {
                 artifact_sha256: sha.into(),
                 published_by: "HexMeow release operator".into(),
             },
-            catalog_key_id: 7,
-            catalog_signature: String::new(),
         };
         let latest = LatestDocument {
             format: LATEST_FORMAT.into(),
@@ -682,8 +475,6 @@ mod tests {
                 sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
                 bytes: 1_234,
             },
-            catalog_key_id: release.catalog_key_id,
-            catalog_signature: String::new(),
         };
         (release, latest)
     }
@@ -702,20 +493,13 @@ mod tests {
     }
 
     #[test]
-    fn signatures_bind_every_identity_and_artifact_field_without_json_order() {
-        let signing_key = SigningKey::from_slice(&[3u8; 32]).unwrap();
-        let point = VerifyingKey::from(&signing_key).to_encoded_point(false);
-        let raw_key: [u8; 64] = point.as_bytes()[1..].try_into().unwrap();
-        let (mut release, mut latest) = documents();
-        sign_release(&mut release, &signing_key).unwrap();
-        sign_latest(&mut latest, &signing_key).unwrap();
+    fn https_documents_bind_to_the_exact_local_profile_and_identity() {
+        let (release, latest) = documents();
         verify_release(
             &release,
             &release.profile_id,
             release.vendor_id,
             release.product_code,
-            release.catalog_key_id,
-            &raw_key,
         )
         .unwrap();
         verify_latest(
@@ -723,51 +507,32 @@ mod tests {
             &latest.profile_id,
             latest.vendor_id,
             latest.product_code,
-            latest.catalog_key_id,
-            &raw_key,
         )
         .unwrap();
 
         let bytes = serde_json::to_vec(&release).unwrap();
         let decoded: ReleaseDocument = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(decoded, release);
-        verify_release(
+        assert!(verify_release(
             &decoded,
-            &decoded.profile_id,
+            "custom-motor-4342-v1",
             decoded.vendor_id,
             decoded.product_code,
-            decoded.catalog_key_id,
-            &raw_key,
         )
-        .unwrap();
-
-        release.publication.published_by.push_str("-tampered");
-        assert_eq!(
-            verify_release(
-                &release,
-                &release.profile_id,
-                release.vendor_id,
-                release.product_code,
-                release.catalog_key_id,
-                &raw_key,
-            ),
-            Err(ReleaseError::SignatureMismatch)
+        .is_err());
+        assert!(
+            verify_latest(&latest, &latest.profile_id, latest.vendor_id, 0x6C64_BCAA,).is_err()
         );
     }
 
     #[test]
     fn immutable_release_is_deterministic_across_a_partial_publish_retry() {
-        let signing_key = SigningKey::from_slice(&[3u8; 32]).unwrap();
-        let (mut first_release, mut first_latest) = documents();
-        let mut retry_release = first_release.clone();
+        let (first_release, first_latest) = documents();
+        let retry_release = first_release.clone();
         let mut retry_latest = first_latest.clone();
 
         // A retry occurs later, so only the mutable pointer timestamp changes.
         retry_latest.updated_at_utc = "2026-08-11T12:05:00Z".into();
-        sign_release(&mut first_release, &signing_key).unwrap();
-        sign_release(&mut retry_release, &signing_key).unwrap();
-        sign_latest(&mut first_latest, &signing_key).unwrap();
-        sign_latest(&mut retry_latest, &signing_key).unwrap();
 
         assert_eq!(
             serde_json::to_vec(&first_release).unwrap(),
@@ -793,6 +558,11 @@ mod tests {
         let (release, _) = documents();
         let mut value = serde_json::to_value(release).unwrap();
         value["url"] = serde_json::Value::String("https://example.invalid/fw".into());
+        assert!(serde_json::from_value::<ReleaseDocument>(value).is_err());
+
+        let (release, _) = documents();
+        let mut value = serde_json::to_value(release).unwrap();
+        value["catalog_signature"] = serde_json::Value::String("00".repeat(64));
         assert!(serde_json::from_value::<ReleaseDocument>(value).is_err());
 
         let (mut release, _) = documents();

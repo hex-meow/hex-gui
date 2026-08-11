@@ -723,7 +723,7 @@ function ArtifactDetails({
         </Descriptions.Item>
         {prepared.backend === "cobs_can_iap_v1" &&
           prepared.expected_postflash_revision_hex && (
-            <Descriptions.Item label={copy.signedTargetRevision}>
+            <Descriptions.Item label={copy.httpsTargetRevision}>
               {prepared.expected_postflash_revision_hex}
             </Descriptions.Item>
           )}
@@ -912,7 +912,7 @@ function textFor(lang: Lang) {
       onlineSourceDetail:
         "选择标准设备后会默认从固定 R2 HTTPS 地址获取最新版本。下载包与手选包经过完全相同的设备、MCU、firmware-ID、P-256、公钥指纹、key ID、security epoch 与 encrypted-v2 校验。manifest 目标 revision 低于当前 0x1018:03 时会拒绝，等版本允许重装。",
       compatibleOnlineSourceDetail:
-        "选择合作厂商设备后会按已知的完整 0x1018 身份，从固定 R2 HTTPS 地址获取该身份的最新 IMG。已验签 release 的目标 revision 低于当前 0x1018:03 时，会在下载 IMG 前拒绝；等版本允许重刷。",
+        "选择合作厂商设备后会按已知的完整 0x1018 身份，从固定 R2 HTTPS 地址获取该身份的最新 IMG。HTTPS release 的目标 revision 低于当前 0x1018:03 时，会在下载 IMG 前拒绝；等版本允许重刷。",
       onlineUnavailable: "线上版本不可用",
       localFallback: "设备选择仍然有效。如确有需要，可使用下方高级本地文件回退。",
       getLatest: "获取线上最新版本",
@@ -990,7 +990,7 @@ function textFor(lang: Lang) {
       container: "Container / Firmware ID",
       targetVersion: "目标 SW revision",
       rawTargetVersion: "目标版本（协议原始值）",
-      signedTargetRevision: "已验签目标 0x1018:03 revision",
+      httpsTargetRevision: "HTTPS release 目标 0x1018:03 revision",
       sizes: "包 · 明文 → CAN wire",
       compatibleImg: "兼容 IMG",
       deviceFinalAuth: "逐记录认证由设备最终执行",
@@ -1010,7 +1010,7 @@ function textFor(lang: Lang) {
         "固件写入与 Verify 已完成；升级后读回的 0x4001 数据与升级前备份逐字节一致。请保留以下备份用于审计或后续恢复。",
       factoryDataRecoveryRequired: "必须人工恢复 0x4001，不能视为普通升级成功",
       factoryDataRecoveryRequiredDetail:
-        "固件写入和 Verify 已经完成，但升级后身份不符合签名发布、0x4001 与备份不同，或无法可靠读回。电机出厂校准数据可能已丢失；停止使用该电机，不要重复升级，并使用以下备份执行受控恢复。",
+        "固件写入和 Verify 已经完成，但升级后身份不符合 HTTPS release、0x4001 与备份不同，或无法可靠读回。电机出厂校准数据可能已丢失；停止使用该电机，不要重复升级，并使用以下备份执行受控恢复。",
       factoryBackupPath: "0x4001 备份文件",
       factoryBackupSha: "备份 SHA-256",
       factoryBackupPathUnavailable: "后端未返回备份路径；请立即停止使用并保留现场",
@@ -1060,7 +1060,7 @@ function textFor(lang: Lang) {
     onlineSourceDetail:
       "Selecting a standard target automatically downloads the latest release from the fixed R2 HTTPS origin. Online and local packages pass the same device, MCU, firmware-ID, P-256 key, fingerprint, key-ID, security-epoch, and encrypted-v2 checks. A manifest target revision below the current 0x1018:03 is refused; an equal revision may be reinstalled.",
     compatibleOnlineSourceDetail:
-      "Selecting a partner device fetches the latest IMG for its known complete 0x1018 identity from the fixed R2 HTTPS origin. A signed release target revision below the current 0x1018:03 is refused before the IMG download; an equal revision may be reflashed.",
+      "Selecting a partner device fetches the latest IMG for its known complete 0x1018 identity from the fixed R2 HTTPS origin. An HTTPS release target revision below the current 0x1018:03 is refused before the IMG download; an equal revision may be reflashed.",
     onlineUnavailable: "The online release is unavailable",
     localFallback:
       "The device selection remains valid. If necessary, use the advanced local-file fallback below.",
@@ -1144,7 +1144,7 @@ function textFor(lang: Lang) {
     container: "Container / Firmware ID",
     targetVersion: "Target SW revision",
     rawTargetVersion: "Target version (raw protocol value)",
-    signedTargetRevision: "Signed target 0x1018:03 revision",
+    httpsTargetRevision: "HTTPS release target 0x1018:03 revision",
     sizes: "Package · plaintext → CAN wire",
     compatibleImg: "Compatible IMG",
     deviceFinalAuth: "The device performs final per-record authentication",
@@ -1166,7 +1166,7 @@ function textFor(lang: Lang) {
     factoryDataRecoveryRequired:
       "Manual 0x4001 recovery required; this is not a normal update success",
     factoryDataRecoveryRequiredDetail:
-      "Firmware writing and Verify completed, but the post-update identity does not match the signed release, or 0x4001 differs from the backup or could not be read reliably. Factory calibration may be lost. Stop using this motor, do not repeat the update, and use the backup below for controlled recovery.",
+      "Firmware writing and Verify completed, but the post-update identity does not match the HTTPS release, or 0x4001 differs from the backup or could not be read reliably. Factory calibration may be lost. Stop using this motor, do not repeat the update, and use the backup below for controlled recovery.",
     factoryBackupPath: "0x4001 backup file",
     factoryBackupSha: "Backup SHA-256",
     factoryBackupPathUnavailable:

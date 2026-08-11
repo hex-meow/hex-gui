@@ -179,12 +179,12 @@ enum StagedArtifact {
 /// 0x1018:03 value with the complete identity read during discovery.
 ///
 /// A supplier IMG header version is deliberately absent: that field is not
-/// proven to use the CANopen revision encoding. Only a signed online release
-/// can supply that binding for Motor IMG.
+/// proven to use the CANopen revision encoding. Only a release fetched from
+/// the fixed HTTPS origin can supply that binding for Motor IMG.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RevisionEvidence {
     StandardMeowpkg(u32),
-    SignedMotorRelease(u32),
+    HttpsMotorRelease(u32),
     UnprovenLocalMotorImg,
 }
 
@@ -616,17 +616,9 @@ async fn prepare_latest_motor_img(
             "selected Motor IMG profile no longer matches the local identity catalog".into(),
         );
     }
-    let policy = descriptor
+    descriptor
         .motor_img_policy()
         .ok_or_else(|| "selected target has no enabled Motor IMG policy".to_owned())?;
-    let (catalog_key_id, catalog_public_key) = policy
-        .catalog_key_id
-        .zip(policy.catalog_public_key)
-        .ok_or_else(|| {
-            format!(
-                "online IMG releases for {profile_id} are locked until a production catalog verification key is provisioned; use the attended local IMG fallback"
-            )
-        })?;
 
     let identity_root = motor_identity_root(device.vendor_id, device.product_code);
     let identity_url = format!("{R2_ORIGIN}/{identity_root}");
@@ -642,15 +634,8 @@ async fn prepare_latest_motor_img(
     .await?;
     let latest: MotorLatestDocument = parse_motor_latest_json(&latest_bytes)
         .map_err(|error| format!("invalid Motor IMG latest pointer: {error}"))?;
-    verify_motor_latest(
-        &latest,
-        profile_id,
-        device.vendor_id,
-        device.product_code,
-        catalog_key_id,
-        &catalog_public_key,
-    )
-    .map_err(|error| format!("Motor IMG latest signature/binding failed: {error}"))?;
+    verify_motor_latest(&latest, profile_id, device.vendor_id, device.product_code)
+        .map_err(|error| format!("Motor IMG latest HTTPS binding failed: {error}"))?;
 
     let release_bytes_len = bounded_declared_size(
         "Motor IMG release binding",
@@ -673,15 +658,8 @@ async fn prepare_latest_motor_img(
     )?;
     let release: MotorReleaseDocument = parse_motor_release_json(&release_bytes)
         .map_err(|error| format!("invalid Motor IMG release binding: {error}"))?;
-    verify_motor_release(
-        &release,
-        profile_id,
-        device.vendor_id,
-        device.product_code,
-        catalog_key_id,
-        &catalog_public_key,
-    )
-    .map_err(|error| format!("Motor IMG release signature/binding failed: {error}"))?;
+    verify_motor_release(&release, profile_id, device.vendor_id, device.product_code)
+        .map_err(|error| format!("Motor IMG release HTTPS binding failed: {error}"))?;
 
     if release.sequence != latest.sequence
         || release.release_id != latest.release_id
@@ -697,11 +675,11 @@ async fn prepare_latest_motor_img(
             "Motor IMG release expected post-flash identity differs from the local profile".into(),
         );
     }
-    // Reject as soon as signed revision evidence is available. In particular,
+    // Reject as soon as HTTPS release revision evidence is available. In particular,
     // do this before fetching the IMG body, and long before opening a CAN bus
     // for mutation. Equal revisions intentionally remain valid reinstalls.
     revision_warning(
-        RevisionEvidence::SignedMotorRelease(release.expected_postflash.revision_number),
+        RevisionEvidence::HttpsMotorRelease(release.expected_postflash.revision_number),
         device.software_revision,
     )?;
 
@@ -758,7 +736,7 @@ async fn prepare_latest_motor_img(
         || dto.artifact_sha256 != release.artifact.sha256
     {
         return Err(
-            "parsed IMG no longer matches its signed release header and content binding".into(),
+            "parsed IMG no longer matches its HTTPS release header and content binding".into(),
         );
     }
     Ok((staged, dto))
@@ -905,13 +883,11 @@ fn prepare_artifact_bytes(
                 CobsPreparedUpgrade::bind(target, artifact).map_err(|error| error.to_string())?;
             let artifact = prepared.artifact();
             let revision_evidence = match (artifact_source, expected_postflash_revision) {
-                ("r2", Some(revision)) => RevisionEvidence::SignedMotorRelease(revision),
-                ("r2", None) => {
-                    return Err(
-                        "online Motor IMG is missing its signed expected post-flash revision"
-                            .into(),
-                    )
-                }
+                ("r2", Some(revision)) => RevisionEvidence::HttpsMotorRelease(revision),
+                ("r2", None) => return Err(
+                    "online Motor IMG is missing its HTTPS release expected post-flash revision"
+                        .into(),
+                ),
                 ("local", None) => RevisionEvidence::UnprovenLocalMotorImg,
                 ("local", Some(_)) => {
                     return Err(
@@ -977,9 +953,9 @@ fn revision_warning(
         RevisionEvidence::StandardMeowpkg(revision) => {
             (revision, ".meowpkg manifest firmware_version")
         }
-        RevisionEvidence::SignedMotorRelease(revision) => (
+        RevisionEvidence::HttpsMotorRelease(revision) => (
             revision,
-            "signed Motor IMG expected_postflash.revision_number",
+            "HTTPS Motor IMG release expected_postflash.revision_number",
         ),
         // The native IMG header version is intentionally ignored. Its numeric
         // relationship to CANopen 0x1018:03 has not been established.
@@ -1305,8 +1281,11 @@ pub async fn stm32_can_dfu_start(
             RevisionEvidence::StandardMeowpkg(dto.firmware_version)
         }
         StagedArtifact::CobsIap { dto, .. } if dto.artifact_source == "r2" => {
-            RevisionEvidence::SignedMotorRelease(dto.expected_postflash_revision.ok_or_else(
-                || "online Motor IMG is missing its signed expected post-flash revision".to_owned(),
+            RevisionEvidence::HttpsMotorRelease(dto.expected_postflash_revision.ok_or_else(
+                || {
+                    "online Motor IMG is missing its HTTPS release expected post-flash revision"
+                        .to_owned()
+                },
             )?)
         }
         StagedArtifact::CobsIap { .. } => RevisionEvidence::UnprovenLocalMotorImg,
@@ -2370,19 +2349,19 @@ mod tests {
     }
 
     #[test]
-    fn signed_motor_release_revision_floor_rejects_only_older_targets() {
+    fn https_motor_release_revision_floor_rejects_only_older_targets() {
         let installed = 0x6578_0002;
-        let error = revision_warning(RevisionEvidence::SignedMotorRelease(0x6578_0001), installed)
+        let error = revision_warning(RevisionEvidence::HttpsMotorRelease(0x6578_0001), installed)
             .unwrap_err();
-        assert!(error.contains("signed Motor IMG expected_postflash.revision_number"));
+        assert!(error.contains("HTTPS Motor IMG release expected_postflash.revision_number"));
         assert!(error.contains("0x65780001"));
         assert!(error.contains("0x65780002"));
         assert_eq!(
-            revision_warning(RevisionEvidence::SignedMotorRelease(installed), installed).unwrap(),
+            revision_warning(RevisionEvidence::HttpsMotorRelease(installed), installed).unwrap(),
             "reinstall"
         );
         assert_eq!(
-            revision_warning(RevisionEvidence::SignedMotorRelease(0x6578_0003), installed).unwrap(),
+            revision_warning(RevisionEvidence::HttpsMotorRelease(0x6578_0003), installed).unwrap(),
             "none"
         );
     }
