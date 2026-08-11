@@ -23,6 +23,8 @@ use hex_motor::types::{
 };
 use hex_motor::types::{MotorErrorKind, MotorIdentity, MotorMode, MotorTarget};
 
+use crate::meow_calibration::MeowTorqueFactorView;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CanBitTimingDto {
     pub bitrate: Option<u32>,
@@ -238,13 +240,30 @@ pub struct MeowMotorSnapshotDto {
     pub nmt_state: Option<NmtStateDto>,
     pub logic: Option<LogicDto>,
     pub is_ready: bool,
+    /// Peak torque (Nm) from `0x4576`. This is the **raw command domain** full
+    /// scale that `torque_permille` is a fraction of, not a physical limit.
     pub peak_torque_nm: Option<f32>,
     pub mit_kp_kd_factor: Option<f32>,
+    /// Factory torque calibration (`0x4001` v1). `None` means it has not been
+    /// read for this heartbeat session yet.
+    pub torque_factor: Option<MeowTorqueFactorView>,
     pub measurements: MeowMotorMeasurementsDto,
 }
 
 impl MeowMotorSnapshotDto {
-    pub fn new(info: &CoreMeowMotorInfo, live: &CoreMeowLiveState) -> Self {
+    pub fn new(
+        info: &CoreMeowMotorInfo,
+        live: &CoreMeowLiveState,
+        torque_factor: Option<MeowTorqueFactorView>,
+    ) -> Self {
+        let mut measurements = MeowMotorMeasurementsDto::from(&live.measurements);
+        measurements.torque_nm = physical_torque_nm(
+            measurements.torque_permille,
+            info.peak_torque_nm,
+            torque_factor
+                .as_ref()
+                .and_then(|view| view.applied_factor()),
+        );
         Self {
             node_id: info.node_id,
             session_epoch: info.session_epoch,
@@ -258,9 +277,29 @@ impl MeowMotorSnapshotDto {
             is_ready: info.is_ready(),
             peak_torque_nm: info.peak_torque_nm,
             mit_kp_kd_factor: info.mit_kp_kd_factor,
-            measurements: (&live.measurements).into(),
+            torque_factor,
+            measurements,
         }
     }
+}
+
+/// `0x4577` 反馈的千分比 → 操作员看到的物理力矩。
+///
+/// 千分比是**原始命令域**峰值力矩的比例，所以先换算成原始 Nm，再按出厂标定的定义
+/// 除以 `torque_factor`。系数未知（尚未读取或读取失败）时返回 `None`，界面据此显示
+/// "未换算"，而不是把原始值伪装成物理值。
+pub fn physical_torque_nm(
+    torque_permille: Option<i16>,
+    peak_torque_nm: Option<f32>,
+    torque_factor: Option<f64>,
+) -> Option<f64> {
+    let permille = torque_permille?;
+    let peak = f64::from(peak_torque_nm?);
+    let factor = torque_factor?;
+    if !peak.is_finite() || peak <= 0.0 || !factor.is_finite() || factor <= 0.0 {
+        return None;
+    }
+    Some(f64::from(permille) / 1000.0 * peak / factor)
 }
 
 impl From<&CoreMeowCanSettingsStatus> for DeviceCanConfigStatusDto {
@@ -339,7 +378,12 @@ pub struct MeowMotorMeasurementsDto {
     pub accumulation_valid: bool,
     pub accumulation_segment: u64,
     pub velocity_rev_per_s: Option<f64>,
+    /// Raw `0x4577` feedback, in permille of the raw-command-domain peak torque.
+    /// Shown as-is; the factory torque factor is **not** applied to it.
     pub torque_permille: Option<i16>,
+    /// Physical torque (Nm) after dividing the raw feedback by the factory
+    /// torque factor. `None` when peak torque or the factor is unknown.
+    pub torque_nm: Option<f64>,
     pub driver_temp_c: Option<f32>,
     pub motor_temp_c: Option<f32>,
     pub mode_display: Option<u8>,
@@ -360,6 +404,9 @@ impl From<&hex_motor::meow_motor::MeowMotorMeasurements> for MeowMotorMeasuremen
             accumulation_segment: measurements.position_accumulation_segment,
             velocity_rev_per_s: measurements.velocity_rev_per_s,
             torque_permille: measurements.torque_permille,
+            // Filled in by MeowMotorSnapshotDto::new, which owns peak torque
+            // and the factory torque factor.
+            torque_nm: None,
             driver_temp_c: measurements.driver_temp_c,
             motor_temp_c: measurements.motor_temp_c,
             mode_display: measurements.mode_display,

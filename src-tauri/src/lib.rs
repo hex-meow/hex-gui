@@ -22,6 +22,7 @@ mod imu;
 mod lift;
 mod lift_commission;
 mod logging;
+mod meow_calibration;
 mod sdo_client;
 mod smartknob;
 mod state;
@@ -139,6 +140,7 @@ pub fn run() {
             commands::meow_identify,
             commands::meow_get_status,
             commands::meow_initialize,
+            commands::meow_read_torque_factor,
             commands::meow_activate_target,
             commands::meow_set_target,
             commands::meow_set_max_torque,

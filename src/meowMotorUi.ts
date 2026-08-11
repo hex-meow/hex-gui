@@ -97,16 +97,31 @@ export function clampToRange(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-/** Convert the GUI's N·m target to the signed permille object used on wire. */
-export function torqueNmToPermille(torqueNm: number, peakTorqueNm: number): number {
+/**
+ * Convert the GUI's N·m target to the signed permille object used on wire.
+ *
+ * `peakTorqueNm` is only the permille denominator. `limitNm` is the range the
+ * operator may actually ask for, which differs once the backend rescales the
+ * command by the factory torque factor: a factor below 1.0 makes the reachable
+ * physical torque *larger* than peak, above 1.0 smaller. It defaults to
+ * `peakTorqueNm`, the uncalibrated case.
+ */
+export function torqueNmToPermille(
+  torqueNm: number,
+  peakTorqueNm: number,
+  limitNm: number = peakTorqueNm,
+): number {
   if (!Number.isFinite(peakTorqueNm) || peakTorqueNm <= 0) {
     throw new RangeError("peak torque must be finite and greater than zero");
+  }
+  if (!Number.isFinite(limitNm) || limitNm <= 0) {
+    throw new RangeError("torque limit must be finite and greater than zero");
   }
   if (!Number.isFinite(torqueNm)) {
     throw new RangeError("torque target must be finite");
   }
-  if (torqueNm < -peakTorqueNm || torqueNm > peakTorqueNm) {
-    throw new RangeError("torque target exceeds the motor peak torque");
+  if (torqueNm < -limitNm || torqueNm > limitNm) {
+    throw new RangeError("torque target exceeds the reachable torque range");
   }
   return Math.round((torqueNm / peakTorqueNm) * 1000);
 }

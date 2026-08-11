@@ -20,6 +20,13 @@ members = [
 ]
 resolver = "2"
 
+# TEMPORARY: hex-motor 0.3.1 adds `meow_motor::calibration` (read-only 0x4001
+# decode) and `MeowMotorManager::read_factory_calibration`, which the Motor
+# Control App's torque-factor correction needs. Delete this whole section once
+# 0.3.1 is published to crates.io; the `[dependencies]` entry already pins it.
+[patch.crates-io]
+hex-motor = { path = "../../hex-motor" }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 prost-build = "0.13"
@@ -43,7 +50,7 @@ anyhow = "1"
 getrandom = "0.3"
 chrono = "0.4"
 # Published Meow Motor driver and host services.
-hex-motor = "0.3.0"
+hex-motor = "0.3.1"
 
 # Public, secret-free runtime for the current HPM USB Bootloader. It owns the
 # strict legacy profile/package parser and flash state machine; the Tauri

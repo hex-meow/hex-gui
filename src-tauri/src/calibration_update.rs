@@ -309,6 +309,14 @@ pub async fn calibration_update_write(
         return Err("0x4001 changed after backup/verification; prepare this motor again".into());
     }
 
+    // The Motor Control App caches this motor's torque factor per heartbeat
+    // session. Drop it before the first mutation so no later command can scale
+    // a target with the pre-rewrite factor, whatever happens to this write.
+    state
+        .meow_calibration
+        .forget_node(request.target.node_id)
+        .await;
+
     // A valid rewrite uses three durable phases. Any interruption before the
     // last save leaves an invalid manifest rather than a mixed valid record.
     write_u32(&bus, request.target.node_id, 0x4001, 1, 0)

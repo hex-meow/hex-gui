@@ -356,6 +356,16 @@ const STRINGS = {
     en: "Initialize the motor to read the MIT Kp/Kd scale factor from 0x4102:07.",
     zh: "请先初始化电机，以从 0x4102:07 读取 MIT Kp/Kd 尺度因子。",
   },
+  meowTorqueFactorCalibrated: { en: "Factory calibrated", zh: "已出厂标定" },
+  meowTorqueFactorUncalibrated: { en: "Factory uncalibrated", zh: "未出厂标定" },
+  meowTorqueFactorUnavailable: { en: "Unavailable", zh: "读取失败" },
+  meowTorqueFactorUnread: { en: "Not read yet", zh: "尚未读取" },
+  meowTorqueFactorReread: { en: "Re-read 0x4001", zh: "重新读取 0x4001" },
+  meowTorquePhysicalRange: {
+    en: "Physical range is peak ÷ factor, because the raw command domain saturates first.",
+    zh: "物理可达范围是 峰值 ÷ 系数，因为原始命令域会先饱和。",
+  },
+  meowTorqueRawFeedback: { en: "raw", zh: "原始" },
   meowPpRangeWarning: {
     en: "PP uses signed Q8.24 and only represents [-128, 128) rev. Use PV with host-side accumulation for many turns.",
     zh: "PP 使用有符号 Q8.24，只能表示 [-128, 128) 圈。多圈运动请使用 PV，并在上位机累计位置。",

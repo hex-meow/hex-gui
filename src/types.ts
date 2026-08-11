@@ -244,7 +244,10 @@ export interface MeowMotorMeasurements {
   accumulation_valid: boolean;
   accumulation_segment: number;
   velocity_rev_per_s: number | null;
+  /** Raw 0x4577 feedback. The factory torque factor is NOT applied to it. */
   torque_permille: number | null;
+  /** Physical torque: the raw feedback divided by the factory torque factor. */
+  torque_nm: number | null;
   driver_temp_c: number | null;
   motor_temp_c: number | null;
   mode_display: number | null;
@@ -253,6 +256,22 @@ export interface MeowMotorMeasurements {
   tpdo1_generation: number;
   tpdo2_generation: number;
 }
+
+/**
+ * Factory torque calibration (0x4001 v1) as far as the control app cares.
+ *
+ * `unavailable` is not `uncalibrated`: the read itself failed, so the factor is
+ * unknown and torque commands are refused rather than sent unscaled.
+ */
+export type MeowTorqueFactor =
+  | {
+      status: "calibrated";
+      factor: number;
+      fit_rmse_nm: number;
+      friction_calibrated: boolean;
+    }
+  | { status: "uncalibrated"; detail: string }
+  | { status: "unavailable"; detail: string };
 
 export interface MeowMotorSnapshot {
   node_id: number;
@@ -265,8 +284,11 @@ export interface MeowMotorSnapshot {
   nmt_state: NmtState | null;
   logic: Logic | null;
   is_ready: boolean;
+  /** Raw-command-domain full scale that `torque_permille` is a fraction of. */
   peak_torque_nm: number | null;
   mit_kp_kd_factor: number | null;
+  /** `null` until 0x4001 has been read for this heartbeat session. */
+  torque_factor: MeowTorqueFactor | null;
   measurements: MeowMotorMeasurements;
 }
 

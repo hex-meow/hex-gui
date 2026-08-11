@@ -47,6 +47,8 @@ export const api = {
     invoke<MeowMotorSnapshot>("meow_get_status", { nid }),
   meowInitialize: (nid: number, eventTimerMs: number) =>
     invoke<MeowMotorSnapshot>("meow_initialize", { nid, eventTimerMs }),
+  meowReadTorqueFactor: (nid: number) =>
+    invoke<MeowMotorSnapshot>("meow_read_torque_factor", { nid }),
   meowActivateTarget: (nid: number, target: MeowMotorTarget) =>
     invoke<void>("meow_activate_target", { nid, target }),
   meowSetTarget: (nid: number, target: MeowMotorTarget) =>

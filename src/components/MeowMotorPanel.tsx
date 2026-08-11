@@ -29,13 +29,13 @@ import {
   meowVelocityLimit,
   MIN_PDO_EVENT_TIMER_MS,
   RADIANS_PER_REVOLUTION,
-  torquePermilleToNm,
   torqueNmToPermille,
 } from "../meowMotorUi";
 import type {
   MeowCanSettingsRequest,
   MeowMotorSnapshot,
   MeowMotorTarget,
+  MeowTorqueFactor,
   MotorInfo,
 } from "../types";
 import type { Sample } from "../useTelemetry";
@@ -102,7 +102,20 @@ export function MeowMotorPanel({
     snapshot.peak_torque_nm > 0
       ? snapshot.peak_torque_nm
       : null;
-  const torqueStepNm = peakTorqueNm == null ? 0.001 : peakTorqueNm / 1000;
+  // The backend multiplies every torque target by this factor and divides the
+  // feedback by it, so the panel's Nm values are physical throughout. A motor
+  // without factory calibration reports `uncalibrated` and keeps factor 1.0;
+  // `unavailable` means the read failed and torque commands will be refused.
+  const torqueFactorView = snapshot?.torque_factor ?? null;
+  const torqueFactor =
+    torqueFactorView?.status === "calibrated" ? torqueFactorView.factor : null;
+  const torqueFactorUnknown = torqueFactorView?.status === "unavailable";
+  // The device saturates in the raw command domain, so a factor above 1.0
+  // shrinks the physical range the operator can actually ask for.
+  const physicalPeakTorqueNm =
+    peakTorqueNm == null ? null : peakTorqueNm / (torqueFactor ?? 1);
+  const torqueStepNm =
+    physicalPeakTorqueNm == null ? 0.001 : physicalPeakTorqueNm / 1000;
   const mitKpKdFactor =
     snapshot?.mit_kp_kd_factor != null &&
     Number.isFinite(snapshot.mit_kp_kd_factor) &&
@@ -116,10 +129,12 @@ export function MeowMotorPanel({
   }, [velocityLimit]);
 
   useEffect(() => {
-    if (peakTorqueNm != null) {
-      setTorqueNm((current) => clampToRange(current, -peakTorqueNm, peakTorqueNm));
+    if (physicalPeakTorqueNm != null) {
+      setTorqueNm((current) =>
+        clampToRange(current, -physicalPeakTorqueNm, physicalPeakTorqueNm),
+      );
     }
-  }, [peakTorqueNm]);
+  }, [physicalPeakTorqueNm]);
 
   useEffect(() => {
     if (mitGainMaxSi != null) {
@@ -162,7 +177,10 @@ export function MeowMotorPanel({
             ? measurements.accumulated_position_rev
             : measurements.position_rev,
         velocity: measurements.velocity_rev_per_s,
-        torque: measurements.torque_permille,
+        // The chart's torque axis is labelled N·m and the CiA402 panel feeds it
+        // N·m, so feed the factor-corrected physical value here too. It is null
+        // until the factory torque factor is known.
+        torque: measurements.torque_nm,
       });
       const cutoff = now - CHART_BUFFER_MS;
       while (buffer.length > 0 && buffer[0].t < cutoff) buffer.shift();
@@ -385,6 +403,16 @@ export function MeowMotorPanel({
                 description={t("faultDesc")}
               />
             )}
+            <TorqueFactorNotice
+              view={torqueFactorView}
+              busy={busy}
+              online={snapshot?.online === true}
+              onReread={() =>
+                run(t("meowTorqueFactorReread"), () =>
+                  api.meowReadTorqueFactor(info.node_id),
+                )
+              }
+            />
             <Space wrap align="end" style={{ marginBottom: 12 }}>
               <Field label={t("meowTpdoPeriod")}>
                 <InputNumber
@@ -528,44 +556,65 @@ export function MeowMotorPanel({
                 <Field label={t("meowTorqueTarget")}>
                   <InputNumber
                     value={torqueNm}
-                    min={peakTorqueNm == null ? undefined : -peakTorqueNm}
-                    max={peakTorqueNm ?? undefined}
+                    min={physicalPeakTorqueNm == null ? undefined : -physicalPeakTorqueNm}
+                    max={physicalPeakTorqueNm ?? undefined}
                     step={torqueStepNm}
                     precision={4}
-                    disabled={peakTorqueNm == null}
+                    disabled={physicalPeakTorqueNm == null}
                     onChange={(value) => setTorqueNm(value ?? 0)}
                     addonAfter="N·m"
                     style={{ width: "100%" }}
                   />
-                  {peakTorqueNm == null ? (
+                  {physicalPeakTorqueNm == null ? (
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       {t("meowTorquePeakUnavailable")}
                     </Typography.Text>
                   ) : (
-                    <Slider
-                      value={torqueNm}
-                      min={-peakTorqueNm}
-                      max={peakTorqueNm}
-                      step={torqueStepNm}
-                      onChange={setTorqueNm}
-                      marks={{
-                        [-peakTorqueNm]: `-${peakTorqueNm.toFixed(2)}`,
-                        0: "0",
-                        [peakTorqueNm]: peakTorqueNm.toFixed(2),
-                      }}
-                      tooltip={{ formatter: (value) => `${value?.toFixed(3) ?? "—"} N·m` }}
-                    />
+                    <>
+                      <Slider
+                        value={torqueNm}
+                        min={-physicalPeakTorqueNm}
+                        max={physicalPeakTorqueNm}
+                        step={torqueStepNm}
+                        onChange={setTorqueNm}
+                        marks={{
+                          [-physicalPeakTorqueNm]: `-${physicalPeakTorqueNm.toFixed(2)}`,
+                          0: "0",
+                          [physicalPeakTorqueNm]: physicalPeakTorqueNm.toFixed(2),
+                        }}
+                        tooltip={{ formatter: (value) => `${value?.toFixed(3) ?? "—"} N·m` }}
+                      />
+                      {torqueFactor != null && (
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {t("meowTorquePhysicalRange")}
+                        </Typography.Text>
+                      )}
+                    </>
                   )}
                 </Field>
                 <SendTargetButton
                   busy={busy}
-                  ready={snapshot?.is_ready === true && peakTorqueNm != null}
+                  ready={
+                    snapshot?.is_ready === true &&
+                    peakTorqueNm != null &&
+                    !torqueFactorUnknown
+                  }
                   onClick={() => {
-                    if (peakTorqueNm == null) return;
-                    activate({
-                      kind: "Torque",
-                      torque_permille: torqueNmToPermille(torqueNm, peakTorqueNm),
-                    });
+                    if (peakTorqueNm == null || physicalPeakTorqueNm == null) return;
+                    try {
+                      // Physical N·m in permille of peak. The backend scales it
+                      // into the raw command domain by the factory factor.
+                      void activate({
+                        kind: "Torque",
+                        torque_permille: torqueNmToPermille(
+                          torqueNm,
+                          peakTorqueNm,
+                          physicalPeakTorqueNm,
+                        ),
+                      });
+                    } catch (error) {
+                      message.error(errMsg(error));
+                    }
                   }}
                 />
               </ModeCard>
@@ -628,7 +677,11 @@ export function MeowMotorPanel({
                 />
                 <SendTargetButton
                   busy={busy}
-                  ready={snapshot?.is_ready === true && mitKpKdFactor != null}
+                  ready={
+                    snapshot?.is_ready === true &&
+                    mitKpKdFactor != null &&
+                    !torqueFactorUnknown
+                  }
                   onClick={() => {
                     if (mitKpKdFactor == null) return;
                     try {
@@ -704,6 +757,52 @@ export function MeowMotorPanel({
   );
 }
 
+/**
+ * Factory torque factor banner.
+ *
+ * Applying a factor silently would be the worst outcome here: the operator asks
+ * for 2 N·m and the motor is given 2.24 N·m of raw command. So the state is
+ * always visible, and the three states are kept distinct — applied, honestly
+ * absent (factor 1.0), and unknown (torque commands refused).
+ */
+function TorqueFactorNotice({
+  view,
+  busy,
+  online,
+  onReread,
+}: {
+  view: MeowTorqueFactor | null;
+  busy: boolean;
+  online: boolean;
+  onReread: () => void;
+}) {
+  const { t } = useI18n();
+  const [type, message] = ((): ["success" | "warning" | "error" | "info", string] => {
+    if (view == null) return ["info", t("meowTorqueFactorUnread")];
+    switch (view.status) {
+      case "calibrated":
+        return ["success", t("meowTorqueFactorCalibrated")];
+      case "uncalibrated":
+        return ["warning", t("meowTorqueFactorUncalibrated")];
+      case "unavailable":
+        return ["error", t("meowTorqueFactorUnavailable")];
+    }
+  })();
+  return (
+    <Alert
+      type={type}
+      showIcon
+      style={{ marginBottom: 12 }}
+      message={message}
+      action={
+        <Button size="small" loading={busy} disabled={!online} onClick={onReread}>
+          {t("meowTorqueFactorReread")}
+        </Button>
+      }
+    />
+  );
+}
+
 function ModeCard({
   title,
   active,
@@ -758,13 +857,11 @@ function TelemetryPanel({ snapshot }: { snapshot: MeowMotorSnapshot | null }) {
     measurements?.velocity_rev_per_s == null
       ? null
       : measurements.velocity_rev_per_s * RADIANS_PER_REVOLUTION;
-  const torqueNm =
-    measurements?.torque_permille == null ||
-    snapshot?.peak_torque_nm == null ||
-    !Number.isFinite(snapshot.peak_torque_nm) ||
-    snapshot.peak_torque_nm <= 0
-      ? null
-      : torquePermilleToNm(measurements.torque_permille, snapshot.peak_torque_nm);
+  // Physical torque comes from the backend, which already divided the raw
+  // feedback by the factory torque factor. It is null while the factor is
+  // unknown, so the panel shows the raw permille rather than a value that
+  // pretends to be physical.
+  const torqueNm = measurements?.torque_nm ?? null;
   return (
     <Descriptions size="small" column={3} bordered>
       <Descriptions.Item label={t("meowRawPosition")}>
@@ -782,7 +879,8 @@ function TelemetryPanel({ snapshot }: { snapshot: MeowMotorSnapshot | null }) {
         {format(velocityRadPerS)} rad/s
       </Descriptions.Item>
       <Descriptions.Item label={t("meowTorqueFeedback")}>
-        {format(torqueNm, 3)} N·m ({measurements?.torque_permille ?? "—"} ‰)
+        {format(torqueNm, 3)} N·m ({t("meowTorqueRawFeedback")}{" "}
+        {measurements?.torque_permille ?? "—"} ‰)
       </Descriptions.Item>
       <Descriptions.Item label={t("mode")}>
         {measurements?.mode_display == null

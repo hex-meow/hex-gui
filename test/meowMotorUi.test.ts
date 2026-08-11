@@ -43,6 +43,26 @@ test("N·m torque targets convert to signed permille and reject values beyond pe
   assert.throws(() => torqueNmToPermille(1, 0), RangeError);
 });
 
+test("the reachable torque range follows the factory factor, not peak torque", () => {
+  // The backend multiplies the permille by the factory torque factor, so the
+  // physical range the operator may ask for is peak ÷ factor. The permille
+  // denominator stays peak torque either way.
+  const peak = 8;
+
+  // factor 1.12: the raw domain saturates before the operator reaches peak.
+  const shrunk = peak / 1.12;
+  assert.equal(torqueNmToPermille(shrunk, peak, shrunk), 893);
+  assert.throws(() => torqueNmToPermille(peak, peak, shrunk), RangeError);
+
+  // factor 0.85: physical torque above peak is reachable and must be allowed.
+  const widened = peak / 0.85;
+  assert.equal(torqueNmToPermille(9, peak, widened), 1125);
+  assert.throws(() => torqueNmToPermille(widened + 0.1, peak, widened), RangeError);
+
+  assert.throws(() => torqueNmToPermille(1, peak, 0), RangeError);
+  assert.throws(() => torqueNmToPermille(1, peak, Number.NaN), RangeError);
+});
+
 test("MIT SI targets convert to the protocol's Rev and raw gain fields", () => {
   const target = meowMitTargetFromSi(
     {

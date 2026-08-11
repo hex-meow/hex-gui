@@ -25,6 +25,7 @@ use crate::dto::{
     MotorInfoDto, MotorModeDto, MotorTargetDto,
 };
 use crate::friction_calibration::{FrictionCalibrationRequest, FrictionCalibrationView};
+use crate::meow_calibration;
 use crate::state::AppState;
 use crate::torque_calibration::{TorqueCalibrationRequest, TorqueCalibrationView};
 use crate::zenoh_arm::{ArmInfo, ArmUrdf, ZenohArmConn, ZenohArmState};
@@ -162,6 +163,7 @@ pub async fn disconnect(state: State<'_, AppState>) -> CmdResult<()> {
     stop_friction_calibration(&state).await;
     state.torque_calibration.reset().await;
     state.authenticity.clear().await;
+    state.meow_calibration.clear().await;
     // Stop any running Robot Application first (disables its motors cleanly).
     stop_lift_session(&state).await?;
     if let (Some(app), Some(mgr)) = (state.hopea3.lock().await.take(), state.manager().await) {
@@ -395,21 +397,52 @@ pub async fn clear_error(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
     mgr.clear_error(nid).await.map_err(err)
 }
 
-fn meow_snapshot_for(manager: &MeowMotorManager, nid: u8) -> CmdResult<MeowMotorSnapshotDto> {
+/// Snapshot for the UI poll. The torque factor comes from the per-session cache
+/// only — this runs at up to 50 Hz and must never do bus I/O.
+async fn meow_snapshot_for(
+    state: &AppState,
+    manager: &MeowMotorManager,
+    nid: u8,
+) -> CmdResult<MeowMotorSnapshotDto> {
     let info = manager
         .list()
         .into_iter()
         .find(|info| info.node_id == nid)
         .ok_or_else(|| format!("new-protocol motor node 0x{nid:02X} has not appeared"))?;
     let live = manager.status(nid).map_err(err)?;
-    Ok(MeowMotorSnapshotDto::new(&info, &live))
+    let torque_factor = meow_calibration::cached_view(state, nid, info.session_epoch).await;
+    Ok(MeowMotorSnapshotDto::new(&info, &live, torque_factor))
+}
+
+/// Read `0x4001` once for this heartbeat session and cache the torque factor.
+///
+/// A read failure never fails the caller: the motor still drives. The next
+/// torque command re-reads and reports the problem there, where a wrong factor
+/// would actually matter.
+async fn refresh_torque_factor(state: &AppState, manager: &Arc<MeowMotorManager>, nid: u8) {
+    let view = meow_calibration::refresh(state, manager, nid).await;
+    log::info!("nid 0x{nid:02X}: factory torque calibration = {view:?}");
 }
 
 #[tauri::command]
 pub async fn meow_identify(state: State<'_, AppState>, nid: u8) -> CmdResult<MeowMotorSnapshotDto> {
     let manager = meow_manager(&state).await?;
     manager.identify(nid).await.map_err(err)?;
-    meow_snapshot_for(&manager, nid)
+    refresh_torque_factor(&state, &manager, nid).await;
+    meow_snapshot_for(&state, &manager, nid).await
+}
+
+/// Explicit re-read for the panel's refresh control, and the hook a user
+/// recalibration uses after it writes new `0x4001` bytes.
+#[tauri::command]
+pub async fn meow_read_torque_factor(
+    state: State<'_, AppState>,
+    nid: u8,
+) -> CmdResult<MeowMotorSnapshotDto> {
+    let manager = meow_manager(&state).await?;
+    state.meow_calibration.forget_node(nid).await;
+    refresh_torque_factor(&state, &manager, nid).await;
+    meow_snapshot_for(&state, &manager, nid).await
 }
 
 #[tauri::command]
@@ -418,7 +451,7 @@ pub async fn meow_get_status(
     nid: u8,
 ) -> CmdResult<MeowMotorSnapshotDto> {
     let manager = meow_manager(&state).await?;
-    meow_snapshot_for(&manager, nid)
+    meow_snapshot_for(&state, &manager, nid).await
 }
 
 #[tauri::command]
@@ -437,7 +470,8 @@ pub async fn meow_initialize(
         .initialize_with_options(nid, options)
         .await
         .map_err(err)?;
-    meow_snapshot_for(&manager, nid)
+    refresh_torque_factor(&state, &manager, nid).await;
+    meow_snapshot_for(&state, &manager, nid).await
 }
 
 fn meow_pdo_profile(event_timer_ms: u16) -> CmdResult<PdoProfile> {
@@ -451,15 +485,27 @@ pub async fn meow_activate_target(
     target: MeowMotorTargetDto,
 ) -> CmdResult<()> {
     let manager = meow_manager(&state).await?;
+    let torque_factor = meow_calibration::factor_for(&state, &manager, nid).await?;
     // `set_mode_sdo` is deliberately ordered: every target object is written
     // first, then the 0x4401 mode command, then fresh TPDO2 confirms the mode.
     manager
-        .set_mode_sdo(nid, meow_target(target)?)
+        .set_mode_sdo(nid, meow_target(target, torque_factor)?)
         .await
         .map_err(err)
 }
 
-fn meow_target(target: MeowMotorTargetDto) -> CmdResult<MeowMotorTarget> {
+/// Build the wire target from the operator's request.
+///
+/// Torque quantities arriving from the UI are **physical**; the motor's command
+/// objects are in the raw command domain the factory calibration was measured
+/// in. The frozen definition is `raw = physical * torque_factor`, so every
+/// torque field is multiplied here and divided again on the feedback path (see
+/// `dto::physical_torque_nm`). Position, velocity and the Kp/Kd gains are
+/// unaffected: the factor only rescales torque.
+///
+/// `torque_factor` is 1.0 for a motor with no factory calibration, which keeps
+/// those motors behaving exactly as before.
+fn meow_target(target: MeowMotorTargetDto, torque_factor: f64) -> CmdResult<MeowMotorTarget> {
     Ok(match target {
         MeowMotorTargetDto::ProfilePosition { position_rev } => MeowMotorTarget::ProfilePosition {
             position: SignedQ8_24::from_revolutions(position_rev).map_err(err)?,
@@ -467,9 +513,9 @@ fn meow_target(target: MeowMotorTargetDto) -> CmdResult<MeowMotorTarget> {
         MeowMotorTargetDto::ProfileVelocity { velocity_rev_per_s } => {
             MeowMotorTarget::ProfileVelocity { velocity_rev_per_s }
         }
-        MeowMotorTargetDto::Torque { torque_permille } => {
-            MeowMotorTarget::Torque { torque_permille }
-        }
+        MeowMotorTargetDto::Torque { torque_permille } => MeowMotorTarget::Torque {
+            torque_permille: raw_torque_permille(torque_permille, torque_factor)?,
+        },
         MeowMotorTargetDto::Mit {
             position_rev,
             velocity_rev_per_s,
@@ -480,12 +526,55 @@ fn meow_target(target: MeowMotorTargetDto) -> CmdResult<MeowMotorTarget> {
         } => MeowMotorTarget::Mit(MeowMitTarget {
             position_rev,
             velocity_rev_per_s,
-            torque_nm,
+            torque_nm: raw_torque_nm(torque_nm, torque_factor)?,
             kp,
             kd,
             kp_kd_limit_permille,
         }),
     })
+}
+
+fn checked_factor(torque_factor: f64) -> CmdResult<f64> {
+    if !torque_factor.is_finite() || torque_factor <= 0.0 {
+        return Err(format!(
+            "factory torque factor {torque_factor} is not usable; refusing to command torque"
+        ));
+    }
+    Ok(torque_factor)
+}
+
+/// Pure-torque mode target for `0x4571`, in permille of the raw-domain peak.
+///
+/// A factor above 1.0 shrinks the reachable physical range, so the scaled value
+/// can leave the device's -1000..=1000 window. That is reported instead of
+/// being silently clipped to a torque the operator did not ask for.
+fn raw_torque_permille(desired_permille: i16, torque_factor: f64) -> CmdResult<i16> {
+    let factor = checked_factor(torque_factor)?;
+    let raw = (f64::from(desired_permille) * factor).round();
+    if !(-1000.0..=1000.0).contains(&raw) {
+        return Err(format!(
+            "{desired_permille} permille of physical torque becomes {raw} permille in the raw \
+             command domain with factory torque factor {factor:.6}; the motor accepts only \
+             -1000..=1000, so reduce the target"
+        ));
+    }
+    Ok(raw as i16)
+}
+
+/// MIT feed-forward torque for `0x4102:03`, in Nm.
+fn raw_torque_nm(desired_nm: f32, torque_factor: f64) -> CmdResult<f32> {
+    let factor = checked_factor(torque_factor)?;
+    if !desired_nm.is_finite() {
+        return Err("MIT feed-forward torque must be finite".to_string());
+    }
+    let raw = f64::from(desired_nm) * factor;
+    if !raw.is_finite() || !(raw as f32).is_finite() {
+        return Err(format!(
+            "MIT feed-forward torque {desired_nm} Nm overflows when scaled by factory torque \
+             factor {factor:.6}"
+        ));
+    }
+    Ok(raw as f32)
 }
 
 #[cfg(test)]
@@ -523,11 +612,18 @@ mod meow_command_tests {
         assert!(meow_pdo_profile(101).is_err());
     }
 
+    /// The factory factor of a motor with no calibration; every non-torque
+    /// assertion below must hold at this value.
+    const NEUTRAL: f64 = crate::meow_calibration::NEUTRAL_TORQUE_FACTOR;
+
     #[test]
     fn pp_target_accepts_negative_endpoint_and_rejects_positive_endpoint() {
-        let minimum = meow_target(MeowMotorTargetDto::ProfilePosition {
-            position_rev: -128.0,
-        })
+        let minimum = meow_target(
+            MeowMotorTargetDto::ProfilePosition {
+                position_rev: -128.0,
+            },
+            NEUTRAL,
+        )
         .expect("-128 rev is the signed Q8.24 minimum");
         match minimum {
             MeowMotorTarget::ProfilePosition { position } => {
@@ -536,17 +632,110 @@ mod meow_command_tests {
             other => panic!("unexpected target: {other:?}"),
         }
 
-        assert!(meow_target(MeowMotorTargetDto::ProfilePosition {
-            position_rev: 128.0,
-        })
+        assert!(meow_target(
+            MeowMotorTargetDto::ProfilePosition {
+                position_rev: 128.0,
+            },
+            NEUTRAL,
+        )
         .is_err());
     }
 
     #[test]
     fn pp_target_does_not_clamp_or_wrap_invalid_values() {
         for position_rev in [-128.000_001, f64::NAN, f64::INFINITY] {
-            assert!(meow_target(MeowMotorTargetDto::ProfilePosition { position_rev }).is_err());
+            assert!(meow_target(
+                MeowMotorTargetDto::ProfilePosition { position_rev },
+                NEUTRAL
+            )
+            .is_err());
         }
+    }
+
+    /// The direction is frozen by the factory definition
+    /// `raw = physical * torque_factor` — the same convention the torque
+    /// calibration fixture measures with. Getting it backwards would silently
+    /// scale every torque command by `factor^2` in the wrong direction.
+    #[test]
+    fn torque_targets_are_multiplied_by_the_factory_factor() {
+        assert_eq!(raw_torque_permille(500, 1.12).unwrap(), 560);
+        assert_eq!(raw_torque_permille(-500, 1.12).unwrap(), -560);
+        assert_eq!(raw_torque_permille(500, 0.85).unwrap(), 425);
+        assert_eq!(raw_torque_permille(0, 1.12).unwrap(), 0);
+
+        assert!((raw_torque_nm(2.0, 1.12).unwrap() - 2.24).abs() < 1e-5);
+        assert!((raw_torque_nm(-2.0, 0.85).unwrap() + 1.7).abs() < 1e-5);
+    }
+
+    #[test]
+    fn an_uncalibrated_motor_keeps_todays_exact_behaviour() {
+        assert_eq!(raw_torque_permille(731, NEUTRAL).unwrap(), 731);
+        assert_eq!(raw_torque_permille(-1000, NEUTRAL).unwrap(), -1000);
+        assert_eq!(raw_torque_nm(1.234, NEUTRAL).unwrap(), 1.234_f32);
+    }
+
+    #[test]
+    fn scaling_past_the_device_range_is_reported_not_clipped() {
+        // 950 permille of physical torque needs 1064 raw permille at 1.12.
+        let error = raw_torque_permille(950, 1.12).expect_err("must not clip");
+        assert!(error.contains("1064"), "unexpected message: {error}");
+        assert_eq!(raw_torque_permille(892, 1.12).unwrap(), 999);
+    }
+
+    #[test]
+    fn an_unusable_factor_never_reaches_the_motor() {
+        for factor in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(raw_torque_permille(100, factor).is_err());
+            assert!(raw_torque_nm(1.0, factor).is_err());
+        }
+        assert!(raw_torque_nm(f32::NAN, 1.12).is_err());
+        assert!(raw_torque_nm(f32::INFINITY, 1.12).is_err());
+    }
+
+    #[test]
+    fn mit_scales_only_the_feed_forward_torque() {
+        let target = meow_target(
+            MeowMotorTargetDto::Mit {
+                position_rev: 0.25,
+                velocity_rev_per_s: 1.5,
+                torque_nm: 2.0,
+                kp: 300,
+                kd: 40,
+                kp_kd_limit_permille: 150,
+            },
+            1.12,
+        )
+        .expect("a plain MIT target");
+        match target {
+            MeowMotorTarget::Mit(mit) => {
+                assert!((mit.torque_nm - 2.24).abs() < 1e-5);
+                // Position, velocity and the gains are not torque quantities.
+                assert_eq!(mit.position_rev, 0.25);
+                assert_eq!(mit.velocity_rev_per_s, 1.5);
+                assert_eq!(mit.kp, 300);
+                assert_eq!(mit.kd, 40);
+                assert_eq!(mit.kp_kd_limit_permille, 150);
+            }
+            other => panic!("unexpected target: {other:?}"),
+        }
+    }
+
+    /// Command and display must be exact inverses, or the operator sees a
+    /// feedback value that disagrees with the target they just sent.
+    #[test]
+    fn feedback_division_inverts_the_command_multiplication() {
+        let peak = 10.0_f32;
+        let factor = 1.12;
+        let desired_nm = 4.0_f64;
+        let desired_permille = (desired_nm / f64::from(peak) * 1000.0).round() as i16;
+
+        let raw = raw_torque_permille(desired_permille, factor).unwrap();
+        let shown = crate::dto::physical_torque_nm(Some(raw), Some(peak), Some(factor))
+            .expect("peak and factor are both known");
+        assert!(
+            (shown - desired_nm).abs() < 0.01,
+            "commanded {desired_nm} Nm but the panel would show {shown} Nm"
+        );
     }
 }
 
@@ -557,8 +746,9 @@ pub async fn meow_set_target(
     target: MeowMotorTargetDto,
 ) -> CmdResult<()> {
     let manager = meow_manager(&state).await?;
+    let torque_factor = meow_calibration::factor_for(&state, &manager, nid).await?;
     manager
-        .set_target_sdo(nid, meow_target(target)?)
+        .set_target_sdo(nid, meow_target(target, torque_factor)?)
         .await
         .map_err(err)
 }

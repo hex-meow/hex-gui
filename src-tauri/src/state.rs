@@ -80,6 +80,10 @@ pub struct AppState {
     /// Read-only source-proof snapshots keyed by `(node-id, heartbeat session
     /// epoch)`. Public registration re-reads the live device before use.
     pub authenticity: crate::authenticity::AuthenticityState,
+    /// Factory torque factors (`0x4001` v1) for the Motor Control App, keyed by
+    /// `(node-id, heartbeat session epoch)`. Read once per session; the snapshot
+    /// poll only ever reads this cache and never touches the bus.
+    pub meow_calibration: crate::meow_calibration::MeowCalibrationState,
     /// Developer-only attended user recalibration. Unlike the transient proof
     /// cache, this remains in memory across a CAN disconnect so the operator
     /// can power-cycle/reconnect and verify the persisted readback.
