@@ -1864,6 +1864,7 @@ dependencies = [
 [[package]]
 name = "hexmeow-motor-iap"
 version = "0.1.0"
+source = "git+https://github.com/hex-meow/hexmeow-motor-iap#b6ae2c1f541a9c209917c39251067ab65927099b"
 dependencies = [
  "can-transport",
  "crc",

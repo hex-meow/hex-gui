@@ -7,7 +7,7 @@ description = "Single build-time identity and firmware-backend catalog for HexMe
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-hexmeow-motor-iap = { version = "0.1.0", path = "../../../../hexmeow-motor-iap" }
+hexmeow-motor-iap = { git = "https://github.com/hex-meow/hexmeow-motor-iap" }
 hexmeow-stm32-can-dfu = { path = "../hexmeow-stm32-can-dfu", default-features = false }
 thiserror = "2"
 
