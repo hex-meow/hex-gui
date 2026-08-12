@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use cobs_can_iap::{
+use hexmeow_motor_iap::{
     IapPolicy, PolicyError as MotorImgPolicyError, RegisteredTarget as MotorImgTarget,
     TargetRegistry as MotorImgTargetRegistry,
 };
@@ -602,7 +602,7 @@ fn build_standard_policy(
 
 #[cfg(test)]
 mod tests {
-    use cobs_can_iap::SupportPolicy as MotorSupport;
+    use hexmeow_motor_iap::SupportPolicy as MotorSupport;
     use hexmeow_stm32_can_dfu::SupportPolicy as StandardSupport;
     use sha2::{Digest, Sha256};
 

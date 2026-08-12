@@ -539,19 +539,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cobs-can-iap"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "can-transport",
- "crc",
- "hex",
- "sha2",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1838,13 +1825,13 @@ dependencies = [
  "can-transport",
  "canopen-sdo",
  "chrono",
- "cobs-can-iap",
  "env_logger",
  "getrandom 0.3.4",
  "hex",
  "hex-arm-dynamics",
  "hex-motor",
  "hexmeow-dfu-targets",
+ "hexmeow-motor-iap",
  "hexmeow-stm32-can-dfu",
  "hpm-usb-dfu",
  "log",
@@ -1868,10 +1855,21 @@ dependencies = [
 name = "hexmeow-dfu-targets"
 version = "0.1.0"
 dependencies = [
- "cobs-can-iap",
+ "hexmeow-motor-iap",
  "hexmeow-stm32-can-dfu",
  "sha2",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "hexmeow-motor-iap"
+version = "0.1.0"
+dependencies = [
+ "can-transport",
+ "crc",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

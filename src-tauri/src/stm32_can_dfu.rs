@@ -18,7 +18,7 @@ use can_transport::{
     CanBus, CanBusState, CanCapabilities, CanFilter, CanFrame, CanId, CanIoError, CanLinkConfig,
     CanRx,
 };
-use cobs_can_iap::{
+use hexmeow_motor_iap::{
     flash as flash_cobs_iap, CancellationToken as CobsCancellationToken,
     CanopenIdentity as CobsCanopenIdentity, FlashError as CobsFlashError,
     FlashEvent as CobsFlashEvent, FlashOptions as CobsFlashOptions, FlashStage as CobsFlashStage,
@@ -149,7 +149,7 @@ struct DiscoveredTarget {
 #[derive(Clone)]
 enum SelectedTarget {
     Stm32(AuthorizedTarget),
-    CobsIap(cobs_can_iap::AuthorizedTarget),
+    CobsIap(hexmeow_motor_iap::AuthorizedTarget),
 }
 
 impl SelectedTarget {
@@ -723,7 +723,7 @@ async fn prepare_latest_motor_img(
         && artifact.firmware_version() == release.native_img.firmware_version
         && matches!(
             artifact.encryption(),
-            cobs_can_iap::EncryptionMode::Encrypted
+            hexmeow_motor_iap::EncryptionMode::Encrypted
         ) == release.native_img.encrypted
         && hex::encode(artifact.hash()) == release.native_img.protected_sha256
         && hex::encode(artifact.signature()) == release.native_img.vendor_signature
@@ -875,7 +875,7 @@ fn prepare_artifact_bytes(
                 &bytes,
                 ImgLimits {
                     max_file_bytes: MAX_ARTIFACT_BYTES,
-                    max_bin_bytes: MAX_ARTIFACT_BYTES - cobs_can_iap::IMG_TAG_SIZE,
+                    max_bin_bytes: MAX_ARTIFACT_BYTES - hexmeow_motor_iap::IMG_TAG_SIZE,
                 },
             )
             .map_err(|error| error.to_string())?;
@@ -908,7 +908,7 @@ fn prepare_artifact_bytes(
                 format_version: None,
                 encrypted: matches!(
                     artifact.encryption(),
-                    cobs_can_iap::EncryptionMode::Encrypted
+                    hexmeow_motor_iap::EncryptionMode::Encrypted
                 ),
                 img_device_id: Some(artifact.device_id()),
                 img_device_id_hex: Some(format!("0x{:08X}", artifact.device_id())),

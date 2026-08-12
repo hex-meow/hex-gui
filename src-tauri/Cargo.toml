@@ -11,7 +11,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [workspace]
 members = [
-    "crates/cobs-can-iap",
     "crates/hexmeow-stm32-can-dfu",
     "crates/hexmeow-dfu-targets",
     "crates/motor-img-release",
@@ -59,7 +58,9 @@ hex-motor = "0.3.1"
 # module is only an IPC adapter.
 hpm-usb-dfu = { path = "crates/hpm-usb-dfu" }
 hexmeow-stm32-can-dfu = { path = "crates/hexmeow-stm32-can-dfu" }
-cobs-can-iap = { path = "crates/cobs-can-iap" }
+# The motor IAP core now lives in its own repository so the GUI, the CLI and
+# the firmware tree share one implementation instead of drifting copies.
+hexmeow-motor-iap = { version = "0.1.0", path = "../../hexmeow-motor-iap" }
 hexmeow-dfu-targets = { path = "crates/hexmeow-dfu-targets" }
 motor-img-release = { path = "crates/motor-img-release" }
 

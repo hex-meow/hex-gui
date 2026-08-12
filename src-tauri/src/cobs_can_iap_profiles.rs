@@ -1,6 +1,6 @@
 //! Thin adapter over the shared build-time firmware target catalog.
 
-use cobs_can_iap::TargetRegistry;
+use hexmeow_motor_iap::TargetRegistry;
 use hexmeow_dfu_targets::CatalogBuildError;
 
 pub(crate) fn target_registry() -> Result<TargetRegistry, CatalogBuildError> {
@@ -13,7 +13,7 @@ pub(crate) fn display_name_for_profile(profile_id: &str) -> Option<&'static str>
 
 #[cfg(test)]
 mod tests {
-    use cobs_can_iap::{CanopenIdentity, PolicyError, SupportPolicy};
+    use hexmeow_motor_iap::{CanopenIdentity, PolicyError, SupportPolicy};
 
     use super::*;
 
