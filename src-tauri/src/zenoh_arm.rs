@@ -116,6 +116,9 @@ pub struct ArmUrdf {
 struct Ctrl {
     prefix: StdMutex<Option<String>>,
     session_id: AtomicU32,
+    /// 取控期间必须一直拿住的 liveliness 租约(见 zenoh_lease)。
+    /// drop 即等于告诉控制器"客户端没了" —— 故只在 release 时清空。
+    live_lease: StdMutex<Option<crate::zenoh_lease::SessionLease>>,
     target: StdMutex<Option<Vec<f32>>>, // Active 时 50Hz 流的目标位姿
     gains: StdMutex<(f32, f32)>,        // (kp, kd) —— host 侧定增益(控制器忠实执行)
     dynamics: StdMutex<Option<Arc<ArmDynamics>>>, // 取控时从 arm/urdf 建;host 端重力前馈 tau_ff=G(q) 用
@@ -146,6 +149,7 @@ impl ZenohArmConn {
         let ctrl = Arc::new(Ctrl {
             prefix: StdMutex::new(None),
             session_id: AtomicU32::new(0),
+            live_lease: StdMutex::new(None),
             target: StdMutex::new(None),
             gains: StdMutex::new((10.0, 1.5)), // 有重力前馈后 kp=10 已够,更柔和
             dynamics: StdMutex::new(None),
@@ -308,13 +312,20 @@ impl ZenohArmConn {
             let cur = self.ctrl.prefix.lock().unwrap().clone();
             if cur.as_deref() != Some(prefix) { self.release().await; }
         }
-        let req = pb::AcquireSessionRequest { client_name: Some("hexmeow-gui".into()), liveliness_key: None };
+        // 控制器强制要求 liveliness_key(见 zenoh_lease):token 必须活到 release,
+        // 提前 drop 等于一取控就自动放手。
+        let lease = crate::zenoh_lease::declare(&self.session, "arm").await?;
+        let req = pb::AcquireSessionRequest {
+            client_name: Some("hexmeow-gui".into()),
+            liveliness_key: Some(lease.key.clone()),
+        };
         let resp: pb::AcquireSessionResponse = query_one(&self.session, &format!("{prefix}/rpc/acquire_session"), enc(&req))
             .await.ok_or_else(|| anyhow!("acquire 无回复"))?;
         if !resp.ok {
             return Err(anyhow!("被占用:holder {} {:?}", resp.current_holder, resp.current_holder_name));
         }
         self.ctrl.session_id.store(resp.session_id, Ordering::Relaxed);
+        *self.ctrl.live_lease.lock().unwrap() = Some(lease);
         *self.ctrl.prefix.lock().unwrap() = Some(prefix.to_string());
         // 取控隐含观察:确保 joint_state/status 读流也跟到这台(即使前端漏调 set_diag_focus)。
         *self.ctrl.view_prefix.lock().unwrap() = Some(prefix.to_string());
@@ -463,6 +474,9 @@ impl ZenohArmConn {
 
     pub async fn release(&self) {
         let sid = self.ctrl.session_id.swap(0, Ordering::Relaxed);
+        // 先撤 token 再发 release_session:两条路径都会让控制器释放会话,
+        // 先撤的那条保证即使 release RPC 发不出去(网络已断)会话也不会留下。
+        self.ctrl.live_lease.lock().unwrap().take();
         *self.ctrl.target.lock().unwrap() = None;
         let prefix = self.ctrl.prefix.lock().unwrap().clone();
         if let (Some(prefix), true) = (prefix, sid != 0) {

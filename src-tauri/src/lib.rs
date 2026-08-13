@@ -36,6 +36,7 @@ mod zenoh_config;
 mod zenoh_discovery;
 mod zenoh_ee;
 mod zenoh_hw;
+mod zenoh_lease;
 mod zenoh_lift;
 mod zenoh_wifi;
 

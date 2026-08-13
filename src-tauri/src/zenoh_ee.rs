@@ -130,6 +130,9 @@ pub struct ZenohEeState {
 struct Ctrl {
     prefix: StdMutex<Option<String>>,
     session_id: AtomicU32,
+    /// 取控期间必须一直拿住的 liveliness 租约(见 zenoh_lease)。
+    /// drop 即等于告诉控制器"客户端没了" —— 故只在 release 时清空。
+    live_lease: StdMutex<Option<crate::zenoh_lease::SessionLease>>,
     target: StdMutex<Option<f32>>, // driver 关节目标 q;Some=50Hz 流(喂看门狗)
     kp: StdMutex<Option<f32>>,     // None = 发空 kp → 控制器填型号默认增益
     state: StdMutex<ZenohEeState>,
@@ -160,6 +163,7 @@ impl ZenohEeConn {
         let ctrl = Arc::new(Ctrl {
             prefix: StdMutex::new(None),
             session_id: AtomicU32::new(0),
+            live_lease: StdMutex::new(None),
             target: StdMutex::new(None),
             kp: StdMutex::new(None),
             state: StdMutex::new(ZenohEeState::default()),
@@ -419,13 +423,20 @@ impl ZenohEeConn {
             let cur = self.ctrl.prefix.lock().unwrap().clone();
             if cur.as_deref() != Some(prefix) { self.release().await; }
         }
-        let req = pb::AcquireSessionRequest { client_name: Some("hexmeow-gui".into()), liveliness_key: None };
+        // 控制器强制要求 liveliness_key(见 zenoh_lease):token 必须活到 release,
+        // 提前 drop 等于一取控就自动放手。
+        let lease = crate::zenoh_lease::declare(&self.session, "ee").await?;
+        let req = pb::AcquireSessionRequest {
+            client_name: Some("hexmeow-gui".into()),
+            liveliness_key: Some(lease.key.clone()),
+        };
         let resp: pb::AcquireSessionResponse = query_one(&self.session, &format!("{prefix}/rpc/acquire_session"), enc(&req))
             .await.ok_or_else(|| anyhow!("acquire 无回复"))?;
         if !resp.ok {
             return Err(anyhow!("被占用:holder {} {:?}", resp.current_holder, resp.current_holder_name));
         }
         self.ctrl.session_id.store(resp.session_id, Ordering::Relaxed);
+        *self.ctrl.live_lease.lock().unwrap() = Some(lease);
         *self.ctrl.prefix.lock().unwrap() = Some(prefix.to_string());
         *self.ctrl.view_prefix.lock().unwrap() = Some(prefix.to_string()); // 取控隐含观察
         let desc = query_one::<pb::EeDescription>(&self.session, &format!("{prefix}/ee/description"), vec![]).await;
@@ -503,6 +514,9 @@ impl ZenohEeConn {
 
     pub async fn release(&self) {
         let sid = self.ctrl.session_id.swap(0, Ordering::Relaxed);
+        // 先撤 token 再发 release_session:两条路径都会让控制器释放会话,
+        // 先撤的那条保证即使 release RPC 发不出去(网络已断)会话也不会留下。
+        self.ctrl.live_lease.lock().unwrap().take();
         *self.ctrl.target.lock().unwrap() = None;
         let prefix = self.ctrl.prefix.lock().unwrap().clone();
         if let (Some(prefix), true) = (prefix, sid != 0) {

@@ -168,6 +168,9 @@ struct Ctrl {
     prefix: StdMutex<Option<String>>,
     view_prefix: StdMutex<Option<String>>, // 观察聚焦(读永远开放,与取控解耦)
     session_id: AtomicU32,
+    /// 取控期间必须一直拿住的 liveliness 租约(见 zenoh_lease)。
+    /// drop 即等于告诉控制器"客户端没了" —— 故只在 release 时清空。
+    live_lease: StdMutex<Option<crate::zenoh_lease::SessionLease>>,
     /// Some = 正在 jog:50Hz 重发 velocity(控制器 demand TTL 250ms,设备 watchdog 200ms)。
     /// position goal 不进这里 —— 它是一次性自主目标。
     jog: StdMutex<Option<f32>>,
@@ -197,6 +200,7 @@ impl ZenohLiftConn {
             prefix: StdMutex::new(None),
             view_prefix: StdMutex::new(None),
             session_id: AtomicU32::new(0),
+            live_lease: StdMutex::new(None),
             jog: StdMutex::new(None),
             homing_pending: AtomicBool::new(false),
             state: StdMutex::new(ZenohLiftState {
@@ -480,9 +484,12 @@ impl ZenohLiftConn {
                 self.release().await;
             }
         }
+        // 控制器强制要求 liveliness_key(见 zenoh_lease):token 必须活到 release,
+        // 提前 drop 等于一取控就自动放手。
+        let lease = crate::zenoh_lease::declare(&self.session, "lift").await?;
         let req = pb::AcquireSessionRequest {
             client_name: Some("hexmeow-gui".into()),
-            liveliness_key: None,
+            liveliness_key: Some(lease.key.clone()),
         };
         let resp: pb::AcquireSessionResponse = query_one(
             &self.session,
@@ -499,6 +506,7 @@ impl ZenohLiftConn {
             ));
         }
         self.ctrl.session_id.store(resp.session_id, Ordering::Relaxed);
+        *self.ctrl.live_lease.lock().unwrap() = Some(lease);
         *self.ctrl.prefix.lock().unwrap() = Some(prefix.to_string());
         *self.ctrl.view_prefix.lock().unwrap() = Some(prefix.to_string());
         {
@@ -702,6 +710,9 @@ impl ZenohLiftConn {
 
     pub async fn release(&self) {
         let sid = self.ctrl.session_id.swap(0, Ordering::Relaxed);
+        // 先撤 token 再发 release_session:两条路径都会让控制器释放会话,
+        // 先撤的那条保证即使 release RPC 发不出去(网络已断)会话也不会留下。
+        self.ctrl.live_lease.lock().unwrap().take();
         *self.ctrl.jog.lock().unwrap() = None;
         let prefix = self.ctrl.prefix.lock().unwrap().clone();
         if let (Some(prefix), true) = (prefix, sid != 0) {
