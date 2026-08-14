@@ -1178,3 +1178,10 @@ export type DiscoveredController = {
   hostname: string;
   endpoints: string[];
 };
+
+/// 本机网卡的 名字 ↔ scope id 对应表(IPv6 endpoint 里 % 后那个数字)。
+export type ScopeCandidate = {
+  name: string;
+  index: number;
+  addrs: string[];
+};

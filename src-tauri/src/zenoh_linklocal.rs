@@ -33,10 +33,15 @@ use std::time::Duration;
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// 一块可以用来补 scope 的本机网卡。
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `index` 就是 IPv6 endpoint 里 `%` 后面那个数字。GUI 把这张对应表显示出来,
+/// 用户一眼就能判断某条 `[fe80::…%2]` 走的是哪块网卡 —— 尤其是"这条是不是 Wi-Fi"。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct ScopeCandidate {
     pub name: String,
     pub index: u32,
+    /// 该网卡上的地址,逗号分隔。给人看的辅助信息,不参与任何判定。
+    pub addrs: Vec<String>,
 }
 
 /// 列出可用于补 scope 的本机网卡(排除回环与拿不到 index 的)。
@@ -53,14 +58,21 @@ pub(crate) fn scope_candidates() -> Vec<ScopeCandidate> {
             continue;
         }
         let Some(index) = iface.index else { continue };
-        if out.iter().any(|c| c.index == index) {
-            continue; // 同一块网卡的多个地址只留一条
+        let addr = iface.ip().to_string();
+        // 同一块网卡会有多个地址,归并到同一条并把地址都收进去。
+        if let Some(existing) = out.iter_mut().find(|c| c.index == index) {
+            if !existing.addrs.contains(&addr) {
+                existing.addrs.push(addr);
+            }
+            continue;
         }
         out.push(ScopeCandidate {
             name: iface.name,
             index,
+            addrs: vec![addr],
         });
     }
+    out.sort_by_key(|c| c.index);
     out
 }
 
@@ -190,10 +202,12 @@ mod tests {
             ScopeCandidate {
                 name: "eth0".into(),
                 index: 2,
+                addrs: vec![],
             },
             ScopeCandidate {
                 name: "usb0".into(),
                 index: 13,
+                addrs: vec![],
             },
         ];
         let locators = vec![
@@ -213,6 +227,7 @@ mod tests {
         let scopes = vec![ScopeCandidate {
             name: "eth0".into(),
             index: 2,
+            addrs: vec![],
         }];
         let locators = vec![
             "tcp/[fe80::1]:7447".to_string(),

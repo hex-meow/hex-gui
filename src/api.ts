@@ -3,7 +3,7 @@
 // snake_case parameters.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { ArmInfo, ArmUrdf, AuthenticityDeviceView, AuthenticityOnlineStatus, AuthenticityRegistrationResult, AuthenticityTarget, BaseInfo, BaseLimitsDto, CalibrationUpdatePersistedResult, CalibrationUpdatePrepared, CalibrationUpdatePreview, CalibrationUpdatePreviewRequest, CalibrationUpdateVerifyRequest, CalibrationUpdateWriteRequest, CalibrationUpdateWriteResult, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ConnectionInfo, ControllerInfo, DeviceSettingsRequest, DeviceSettingsResult, EventsSnapshot, FrictionCalibrationRequest, FrictionCalibrationView, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftFactoryCalibrationResult, LiftState, LiveState, LogLine, MeowCanSettingsRequest, MeowMotorSnapshot, MeowMotorTarget, MeowProfileLimits, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, TorqueCalibrationRequest, TorqueCalibrationView, ZenohArmState, ZenohBaseState, LiftRobotInfo, ZenohLiftState, EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus, DiscoveredController } from "./types";
+import type { ArmInfo, ArmUrdf, AuthenticityDeviceView, AuthenticityOnlineStatus, AuthenticityRegistrationResult, AuthenticityTarget, BaseInfo, BaseLimitsDto, CalibrationUpdatePersistedResult, CalibrationUpdatePrepared, CalibrationUpdatePreview, CalibrationUpdatePreviewRequest, CalibrationUpdateVerifyRequest, CalibrationUpdateWriteRequest, CalibrationUpdateWriteResult, CanAggReply, CanAnalyzerStatus, CanBusHealth, CanFilterSpec, CanSendSpec, CanTraceReply, ConfigGetDto, ConfigSetResult, ConfigValidateResult, ConnectionInfo, ControllerInfo, DeviceSettingsRequest, DeviceSettingsResult, EventsSnapshot, FrictionCalibrationRequest, FrictionCalibrationView, Hopea3InitProgress, Hopea3State, ImuState, KnobConfig, LiftFactoryCalibrationResult, LiftState, LiveState, LogLine, MeowCanSettingsRequest, MeowMotorSnapshot, MeowMotorTarget, MeowProfileLimits, MotorInfo, MotorMode, MotorTarget, RestartResult, SmartKnobState, TorqueCalibrationRequest, TorqueCalibrationView, ZenohArmState, ZenohBaseState, LiftRobotInfo, ZenohLiftState, EeInfo, RobotNode, ZenohEeState, SceneRobot, ConsoleUrdf, MountEdge, HardwareSnapshot, WifiController, WifiJob, WifiSavedNetwork, WifiScanEntry, WifiStatus, DiscoveredController, ScopeCandidate } from "./types";
 
 export const api = {
   connect: (iface: string, dataBitrate: number, ourNid: number, broadcastHeartbeat: boolean) =>
@@ -349,6 +349,7 @@ export const api = {
 
   // Controller Config(Zenoh)
   discoverDirectControllers: () => invoke<DiscoveredController[]>("discover_direct_controllers"),
+  localScopeMap: () => invoke<ScopeCandidate[]>("local_scope_map"),
   configConnect: (connect: string) => invoke<void>("config_connect", { connect }),
   configDisconnect: () => invoke<void>("config_disconnect"),
   configDiscover: () => invoke<ControllerInfo[]>("config_discover"),

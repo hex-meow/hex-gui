@@ -9,7 +9,7 @@ import { App as AntdApp, Alert, Button, Input, Modal, Select, Switch, Tag, Toolt
 import { ReloadOutlined } from "@ant-design/icons";
 import { api, errMsg } from "../api";
 import { useI18n } from "../i18n";
-import type { ApiVersion, ConfigGetDto, ConfigValidateResult, ControllerInfo, CriticalChange, DiscoveredController } from "../types";
+import type { ApiVersion, ConfigGetDto, ConfigValidateResult, ControllerInfo, CriticalChange, DiscoveredController, ScopeCandidate } from "../types";
 import { WifiSettingsDrawer } from "./WifiSettingsDrawer";
 import "./ControllerConfigPanel.css";
 
@@ -65,6 +65,7 @@ export function ControllerConfigPanel() {
   const [directOpen, setDirectOpen] = useState(false);
   const [directBusy, setDirectBusy] = useState(false);
   const [directFound, setDirectFound] = useState<DiscoveredController[]>([]);
+  const [scopeMap, setScopeMap] = useState<ScopeCandidate[]>([]);
 
   // 供轮询/异步回调读取最新值,避免闭包过期。
   const cidRef = useRef<string | null>(null);
@@ -114,7 +115,13 @@ export function ControllerConfigPanel() {
   const scanDirect = useCallback(async () => {
     setDirectBusy(true);
     try {
-      setDirectFound(await api.discoverDirectControllers());
+      // 网卡表和发现结果一起刷:插拔网卡后两者都会变,分开刷会出现对不上的瞬间。
+      const [found, scopes] = await Promise.all([
+        api.discoverDirectControllers(),
+        api.localScopeMap(),
+      ]);
+      setDirectFound(found);
+      setScopeMap(scopes);
     } catch (e) {
       message.error(errMsg(e));
     } finally {
@@ -614,6 +621,21 @@ export function ControllerConfigPanel() {
             </div>
           ))
         )}
+        <div className="cfg-scope-map">
+          <Typography.Text type="secondary" strong>
+            {t("cfgScopeMap")}
+          </Typography.Text>
+          <div>
+            <Typography.Text type="secondary">{t("cfgScopeMapHint")}</Typography.Text>
+          </div>
+          {scopeMap.map((iface) => (
+            <div key={iface.index} className="cfg-scope-map__row">
+              <Typography.Text code>%{iface.index}</Typography.Text>
+              <Typography.Text strong>{iface.name}</Typography.Text>
+              <Typography.Text type="secondary">{iface.addrs.join("  ")}</Typography.Text>
+            </div>
+          ))}
+        </div>
       </Modal>
       <WifiSettingsDrawer
         open={wifiOpen}

@@ -1808,6 +1808,16 @@ pub async fn arm_clear_fault(state: State<'_, AppState>) -> CmdResult<()> {
 
 // ───────────────────────── Controller Config(Zenoh)─────────────────────────
 
+/// 本机网卡的 名字 ↔ scope id 对应表。
+///
+/// IPv6 endpoint 里 `%` 后面那个数字就是 scope id,而它只是个索引、看不出是哪块网卡。
+/// GUI 把这张表摆出来,用户一眼就能判断某条候选走的是不是 Wi-Fi —— 那条虽然 TCP 连得通,
+/// 但控制器的 ignored_interfaces ACL 会把消息全拒掉,是"看着能连、其实用不了"的陷阱。
+#[tauri::command]
+pub fn local_scope_map() -> Vec<crate::zenoh_linklocal::ScopeCandidate> {
+    crate::zenoh_linklocal::scope_candidates()
+}
+
 /// mDNS 浏览一轮,列出直连/同网段的控制器及**可直接粘贴**的 endpoint。
 ///
 /// 不走 zenoh 的组播自动发现:后者把本机网卡列表缓存成进程级快照,链路本地地址若在
@@ -2406,7 +2416,11 @@ pub async fn zlift_connect(state: State<'_, AppState>, connect: String) -> CmdRe
     if g.is_some() {
         return Err("Lift Zenoh 已连接;先 disconnect".into());
     }
-    *g = Some(crate::zenoh_lift::ZenohLiftConn::open(&connect).await.map_err(err)?);
+    *g = Some(
+        crate::zenoh_lift::ZenohLiftConn::open(&connect)
+            .await
+            .map_err(err)?,
+    );
     log::info!("Lift Zenoh 已连接: {connect}");
     Ok(())
 }

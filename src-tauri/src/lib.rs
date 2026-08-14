@@ -300,6 +300,7 @@ pub fn run() {
             commands::arm_get_logs,
             commands::arm_clear_fault,
             commands::discover_direct_controllers,
+            commands::local_scope_map,
             commands::config_connect,
             commands::config_disconnect,
             commands::config_discover,

@@ -728,6 +728,14 @@ const STRINGS = {
   cfgDirectUse: { en: "Use", zh: "填入" },
   cfgDirectCopy: { en: "Copy", zh: "复制" },
   cfgDirectCopied: { en: "Copied", zh: "已复制" },
+  cfgScopeMap: {
+    en: "Local interfaces (the number after % in an IPv6 endpoint is this index)",
+    zh: "本机网卡(IPv6 endpoint 里 % 后面的数字就是这个索引)",
+  },
+  cfgScopeMapHint: {
+    en: "Use it to tell which candidate goes over Wi-Fi: that one may connect but the controller denies every message from Wi-Fi.",
+    zh: "据此判断哪条走 Wi-Fi:那条虽然连得上,但控制器会拒掉从 Wi-Fi 进来的所有消息。",
+  },
   cfgFound: { en: "Found", zh: "已发现" },
   cfgController: { en: "Controller", zh: "控制器" },
   cfgNoController: {
