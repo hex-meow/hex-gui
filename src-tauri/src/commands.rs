@@ -1808,6 +1808,22 @@ pub async fn arm_clear_fault(state: State<'_, AppState>) -> CmdResult<()> {
 
 // ───────────────────────── Controller Config(Zenoh)─────────────────────────
 
+/// mDNS 浏览一轮,列出直连/同网段的控制器及**可直接粘贴**的 endpoint。
+///
+/// 不走 zenoh 的组播自动发现:后者把本机网卡列表缓存成进程级快照,链路本地地址若在
+/// 进程启动之后才出现(macOS 等 DHCP 超时才自赋 169.254 就是典型),那块网卡会被永久
+/// 当成不可用,重启 GUI 才有救。mDNS 用实时系统 API,不受此限。
+/// 详见 hex-controller/todo/direct-cable-discovery.md。
+#[tauri::command]
+pub async fn discover_direct_controllers() -> CmdResult<Vec<crate::zenoh_mdns::DiscoveredController>>
+{
+    // browse() 会阻塞整个浏览窗口,不能占用 async 执行器。
+    tokio::task::spawn_blocking(crate::zenoh_mdns::browse)
+        .await
+        .map_err(|e| format!("mDNS 浏览任务失败:{e}"))?
+        .map_err(err)
+}
+
 /// 连接到控制器网络(config 面板专用 Session)。`connect` 空=仅多播发现。
 #[tauri::command]
 pub async fn config_connect(state: State<'_, AppState>, connect: String) -> CmdResult<()> {

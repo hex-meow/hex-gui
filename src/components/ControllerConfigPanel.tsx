@@ -9,7 +9,7 @@ import { App as AntdApp, Alert, Button, Input, Modal, Select, Switch, Tag, Toolt
 import { ReloadOutlined } from "@ant-design/icons";
 import { api, errMsg } from "../api";
 import { useI18n } from "../i18n";
-import type { ApiVersion, ConfigGetDto, ConfigValidateResult, ControllerInfo, CriticalChange } from "../types";
+import type { ApiVersion, ConfigGetDto, ConfigValidateResult, ControllerInfo, CriticalChange, DiscoveredController } from "../types";
 import { WifiSettingsDrawer } from "./WifiSettingsDrawer";
 import "./ControllerConfigPanel.css";
 
@@ -61,6 +61,10 @@ export function ControllerConfigPanel() {
   const [pending, setPending] = useState<Pending | null>(null);
   const [pendingLoading, setPendingLoading] = useState(false);
   const [wifiOpen, setWifiOpen] = useState(false);
+  // 直连发现:走 mDNS,不依赖 zenoh 组播(后者缓存网卡列表,插网线后必须重启 GUI 才认)。
+  const [directOpen, setDirectOpen] = useState(false);
+  const [directBusy, setDirectBusy] = useState(false);
+  const [directFound, setDirectFound] = useState<DiscoveredController[]>([]);
 
   // 供轮询/异步回调读取最新值,避免闭包过期。
   const cidRef = useRef<string | null>(null);
@@ -105,6 +109,34 @@ export function ControllerConfigPanel() {
       }
     },
     [applyLoaded, message]
+  );
+
+  const scanDirect = useCallback(async () => {
+    setDirectBusy(true);
+    try {
+      setDirectFound(await api.discoverDirectControllers());
+    } catch (e) {
+      message.error(errMsg(e));
+    } finally {
+      setDirectBusy(false);
+    }
+  }, [message]);
+
+  const openDirect = useCallback(() => {
+    setDirectOpen(true);
+    void scanDirect();
+  }, [scanDirect]);
+
+  const copyEndpoint = useCallback(
+    async (value: string) => {
+      try {
+        await navigator.clipboard.writeText(value);
+        message.success(t("cfgDirectCopied"));
+      } catch {
+        message.error(errMsg("clipboard"));
+      }
+    },
+    [message, t],
   );
 
   const connect = useCallback(async () => {
@@ -371,6 +403,9 @@ export function ControllerConfigPanel() {
               {t("cfgConnect")}
             </Button>
           )}
+          <Button disabled={connected} onClick={openDirect}>
+            {t("cfgDirect")}
+          </Button>
           <Button disabled={!connected} onClick={discover}>
             {t("cfgDiscover")}
           </Button>
@@ -529,6 +564,55 @@ export function ControllerConfigPanel() {
               ))}
             </div>
           </>
+        )}
+      </Modal>
+      <Modal
+        open={directOpen}
+        title={t("cfgDirectTitle")}
+        onCancel={() => setDirectOpen(false)}
+        footer={
+          <Button icon={<ReloadOutlined />} loading={directBusy} onClick={scanDirect}>
+            {t("cfgDiscover")}
+          </Button>
+        }
+        width={720}
+      >
+        <Typography.Paragraph type="secondary">{t("cfgDirectHint")}</Typography.Paragraph>
+        {directFound.length === 0 ? (
+          <Alert type="info" showIcon message={t("cfgDirectNone")} />
+        ) : (
+          directFound.map((found) => (
+            <div key={found.instance} className="cfg-direct-item">
+              <Typography.Text strong>{found.hostname}</Typography.Text>{" "}
+              <Typography.Text type="secondary" copyable={{ text: `ssh root@${found.hostname}` }}>
+                ssh root@{found.hostname}
+              </Typography.Text>
+              {found.endpoints.length === 0 ? (
+                <div>
+                  <Typography.Text type="warning">{t("cfgDirectUnreachable")}</Typography.Text>
+                </div>
+              ) : (
+                found.endpoints.map((ep) => (
+                  <div key={ep} className="cfg-direct-endpoint">
+                    <Typography.Text code>{ep}</Typography.Text>
+                    <Button
+                      size="small"
+                      type="primary"
+                      onClick={() => {
+                        setEndpoint(ep);
+                        setDirectOpen(false);
+                      }}
+                    >
+                      {t("cfgDirectUse")}
+                    </Button>
+                    <Button size="small" onClick={() => void copyEndpoint(ep)}>
+                      {t("cfgDirectCopy")}
+                    </Button>
+                  </div>
+                ))
+              )}
+            </div>
+          ))
         )}
       </Modal>
       <WifiSettingsDrawer

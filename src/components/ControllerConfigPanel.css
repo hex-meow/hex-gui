@@ -312,3 +312,22 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* 直连发现弹窗:每台设备一块,endpoint 逐行给"填入/复制"。 */
+.cfg-direct-item {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--ant-color-split, rgba(128, 128, 128, 0.2));
+}
+.cfg-direct-item:last-child {
+  border-bottom: none;
+}
+.cfg-direct-endpoint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.cfg-direct-endpoint > :first-child {
+  flex: 1;
+  overflow-wrap: anywhere;
+}

@@ -711,6 +711,23 @@ const STRINGS = {
   cfgConnect: { en: "Connect", zh: "连接" },
   cfgDisconnect: { en: "Disconnect", zh: "断开" },
   cfgDiscover: { en: "Discover controllers", zh: "发现控制器" },
+  cfgDirect: { en: "Direct connect", zh: "直连" },
+  cfgDirectTitle: { en: "Controllers on this machine's links", zh: "本机链路上的控制器" },
+  cfgDirectHint: {
+    en: "Found over mDNS. Pick an endpoint to fill in, or copy it for ssh/scripts. The first one is the most portable.",
+    zh: "经 mDNS 发现。选一条填入,或复制去 ssh/脚本用。第一条可移植性最好。",
+  },
+  cfgDirectNone: {
+    en: "Nothing found. On a direct cable, set that adapter's connection to Link-Local Only (both IPv4 and IPv6).",
+    zh: "没有发现。若是网线直连,请把该网卡的连接设成 Link-Local Only(IPv4 与 IPv6 都要)。",
+  },
+  cfgDirectUnreachable: {
+    en: "advertised but no endpoint is reachable from this machine",
+    zh: "有广播但本机连不通任何一条 endpoint",
+  },
+  cfgDirectUse: { en: "Use", zh: "填入" },
+  cfgDirectCopy: { en: "Copy", zh: "复制" },
+  cfgDirectCopied: { en: "Copied", zh: "已复制" },
   cfgFound: { en: "Found", zh: "已发现" },
   cfgController: { en: "Controller", zh: "控制器" },
   cfgNoController: {

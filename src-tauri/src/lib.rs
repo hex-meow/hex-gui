@@ -39,6 +39,7 @@ mod zenoh_hw;
 mod zenoh_lease;
 mod zenoh_lift;
 mod zenoh_linklocal;
+mod zenoh_mdns;
 mod zenoh_wifi;
 
 use std::sync::atomic::Ordering;
@@ -298,6 +299,7 @@ pub fn run() {
             commands::arm_get_events,
             commands::arm_get_logs,
             commands::arm_clear_fault,
+            commands::discover_direct_controllers,
             commands::config_connect,
             commands::config_disconnect,
             commands::config_discover,

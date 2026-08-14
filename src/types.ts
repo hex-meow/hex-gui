@@ -1171,3 +1171,10 @@ export interface MountEdge {
   xyz: [number, number, number];
   rpy: [number, number, number];
 }
+
+/// mDNS 发现到的控制器(直连/同网段)。endpoints 已按"复制出去还能用"排序,第一条最优。
+export type DiscoveredController = {
+  instance: string;
+  hostname: string;
+  endpoints: string[];
+};
