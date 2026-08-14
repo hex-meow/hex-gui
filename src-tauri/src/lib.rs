@@ -38,6 +38,7 @@ mod zenoh_ee;
 mod zenoh_hw;
 mod zenoh_lease;
 mod zenoh_lift;
+mod zenoh_linklocal;
 mod zenoh_wifi;
 
 use std::sync::atomic::Ordering;

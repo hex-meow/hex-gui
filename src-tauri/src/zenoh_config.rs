@@ -183,11 +183,82 @@ impl ZenohConfigConn {
         cfg.insert_json5("mode", "\"peer\"").unwrap();
         if !connect.is_empty() {
             cfg.insert_json5("connect/endpoints", &format!("[\"{connect}\"]")).unwrap();
+        } else {
+            // 空 endpoint = 靠自动发现。裸组播在**网线直连**场景下发现得到、连不上:
+            // 控制器广播的链路本地 locator 少了 scope,而 scope 只能由本机来补。
+            // 先 scout 一轮把它补好;补不到就照旧交给组播(局域网里本来就能用)。
+            //
+            // **全部**连得通的都要写进去,不能只取一条:一次 scout 可能同时看到直连线上的
+            // 控制器和局域网里的其他控制器,只连第一条会让 GUI 少列几台 —— 而且"第一条"
+            // 取决于 HELLO 到达顺序,等于随机挑一台。
+            let endpoints = Self::scout_link_local_endpoints().await;
+            if !endpoints.is_empty() {
+                let list = endpoints
+                    .iter()
+                    .map(|e| format!("\"{e}\""))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                cfg.insert_json5("connect/endpoints", &format!("[{list}]"))
+                    .unwrap();
+            }
         }
         let session = zenoh::open(cfg).await.map_err(|e| anyhow!("zenoh open: {e}"))?;
         // 给组播探测/建链一点时间,之后 discover 才能收到 <cid>/info 的回复。
         tokio::time::sleep(Duration::from_millis(700)).await;
         Ok(Self { session })
+    }
+
+    /// scout 一轮,把广播出来的 IPv6 链路本地 locator 补上本机 ifindex,返回**实测连得通**的。
+    ///
+    /// 见 [`crate::zenoh_linklocal`]:链路本地地址的 scope 是本机 ifindex,对端不可能替我们
+    /// 填,必须接收方自己补,且只能补数字。
+    async fn scout_link_local_endpoints() -> Vec<String> {
+        use zenoh::config::WhatAmIMatcher;
+
+        let scopes = crate::zenoh_linklocal::scope_candidates();
+        if scopes.is_empty() {
+            return Vec::new();
+        }
+        let cfg = zenoh::Config::default();
+        // scout 走 IPv4 组播(zenoh 默认 224.0.0.224:7446),所以直连网卡也需要一个 IPv4
+        // 地址 —— 链路本地(169.254/16)就够。用户侧把连接设成 Link-Local Only 即可,
+        // 见 hex-controller/todo/direct-cable-discovery.md。
+        let Ok(matcher) = "router".parse::<WhatAmIMatcher>() else {
+            return Vec::new();
+        };
+        let Ok(scout) = zenoh::scout(matcher, cfg).await else {
+            return Vec::new();
+        };
+        let mut locators: Vec<String> = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(1500);
+        loop {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(left, scout.recv_async()).await {
+                Ok(Ok(hello)) => {
+                    for locator in hello.locators() {
+                        let text = locator.to_string();
+                        if !locators.contains(&text) {
+                            locators.push(text);
+                        }
+                    }
+                }
+                _ => break,
+            }
+        }
+        let _ = scout.stop();
+        let candidates = crate::zenoh_linklocal::expand_candidates(&locators, &scopes);
+        let reachable = crate::zenoh_linklocal::reachable_endpoints(&candidates);
+        if reachable.is_empty() && !candidates.is_empty() {
+            log::warn!(
+                "scout 到 {} 条 locator,但没有一条连得通;\
+                 若是网线直连,请把该网卡的连接改成 Link-Local Only(IPv4 与 IPv6 都要)",
+                candidates.len()
+            );
+        }
+        reachable
     }
 
     /// 发现网络里的控制器:query `hexmeow/**/info` 收全部回复 → 解码 ControllerInfo → 剥 `/info` 得 cid。
@@ -267,5 +338,34 @@ impl ZenohConfigConn {
             .await
             .ok_or_else(|| anyhow!("restart 无回复"))?;
         Ok(RestartResult { ok: r.ok, robots: r.robots })
+    }
+}
+
+#[cfg(test)]
+mod link_local_live_tests {
+    use super::*;
+
+    /// 真硬件冒烟:需要一块网线直连的控制板。默认 `#[ignore]`,手动跑:
+    /// `cargo test --lib -- --ignored --nocapture direct_cable`
+    ///
+    /// 验证的是**完整的 GUI 发现路径**(空 endpoint → scout → 补 scope → 探测 → 连 → 查),
+    /// 不是某个纯函数 —— 这条链路上一半的坑都在真网卡行为里,单测碰不到。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore]
+    async fn direct_cable_discovery_finds_a_controller() {
+        let endpoints = ZenohConfigConn::scout_link_local_endpoints().await;
+        println!("补 scope 后连得通的 endpoint: {endpoints:?}");
+
+        let conn = ZenohConfigConn::open("").await.expect("open");
+        let found = conn.discover().await;
+        println!("发现 {} 个控制器:", found.len());
+        for c in &found {
+            println!("   cid={} robots={}", c.controller_id, c.robots.len());
+        }
+        assert!(
+            !found.is_empty(),
+            "没发现控制器。若是网线直连,先确认该网卡的连接是 Link-Local Only\
+             (IPv4 与 IPv6 都要),见 hex-controller/todo/direct-cable-discovery.md",
+        );
     }
 }
