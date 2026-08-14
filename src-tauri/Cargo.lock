@@ -1815,6 +1815,8 @@ dependencies = [
 [[package]]
 name = "hex-motor"
 version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7cb004ccee6766a297d524919c2feab95998e9ba31e0087f41e0deee4bcccf1"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -1830,7 +1832,7 @@ dependencies = [
 
 [[package]]
 name = "hex-motor-gui"
-version = "1.3.1"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
