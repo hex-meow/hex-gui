@@ -415,9 +415,20 @@ async fn disconnect_v1_4_locked(state: &AppState, stop_lift: bool) -> CmdResult<
 /// Confirm every extension-owned output is disabled before a manual
 /// disconnect releases the stock v1.4 manager and physical adapter.
 async fn stop_extension_runtime_locked(state: &AppState) -> CmdResult<()> {
-    stop_active_smartknob(state).await?;
-    stop_rollercan_control(state, false).await?;
-    stop_damiao_sessions(state).await?;
+    let failures = collect_extension_stop_failures(
+        stop_active_smartknob(state),
+        stop_rollercan_control(state, false),
+        stop_damiao_sessions(state),
+    )
+    .await;
+    if !failures.is_empty() {
+        // Keep every failed subsystem handle, the shared feature bus, and the
+        // active marker intact so Stop/disconnect can retry confirmed disable.
+        return Err(format!(
+            "failed to safely stop extension subsystem(s): {}",
+            failures.join("; ")
+        ));
+    }
     if let Some(app) = state.rollercan.lock().await.take() {
         app.stop().await;
     }
@@ -426,6 +437,27 @@ async fn stop_extension_runtime_locked(state: &AppState) -> CmdResult<()> {
         .extension_runtime_active
         .store(false, Ordering::Release);
     Ok(())
+}
+
+/// Run all independent confirmed-stop transactions even when an earlier one
+/// fails. Releasing the shared adapter remains the caller's responsibility and
+/// only happens when this returns no failures.
+async fn collect_extension_stop_failures(
+    smartknob_stop: impl std::future::Future<Output = CmdResult<()>>,
+    rollercan_control_stop: impl std::future::Future<Output = CmdResult<()>>,
+    damiao_stop: impl std::future::Future<Output = CmdResult<()>>,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    if let Err(error) = smartknob_stop.await {
+        failures.push(format!("SmartKnob: {error}"));
+    }
+    if let Err(error) = rollercan_control_stop.await {
+        failures.push(format!("RollerCAN Control: {error}"));
+    }
+    if let Err(error) = damiao_stop.await {
+        failures.push(format!("DAMIAO: {error}"));
+    }
+    failures
 }
 
 /// Best-effort variant used only after an extended window-close request.
@@ -500,6 +532,7 @@ async fn stop_active_smartknob(state: &AppState) -> CmdResult<()> {
 #[cfg(test)]
 mod extension_isolation_tests {
     use super::*;
+    use std::sync::Mutex as StdMutex;
 
     #[tokio::test]
     async fn failed_lazy_entry_restores_the_dormant_v1_4_path() {
@@ -512,6 +545,38 @@ mod extension_isolation_tests {
         assert!(!state.extension_runtime_active());
         assert!(state.feature_bus.lock().await.is_none());
         assert!(state.rollercan.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn extension_stop_attempts_every_subsystem_after_an_earlier_failure() {
+        let calls = Arc::new(StdMutex::new(Vec::new()));
+        let smartknob_calls = calls.clone();
+        let rollercan_calls = calls.clone();
+        let damiao_calls = calls.clone();
+
+        let failures = collect_extension_stop_failures(
+            async move {
+                smartknob_calls.lock().unwrap().push("smartknob");
+                Err("disable confirmation timed out".into())
+            },
+            async move {
+                rollercan_calls.lock().unwrap().push("rollercan-control");
+                Ok(())
+            },
+            async move {
+                damiao_calls.lock().unwrap().push("damiao");
+                Err("motor 0x1 did not confirm disable".into())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            *calls.lock().unwrap(),
+            ["smartknob", "rollercan-control", "damiao"]
+        );
+        assert_eq!(failures.len(), 2);
+        assert!(failures[0].starts_with("SmartKnob:"));
+        assert!(failures[1].starts_with("DAMIAO:"));
     }
 }
 
@@ -1849,7 +1914,7 @@ pub async fn smartknob_get_profile(
             let (enabled, rate_hz) = session.telemetry_settings(target.node_id);
             Ok(SmartKnobProfile {
                 target,
-                configs: crate::rollercan::preset_configs(),
+                configs: crate::rollercan::preset_configs().to_vec(),
                 control_side: SmartKnobControlSide::Firmware,
                 effort_unit: SmartKnobEffortUnit::Ampere,
                 supports_temperature: false,
@@ -2141,8 +2206,11 @@ pub async fn smartknob_clear_error(state: State<'_, AppState>) -> CmdResult<()> 
 #[tauri::command]
 pub async fn smartknob_set_custom_config(
     state: State<'_, AppState>,
-    config: crate::smartknob::KnobConfig,
+    mut config: crate::smartknob::KnobConfig,
 ) -> CmdResult<()> {
+    // This command exclusively updates mode 0. Do not trust an omitted or
+    // stale frontend discriminator to turn live custom-mode updates off.
+    config.is_custom = true;
     let guard = state.smartknob.lock().await;
     match guard.as_ref() {
         Some(ActiveSmartKnob::Canopen(app)) => app.set_custom_config(config),

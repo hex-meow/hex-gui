@@ -32,8 +32,10 @@ export function useRollerCanControlTelemetry(
   useEffect(() => {
     if (nodeId == null || !connected) return;
     let alive = true;
+    let pollTimer: number | undefined;
 
     const tick = async () => {
+      const started = performance.now();
       try {
         const next = await api.rollerCanControlGetState(nodeId);
         if (!alive) return;
@@ -49,22 +51,30 @@ export function useRollerCanControlTelemetry(
           current: next.current_ma,
         });
         const cutoff = now - BUFFER_MS;
-        while (buffer.length > 0 && buffer[0].t < cutoff) buffer.shift();
+        let removeCount = 0;
+        while (removeCount < buffer.length && buffer[removeCount].t < cutoff) {
+          removeCount += 1;
+        }
+        if (removeCount > 0) buffer.splice(0, removeCount);
       } catch {
         // Attach/detach and disconnect races are transient; the next tick
         // either succeeds or the component is unmounted.
+      } finally {
+        if (alive) {
+          const elapsed = performance.now() - started;
+          pollTimer = window.setTimeout(tick, Math.max(0, intervalMs - elapsed));
+        }
       }
     };
 
     void tick();
-    const pollTimer = window.setInterval(tick, intervalMs);
     const chartTimer = window.setInterval(
       () => alive && setChartVersion((version) => version + 1),
       intervalMs,
     );
     return () => {
       alive = false;
-      window.clearInterval(pollTimer);
+      if (pollTimer != null) window.clearTimeout(pollTimer);
       window.clearInterval(chartTimer);
     };
   }, [connected, intervalMs, nodeId]);

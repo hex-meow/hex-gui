@@ -970,4 +970,40 @@ mod tests {
         assert_eq!(view.current_ma, Some(450.0));
         assert_eq!(view.voltage_v, Some(16.02));
     }
+
+    #[test]
+    fn status_and_parameter_frames_use_the_same_physical_units() {
+        let state = Arc::new(StdMutex::new(SharedState::default()));
+        let now = Instant::now();
+        let raw_id = (0x02 << 24)
+            | (1 << 22)
+            | (RollerCanControlMode::Speed.raw() as u32) << 19
+            | u32::from(DEFAULT_NODE_ID) << 8;
+        let mut status = [0u8; 8];
+        status[0..2].copy_from_slice(&(-1234i16).to_le_bytes());
+        status[2..4].copy_from_slice(&(90i16).to_le_bytes());
+        status[4..6].copy_from_slice(&(450i16).to_le_bytes());
+        status[6..8].copy_from_slice(&(16i16).to_le_bytes());
+        ingest_status(&state, raw_id, &status, now);
+
+        {
+            let mut shared = state.lock().unwrap();
+            let view = &mut shared.nodes.get_mut(&DEFAULT_NODE_ID).unwrap().view;
+            assert_eq!(view.speed_rpm, Some(-1234.0));
+            assert_eq!(view.position_deg, Some(90.0));
+            assert_eq!(view.current_ma, Some(450.0));
+            assert_eq!(view.voltage_v, Some(16.0));
+
+            // The public M5Stack status frame is already expressed in rpm,
+            // degrees, mA and V; 0x7030..0x7034 readbacks are centi-units.
+            apply_parameter(view, OD_SPEED_READBACK, -123_400);
+            apply_parameter(view, OD_POSITION_READBACK, 9_000);
+            apply_parameter(view, OD_CURRENT_READBACK, 45_000);
+            apply_parameter(view, OD_VIN, 1_600);
+            assert_eq!(view.speed_rpm, Some(-1234.0));
+            assert_eq!(view.position_deg, Some(90.0));
+            assert_eq!(view.current_ma, Some(450.0));
+            assert_eq!(view.voltage_v, Some(16.0));
+        }
+    }
 }

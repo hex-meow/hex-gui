@@ -386,8 +386,8 @@ export const TUTORIALS: Record<string, Slide[]> = {
     {
       title: { en: "1 · Discover and select a motor", zh: "1 · 自动发现并选择电机" },
       body: {
-        en: "Connect a 1 Mbps CAN bus. IDs 0x0–0xF are scanned automatically with status requests and motion-safe Disable probes; select a discovered motor in the left list. Use manual configuration only for an exceptional ID.",
-        zh: "连接 1 Mbps CAN 总线后，系统会通过状态查询和安全失能探测自动扫描 ID 0x0–0xF；在左侧列表选择电机即可。仅在使用特殊 ID 时才需要手动配置。",
+        en: "Hard prerequisite: this 1 Mbps bus must contain DAMIAO motors only; do not mix CANopen or other motor families on the same bus. IDs 0x0–0xF are scanned automatically with status requests and motion-safe Disable probes; select a discovered motor in the left list. Use manual configuration only for an exceptional ID.",
+        zh: "硬性前置条件：这条 1 Mbps 总线只能连接达妙电机，严禁与 CANopen 或其他类型电机混接。系统会通过状态查询和安全失能探测自动扫描 ID 0x0–0xF；在左侧列表选择电机即可。仅在使用特殊 ID 时才需要手动配置。",
       },
     },
     {
@@ -409,8 +409,8 @@ export const TUTORIALS: Record<string, Slide[]> = {
     {
       title: { en: "1 · Connect and discover", zh: "1 · 连接并发现" },
       body: {
-        en: "Connect a CAN interface configured for 1 Mbps. The workspace scans 8-bit RollerCAN IDs with harmless extended-frame pings; the stock default is 0xA8.",
-        zh: "连接配置为 1 Mbps 的 CAN 接口。工作区会用无动作的扩展帧 ping 扫描 8 位 RollerCAN ID；原厂默认 ID 为 0xA8。",
+        en: "Hard prerequisite: this 1 Mbps bus must contain stock-firmware Unit RollerCAN motors only; do not mix CANopen or other motor families on the same bus. The workspace scans 8-bit RollerCAN IDs with harmless extended-frame pings; the stock default is 0xA8.",
+        zh: "硬性前置条件：这条 1 Mbps 总线只能连接使用原厂控制固件的 Unit RollerCAN 电机，严禁与 CANopen 或其他类型电机混接。工作区会用无动作的扩展帧 ping 扫描 8 位 RollerCAN ID；原厂默认 ID 为 0xA8。",
       },
     },
     {

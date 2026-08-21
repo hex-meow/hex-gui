@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
@@ -331,7 +331,13 @@ fn preset(
 /// of sharing `smartknob::preset_configs()`: RollerCAN is direct-drive and uses
 /// current commands, while the native SmartKnob path targets the HEX actuator's
 /// torque interface.
-pub fn preset_configs() -> Vec<KnobConfig> {
+static PRESET_CONFIGS: LazyLock<Vec<KnobConfig>> = LazyLock::new(build_preset_configs);
+
+pub fn preset_configs() -> &'static [KnobConfig] {
+    PRESET_CONFIGS.as_slice()
+}
+
+fn build_preset_configs() -> Vec<KnobConfig> {
     let p = preset;
     vec![
         KnobConfig {
@@ -1825,6 +1831,7 @@ fn update_firmware_motion(state: &mut crate::smartknob::SmartKnobState, data: &[
 }
 
 fn sanitize_custom_config(mut c: KnobConfig) -> KnobConfig {
+    c.is_custom = true;
     c.position_width_radians = finite_at_least(c.position_width_radians, 0.001);
     c.p_gain = finite_nonnegative(c.p_gain);
     c.d_gain = finite_nonnegative(c.d_gain);
@@ -2814,7 +2821,7 @@ mod tests {
     #[test]
     fn tuning_uses_rollercan_config_values_without_extra_scaling() {
         let cfg = preset_configs()
-            .into_iter()
+            .iter()
             .find(|cfg| cfg.text == "On/off\nStrong detent")
             .expect("rollercan on/off preset");
         let tuning = Tuning::from_config(&cfg);

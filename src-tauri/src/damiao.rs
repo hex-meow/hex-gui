@@ -35,6 +35,9 @@ const STATUS_REQUEST_PERIOD: Duration = Duration::from_millis(100);
 const TARGET_STREAM_PERIOD: Duration = Duration::from_millis(20);
 const MODE_SWITCH_SETTLE: Duration = Duration::from_millis(100);
 const FEEDBACK_RATE_WINDOW: Duration = Duration::from_millis(500);
+const DM_J4310_MAPPING_P_MAX_RAD: f32 = 12.5;
+const DM_J4310_MAPPING_V_MAX_RAD_S: f32 = 30.0;
+const DM_J4310_MAPPING_T_MAX_NM: f32 = 10.0;
 const DM_J4310_PEAK_TORQUE_NM: f32 = 7.0;
 const DM_J4310_MAX_SPEED_RAD_S: f32 = 200.0 * std::f32::consts::TAU / 60.0;
 
@@ -90,6 +93,15 @@ impl DamiaoConfig {
         ] {
             if !value.is_finite() || value <= 0.0 {
                 bail!("{name} must be a finite positive number");
+            }
+        }
+        for (name, value, maximum) in [
+            ("PMAX", self.p_max, DM_J4310_MAPPING_P_MAX_RAD),
+            ("VMAX", self.v_max, DM_J4310_MAPPING_V_MAX_RAD_S),
+            ("TMAX", self.t_max, DM_J4310_MAPPING_T_MAX_NM),
+        ] {
+            if value > maximum {
+                bail!("{name} exceeds the DM-J4310-2EC V1.1 supported mapping maximum {maximum}");
             }
         }
         Ok(self)
@@ -238,7 +250,8 @@ impl DamiaoDiscovery {
 
     pub fn snapshot(&self) -> Vec<DamiaoDiscoveredDevice> {
         let now = Instant::now();
-        let state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        prune_discovery_devices(&mut state, now);
         state
             .devices
             .iter()
@@ -304,23 +317,7 @@ async fn discovery_receive_loop(
                 };
                 let now = Instant::now();
                 let mut shared = state.lock().unwrap();
-                let expected = shared.pending.is_some_and(|probe| {
-                    probe.motor_id == motor_id
-                        && now.saturating_duration_since(probe.sent_at) <= DISCOVERY_RESPONSE_WINDOW
-                });
-                if !expected && !shared.devices.contains_key(&motor_id) {
-                    continue;
-                }
-                let entry = shared.devices.entry(motor_id).or_insert(DiscoveredEntry {
-                    feedback_can_id,
-                    status_code,
-                    last_feedback: now,
-                    rx_count: 0,
-                });
-                entry.feedback_can_id = feedback_can_id;
-                entry.status_code = status_code;
-                entry.last_feedback = now;
-                entry.rx_count = entry.rx_count.saturating_add(1);
+                record_discovery_feedback(&mut shared, motor_id, feedback_can_id, status_code, now);
             }
             Err(CanIoError::Lagged { .. }) => {}
             Err(error) => {
@@ -348,7 +345,8 @@ async fn discovery_scan_loop(
             force_safe_sweep = true;
         }
         let use_legacy_disable = {
-            let shared = state.lock().unwrap();
+            let mut shared = state.lock().unwrap();
+            prune_discovery_devices(&mut shared, Instant::now());
             let stale_or_unknown = shared.devices.get(&motor_id).map_or(true, |entry| {
                 Instant::now().saturating_duration_since(entry.last_feedback) > DISCOVERY_FRESH_FOR
             });
@@ -369,6 +367,13 @@ async fn discovery_scan_loop(
             sent_at: Instant::now(),
         });
         if let Err(error) = bus.send(frame).await {
+            let mut shared = state.lock().unwrap();
+            if shared
+                .pending
+                .is_some_and(|probe| probe.motor_id == motor_id)
+            {
+                shared.pending = None;
+            }
             log::warn!("DAMIAO discovery probe for ID 0x{motor_id:X} failed: {error}");
         }
 
@@ -380,6 +385,49 @@ async fn discovery_scan_loop(
             motor_id += 1;
         }
     }
+}
+
+fn record_discovery_feedback(
+    shared: &mut DiscoveryState,
+    motor_id: u16,
+    feedback_can_id: u16,
+    status_code: u8,
+    now: Instant,
+) -> bool {
+    let expected = shared.pending.is_some_and(|probe| {
+        probe.motor_id == motor_id
+            && now.saturating_duration_since(probe.sent_at) <= DISCOVERY_RESPONSE_WINDOW
+    });
+    if expected {
+        shared.pending = None;
+    }
+
+    let known_and_fresh = shared.devices.get(&motor_id).is_some_and(|entry| {
+        now.saturating_duration_since(entry.last_feedback) <= DISCOVERY_FRESH_FOR
+    });
+    if !expected && !known_and_fresh && !shared.attached.contains(&motor_id) {
+        return false;
+    }
+
+    let entry = shared.devices.entry(motor_id).or_insert(DiscoveredEntry {
+        feedback_can_id,
+        status_code,
+        last_feedback: now,
+        rx_count: 0,
+    });
+    entry.feedback_can_id = feedback_can_id;
+    entry.status_code = status_code;
+    entry.last_feedback = now;
+    entry.rx_count = entry.rx_count.saturating_add(1);
+    true
+}
+
+fn prune_discovery_devices(shared: &mut DiscoveryState, now: Instant) {
+    let attached = shared.attached.clone();
+    shared.devices.retain(|motor_id, entry| {
+        attached.contains(motor_id)
+            || now.saturating_duration_since(entry.last_feedback) <= DISCOVERY_FRESH_FOR
+    });
 }
 
 fn feedback_identity(data: &[u8]) -> Option<(u16, u8)> {
@@ -671,7 +719,7 @@ async fn receive_loop(
                     continue;
                 }
                 match decode_feedback(config, frame.data()) {
-                    Ok(feedback) => {
+                    Ok(Some(feedback)) => {
                         let mut shared = state.lock().unwrap();
                         if let CanId::Standard(id) = frame.id() {
                             shared.view.feedback_can_id = Some(id);
@@ -688,7 +736,7 @@ async fn receive_loop(
                         shared.view.last_error = None;
                         record_feedback_timing(&mut shared, Instant::now());
                     }
-                    Err(error) if error.to_string().contains("different motor") => {}
+                    Ok(None) => {}
                     Err(error) => set_last_error(&state, error),
                 }
             }
@@ -698,9 +746,15 @@ async fn receive_loop(
                     anyhow!("DAMIAO feedback dropped {dropped} CAN frames"),
                 );
             }
+            Err(CanIoError::Disconnected) => {
+                set_last_error(&state, anyhow!("DAMIAO feedback receive disconnected"));
+                break;
+            }
             Err(error) => {
                 set_last_error(&state, anyhow!("DAMIAO feedback receive failed: {error}"));
-                break;
+                // Backend errors may be transient (for example, recovery from
+                // a controller fault). Avoid killing the session permanently.
+                tokio::time::sleep(STATUS_REQUEST_PERIOD).await;
             }
         }
     }
@@ -723,7 +777,6 @@ async fn refresh_loop(
         };
         if let Err(error) = bus.send(frame).await {
             set_last_error(&state, anyhow!("request DAMIAO status: {error}"));
-            break;
         }
     }
 }
@@ -880,11 +933,34 @@ fn encode_target(config: DamiaoConfig, target: DamiaoTarget) -> Result<[u8; 8]> 
             if !(-command_t_max..=command_t_max).contains(&torque_nm) {
                 bail!("torque exceeds the DM-J4310-2EC V1.1 7 Nm peak limit");
             }
-            let position =
-                float_to_uint(position_rad, -config.p_max, config.p_max, 16, "position")?;
-            let velocity =
-                float_to_uint(velocity_rad_s, -config.v_max, config.v_max, 12, "velocity")?;
-            let torque = float_to_uint(torque_nm, -config.t_max, config.t_max, 12, "torque")?;
+            if !(-config.p_max..=config.p_max).contains(&position_rad) {
+                bail!("position must be in {}..={}", -config.p_max, config.p_max);
+            }
+            // Encode against the model's standard mapping ceilings rather
+            // than a possibly mistyped smaller UI value. A smaller configured
+            // mapping therefore makes a command conservative instead of
+            // turning (for example) 1 Nm into a full-scale 10 Nm request.
+            let position = float_to_uint(
+                position_rad,
+                -DM_J4310_MAPPING_P_MAX_RAD,
+                DM_J4310_MAPPING_P_MAX_RAD,
+                16,
+                "position",
+            )?;
+            let velocity = float_to_uint(
+                velocity_rad_s,
+                -DM_J4310_MAPPING_V_MAX_RAD_S,
+                DM_J4310_MAPPING_V_MAX_RAD_S,
+                12,
+                "velocity",
+            )?;
+            let torque = float_to_uint(
+                torque_nm,
+                -DM_J4310_MAPPING_T_MAX_NM,
+                DM_J4310_MAPPING_T_MAX_NM,
+                12,
+                "torque",
+            )?;
             let kp = float_to_uint(kp, 0.0, 500.0, 12, "Kp")?;
             let kd = float_to_uint(kd, 0.0, 5.0, 12, "Kd")?;
             Ok([
@@ -969,12 +1045,12 @@ struct Feedback {
     rotor_temp_c: u8,
 }
 
-fn decode_feedback(config: DamiaoConfig, data: &[u8]) -> Result<Feedback> {
+fn decode_feedback(config: DamiaoConfig, data: &[u8]) -> Result<Option<Feedback>> {
     if data.len() != 8 {
         bail!("DAMIAO feedback must contain 8 bytes");
     }
     if data[0] & 0x0F != config.motor_id as u8 & 0x0F {
-        bail!("DAMIAO feedback belongs to a different motor");
+        return Ok(None);
     }
     let status_code = data[0] >> 4;
     if !matches!(status_code, 0x0 | 0x1 | 0x8..=0xE) {
@@ -983,14 +1059,14 @@ fn decode_feedback(config: DamiaoConfig, data: &[u8]) -> Result<Feedback> {
     let position = u16::from_be_bytes([data[1], data[2]]);
     let velocity = (u16::from(data[3]) << 4) | u16::from(data[4] >> 4);
     let torque = (u16::from(data[4] & 0x0F) << 8) | u16::from(data[5]);
-    Ok(Feedback {
+    Ok(Some(Feedback {
         status_code,
         position_rad: uint_to_float(position, -config.p_max, config.p_max, 16),
         velocity_rad_s: uint_to_float(velocity, -config.v_max, config.v_max, 12),
         torque_nm: uint_to_float(torque, -config.t_max, config.t_max, 12),
         mos_temp_c: data[6],
         rotor_temp_c: data[7],
-    })
+    }))
 }
 
 fn status_name(code: u8) -> &'static str {
@@ -1197,6 +1273,41 @@ mod tests {
     }
 
     #[test]
+    fn discovery_consumes_matching_probes_and_expires_detached_devices() {
+        let started = Instant::now();
+        let mut state = DiscoveryState {
+            pending: Some(PendingProbe {
+                motor_id: 1,
+                sent_at: started,
+            }),
+            ..DiscoveryState::default()
+        };
+
+        assert!(record_discovery_feedback(
+            &mut state,
+            1,
+            0,
+            1,
+            started + Duration::from_millis(10),
+        ));
+        assert!(state.pending.is_none());
+        assert!(state.devices.contains_key(&1));
+
+        let expired_at = started + DISCOVERY_FRESH_FOR + Duration::from_millis(11);
+        prune_discovery_devices(&mut state, expired_at);
+        assert!(!state.devices.contains_key(&1));
+
+        // A late unsolicited frame cannot resurrect an expired, detached ID.
+        assert!(!record_discovery_feedback(&mut state, 1, 0, 1, expired_at));
+        assert!(!state.devices.contains_key(&1));
+
+        // Attached sessions remain visible while offline and may recover from
+        // feedback without waiting for the scanner's current probe slot.
+        state.attached.insert(1);
+        assert!(record_discovery_feedback(&mut state, 1, 0, 1, expired_at));
+    }
+
+    #[test]
     fn encodes_mit_neutral_at_mapping_midpoints() {
         let bytes = encode_target(
             config(DamiaoMode::Mit),
@@ -1210,6 +1321,76 @@ mod tests {
         )
         .unwrap();
         assert_eq!(bytes, [0x7F, 0xFF, 0x7F, 0xF0, 0x00, 0x00, 0x07, 0xFF]);
+    }
+
+    #[test]
+    fn smaller_declared_mapping_cannot_turn_safe_mit_targets_into_full_scale() {
+        let small_mapping = DamiaoConfig {
+            p_max: 1.0,
+            v_max: 1.0,
+            t_max: 1.0,
+            ..config(DamiaoMode::Mit)
+        };
+        let bytes = encode_target(
+            small_mapping,
+            DamiaoTarget::Mit {
+                position_rad: 1.0,
+                velocity_rad_s: 1.0,
+                torque_nm: 1.0,
+                kp: 0.0,
+                kd: 0.0,
+            },
+        )
+        .unwrap();
+        let velocity = (u16::from(bytes[2]) << 4) | u16::from(bytes[3] >> 4);
+        let torque = (u16::from(bytes[6] & 0x0F) << 8) | u16::from(bytes[7]);
+
+        assert_eq!(
+            velocity,
+            float_to_uint(
+                1.0,
+                -DM_J4310_MAPPING_V_MAX_RAD_S,
+                DM_J4310_MAPPING_V_MAX_RAD_S,
+                12,
+                "velocity"
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            torque,
+            float_to_uint(
+                1.0,
+                -DM_J4310_MAPPING_T_MAX_NM,
+                DM_J4310_MAPPING_T_MAX_NM,
+                12,
+                "torque"
+            )
+            .unwrap()
+        );
+        assert_ne!(velocity, 0x0FFF);
+        assert_ne!(torque, 0x0FFF);
+    }
+
+    #[test]
+    fn rejects_mapping_values_above_the_supported_model_ranges() {
+        assert!(DamiaoConfig {
+            p_max: DM_J4310_MAPPING_P_MAX_RAD + 0.1,
+            ..config(DamiaoMode::Mit)
+        }
+        .validate()
+        .is_err());
+        assert!(DamiaoConfig {
+            v_max: DM_J4310_MAPPING_V_MAX_RAD_S + 0.1,
+            ..config(DamiaoMode::Mit)
+        }
+        .validate()
+        .is_err());
+        assert!(DamiaoConfig {
+            t_max: DM_J4310_MAPPING_T_MAX_NM + 0.1,
+            ..config(DamiaoMode::Mit)
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]
@@ -1260,13 +1441,20 @@ mod tests {
             config(DamiaoMode::Mit),
             &[0x11, 0x7F, 0xFF, 0x7F, 0xF7, 0xFF, 42, 39],
         )
-        .unwrap();
+        .unwrap()
+        .expect("feedback for configured motor");
         assert_eq!(feedback.status_code, 1);
         assert!(feedback.position_rad.abs() < 0.001);
         assert!(feedback.velocity_rad_s.abs() < 0.02);
         assert!(feedback.torque_nm.abs() < 0.01);
         assert_eq!(feedback.mos_temp_c, 42);
         assert_eq!(feedback.rotor_temp_c, 39);
+        assert!(decode_feedback(
+            config(DamiaoMode::Mit),
+            &[0x12, 0x7F, 0xFF, 0x7F, 0xF7, 0xFF, 42, 39],
+        )
+        .unwrap()
+        .is_none());
     }
 
     #[test]

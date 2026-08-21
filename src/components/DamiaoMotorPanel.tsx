@@ -28,6 +28,9 @@ import { DamiaoLiveChart } from "./DamiaoLiveChart";
 import "./DamiaoMotorPanel.css";
 
 const MODE_OPTIONS: DamiaoMode[] = ["Mit", "PositionVelocity", "Velocity"];
+const MAPPING_P_MAX_RAD = 12.5;
+const MAPPING_V_MAX_RAD_S = 30;
+const MAPPING_T_MAX_NM = 10;
 const PHYSICAL_MAX_SPEED_RAD_S = (200 * 2 * Math.PI) / 60;
 const PHYSICAL_PEAK_TORQUE_NM = 7;
 const DEVICE_POLL_MS = 500;
@@ -214,9 +217,9 @@ function DamiaoMotorDetail({
   const [motorId, setMotorId] = useState(formatCanId(initialMotorId));
   const [masterId, setMasterId] = useState(formatCanId(initialDevice?.feedback_can_id ?? 0));
   const [mode, setMode] = useState<DamiaoMode>("Mit");
-  const [pMax, setPMax] = useState(12.5);
-  const [vMax, setVMax] = useState(30);
-  const [tMax, setTMax] = useState(10);
+  const [pMax, setPMax] = useState(MAPPING_P_MAX_RAD);
+  const [vMax, setVMax] = useState(MAPPING_V_MAX_RAD_S);
+  const [tMax, setTMax] = useState(MAPPING_T_MAX_NM);
   const [state, setState] = useState<DamiaoState | null>(null);
   const [busy, setBusy] = useState(false);
   const [repeat, setRepeat] = useState(true);
@@ -524,19 +527,19 @@ function DamiaoMotorDetail({
       <Card size="small" title={copy.mapping} extra={<Typography.Text type="secondary">{copy.mappingHint}</Typography.Text>}>
         <Space wrap>
           <Field label="PMAX (rad)">
-            <InputNumber min={0.001} value={pMax} disabled={attached} onChange={(value) => setPMax(value ?? 12.5)} />
+            <InputNumber min={0.001} max={MAPPING_P_MAX_RAD} value={pMax} disabled={attached} onChange={(value) => setPMax(value ?? MAPPING_P_MAX_RAD)} />
           </Field>
           <Tooltip title={copy.vmaxHint}>
             <span>
               <Field label="VMAX (rad/s)">
-                <InputNumber min={0.001} value={vMax} disabled={attached} onChange={(value) => setVMax(value ?? 30)} />
+                <InputNumber min={0.001} max={MAPPING_V_MAX_RAD_S} value={vMax} disabled={attached} onChange={(value) => setVMax(value ?? MAPPING_V_MAX_RAD_S)} />
               </Field>
             </span>
           </Tooltip>
           <Tooltip title={copy.tmaxHint}>
             <span>
               <Field label="TMAX (Nm)">
-                <InputNumber min={0.001} value={tMax} disabled={attached} onChange={(value) => setTMax(value ?? 10)} />
+                <InputNumber min={0.001} max={MAPPING_T_MAX_NM} value={tMax} disabled={attached} onChange={(value) => setTMax(value ?? MAPPING_T_MAX_NM)} />
               </Field>
             </span>
           </Tooltip>

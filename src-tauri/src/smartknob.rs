@@ -499,6 +499,7 @@ const MIN_POSITION_WIDTH_RAD: f64 = 0.001;
 /// feedback → self-accelerating knob). `max_position < min_position` is left
 /// alone — that is the documented "unbounded" convention.
 fn sanitize_custom_config(mut c: KnobConfig) -> KnobConfig {
+    c.is_custom = true;
     c.position_width_radians = finite_at_least(c.position_width_radians, MIN_POSITION_WIDTH_RAD);
     c.p_gain = finite_nonnegative(c.p_gain);
     c.d_gain = finite_nonnegative(c.d_gain);
@@ -1844,6 +1845,7 @@ mod tests {
 
         let sanitized = sanitize_custom_config(cfg);
 
+        assert!(sanitized.is_custom);
         assert_eq!(sanitized.position_width_radians, MIN_POSITION_WIDTH_RAD);
         assert_eq!(sanitized.p_gain, 0.0);
         assert_eq!(sanitized.d_gain, 0.0);
