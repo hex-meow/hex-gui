@@ -62,6 +62,56 @@ const SHUTDOWN_IDLE: u8 = 0;
 const SHUTDOWN_RUNNING: u8 = 1;
 const SHUTDOWN_COMPLETE: u8 = 2;
 
+/// A normal window close is postponed only while a bounded DFU or persistent
+/// settings/position transaction is active; the user can retry when it returns.
+/// Outside those mutations, closing must *always* succeed. The firmware fails
+/// safe on its own — the velocity RPDO watchdog coasts the bridge when the
+/// stream stops, autonomous Position/Homing moves are soft-limit bounded and
+/// end in coast, and IWDG + the LOCKUP hardware break cover a firmware crash.
+/// We make a time-boxed best-effort safe lift detach and then exit
+/// unconditionally whether or not its CAN handshake was acknowledged.
+fn request_safe_close(window: tauri::Window) {
+    let handle = window.app_handle().clone();
+    let mutation_gate = handle.state::<dfu_gate::DfuMutationGate>();
+    let hpm_dfu = handle.state::<hpm_dfu::DfuState>();
+    let can_dfu = handle.state::<stm32_can_dfu::CanDfuState>();
+    if mutation_gate.is_active() || hpm_dfu.is_active() || can_dfu.is_active() {
+        log::warn!("window close blocked while a DFU command is active");
+        let _ = window.emit("dfu-close-blocked", ());
+        return;
+    }
+    let state = handle.state::<AppState>();
+    if state.device_settings_operation.is_active() {
+        log::warn!("window close blocked while a device-settings command is active");
+        let _ = window.emit("device-settings-close-blocked", ());
+        return;
+    }
+    if state.lift_close_in_progress.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    tauri::async_runtime::spawn(async move {
+        let state = handle.state::<AppState>();
+        commands::stop_friction_calibration(&state).await;
+        commands::stop_torque_calibration(&state).await;
+        match tokio::time::timeout(LIFT_CLOSE_STOP_BUDGET, commands::stop_lift_session(&state))
+            .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                log::warn!(
+                    "lift stop on close reported {error}; exiting anyway (firmware fails safe)"
+                )
+            }
+            Err(_) => log::warn!(
+                "lift stop on close timed out after {} ms; exiting anyway (firmware fails safe)",
+                LIFT_CLOSE_STOP_BUDGET.as_millis()
+            ),
+        }
+        handle.exit(0);
+    });
+}
+
 #[derive(Clone, Copy)]
 enum ShutdownBlocker {
     Dfu,
@@ -90,7 +140,10 @@ fn shutdown_blocker<R: tauri::Runtime>(
 /// Stop every active hardware application before the native window exits.
 /// Lift keeps its upstream 1.5 s fail-safe budget; the remaining CANopen and
 /// RollerCAN cleanup is bounded by the shared 30 s last-resort guard.
-fn begin_safe_shutdown<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, phase: &Arc<AtomicU8>) {
+fn begin_extension_safe_shutdown<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+    phase: &Arc<AtomicU8>,
+) {
     if phase
         .compare_exchange(
             SHUTDOWN_IDLE,
@@ -125,7 +178,7 @@ fn begin_safe_shutdown<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, phas
                     LIFT_CLOSE_STOP_BUDGET.as_millis()
                 ),
             }
-            commands::disconnect_state(&state).await;
+            commands::disconnect_extension_state(&state).await;
         };
         if tokio::time::timeout(SAFE_SHUTDOWN_BUDGET, cleanup)
             .await
@@ -141,7 +194,7 @@ fn begin_safe_shutdown<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, phas
     });
 }
 
-fn request_safe_close(window: tauri::Window, phase: &Arc<AtomicU8>) {
+fn request_extension_safe_close(window: tauri::Window, phase: &Arc<AtomicU8>) {
     match shutdown_blocker(window.app_handle()) {
         Some(ShutdownBlocker::Dfu) => {
             log::warn!("window close blocked while a DFU command is active");
@@ -151,7 +204,7 @@ fn request_safe_close(window: tauri::Window, phase: &Arc<AtomicU8>) {
             log::warn!("window close blocked while a device-settings command is active");
             let _ = window.emit("device-settings-close-blocked", ());
         }
-        None => begin_safe_shutdown(window.app_handle(), phase),
+        None => begin_extension_safe_shutdown(window.app_handle(), phase),
     }
 }
 
@@ -160,16 +213,30 @@ pub fn run() {
         env_logger::Env::default().default_filter_or("info,hex_motor=info,hex_motor_gui_lib=info"),
     )
     .try_init();
-    let _timer_resolution = request_timer_resolution();
-
-    let shutdown_phase = Arc::new(AtomicU8::new(SHUTDOWN_IDLE));
-    let close_phase = shutdown_phase.clone();
-    let app = tauri::Builder::default()
+    let close_phase = Arc::new(AtomicU8::new(SHUTDOWN_IDLE));
+    tauri::Builder::default()
         .manage(AppState::default())
         .manage(can_lease::CanTransportGate::default())
         .manage(dfu_gate::DfuMutationGate::default())
         .manage(hpm_dfu::DfuState::default())
         .manage(stm32_can_dfu::CanDfuState::default())
+        .on_window_event(move |window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if close_phase.load(Ordering::SeqCst) == SHUTDOWN_COMPLETE {
+                    return;
+                }
+                api.prevent_close();
+                if window
+                    .app_handle()
+                    .state::<AppState>()
+                    .extension_runtime_active()
+                {
+                    request_extension_safe_close(window.clone(), &close_phase);
+                } else {
+                    request_safe_close(window.clone());
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::connect,
             commands::disconnect,
@@ -402,61 +469,6 @@ pub fn run() {
             stm32_can_dfu::stm32_can_dfu_cancel,
             stm32_can_dfu::stm32_can_dfu_leave,
         ])
-        .on_window_event(move |window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if close_phase.load(Ordering::SeqCst) != SHUTDOWN_COMPLETE {
-                    api.prevent_close();
-                    request_safe_close(window.clone(), &close_phase);
-                }
-            }
-        })
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application");
-
-    let run_phase = shutdown_phase;
-    app.run(move |app_handle, event| {
-        if let tauri::RunEvent::ExitRequested { api, .. } = event {
-            if run_phase.load(Ordering::SeqCst) != SHUTDOWN_COMPLETE {
-                api.prevent_exit();
-                match shutdown_blocker(app_handle) {
-                    Some(ShutdownBlocker::Dfu) => {
-                        log::warn!("application exit blocked while a DFU command is active");
-                    }
-                    Some(ShutdownBlocker::DeviceSettings) => {
-                        log::warn!(
-                            "application exit blocked while a device-settings command is active"
-                        );
-                    }
-                    None => begin_safe_shutdown(app_handle, &run_phase),
-                }
-            }
-        }
-    });
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }
-
-#[cfg(windows)]
-struct TimerResolutionGuard;
-
-#[cfg(windows)]
-impl Drop for TimerResolutionGuard {
-    fn drop(&mut self) {
-        unsafe {
-            windows_sys::Win32::Media::timeEndPeriod(1);
-        }
-    }
-}
-
-#[cfg(windows)]
-fn request_timer_resolution() -> Option<TimerResolutionGuard> {
-    let result = unsafe { windows_sys::Win32::Media::timeBeginPeriod(1) };
-    if result == 0 {
-        log::info!("Windows timer resolution requested at 1 ms");
-        Some(TimerResolutionGuard)
-    } else {
-        log::warn!("Windows timeBeginPeriod(1) failed: {result}");
-        None
-    }
-}
-
-#[cfg(not(windows))]
-fn request_timer_resolution() {}

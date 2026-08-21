@@ -511,7 +511,7 @@ function DamiaoMotorDetail({
 
   const connectionPanel = (
     <Space direction="vertical" size={12} style={{ width: "100%" }}>
-      <Alert type="warning" showIcon message={copy.safety} />
+      <CollapsibleWarning zh={zh} message={copy.safety} />
       {!connected && <Alert type="info" showIcon message={copy.configureFirst} />}
       <div className="damiao-config-grid">
         <Field label={copy.motorId}>
@@ -560,11 +560,12 @@ function DamiaoMotorDetail({
 
   const feedbackAlerts = (
     <Space direction="vertical" size={12} style={{ width: "100%" }}>
-      {attached && state && !state.online && <Alert type="warning" showIcon message={copy.noFeedback} />}
+      {attached && state && !state.online && (
+        <CollapsibleWarning zh={zh} message={copy.noFeedback} />
+      )}
       {masterMismatch && state && (
-        <Alert
-          type="warning"
-          showIcon
+        <CollapsibleWarning
+          zh={zh}
           message={`${copy.masterMismatch} 0x${state.master_id.toString(16).toUpperCase()} → 0x${state.feedback_can_id!.toString(16).toUpperCase()}`}
         />
       )}
@@ -769,6 +770,27 @@ function DamiaoMotorDetail({
         {controlPanel}
       </Space>
     </div>
+  );
+}
+
+function CollapsibleWarning({
+  message,
+  description,
+  zh,
+}: {
+  message: ReactNode;
+  description?: ReactNode;
+  zh: boolean;
+}) {
+  return (
+    <Collapse
+      size="small"
+      items={[{
+        key: "warning",
+        label: <Typography.Text type="warning">{zh ? "注意" : "Caution"}</Typography.Text>,
+        children: <Alert type="warning" showIcon message={message} description={description} />,
+      }]}
+    />
   );
 }
 

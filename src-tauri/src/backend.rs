@@ -151,9 +151,19 @@ impl CanBus for ProtectedCanBus {
         }
         self.inner.bus_state().await
     }
+
+    async fn link_config(&self) -> Result<Option<CanLinkConfig>, CanIoError> {
+        // Link metadata is read-only and must remain transparent through the
+        // feature-only send wrapper, preserving the same N/D timing snapshot
+        // as the stock v1.4 transport.
+        self.inner.link_config().await
+    }
 }
 
-fn protect_bus(inner: Arc<dyn CanBus>) -> Arc<dyn CanBus> {
+/// Add the cancellation-safe send boundary for SmartKnob and auxiliary-motor
+/// sessions only. The v1.4 connection, Analyzer, DFU, Lift, and legacy motor
+/// paths deliberately keep using the undecorated transport returned below.
+pub(crate) fn protect_feature_bus(inner: Arc<dyn CanBus>) -> Arc<dyn CanBus> {
     ProtectedCanBus::new(inner, SEND_TIMEOUT)
 }
 
@@ -185,11 +195,14 @@ struct ExactSdoBus {
 
 #[async_trait]
 impl CanBus for ExactSdoBus {
-    async fn send(&self, frame: CanFrame) -> Result<(), CanIoError> {
+    async fn send(&self, frame: CanFrame) -> std::result::Result<(), CanIoError> {
         self.inner.send(frame).await
     }
 
-    async fn subscribe(&self, filter: CanFilter) -> Result<Box<dyn CanRx>, CanIoError> {
+    async fn subscribe(
+        &self,
+        filter: CanFilter,
+    ) -> std::result::Result<Box<dyn CanRx>, CanIoError> {
         let Some((exact, expected)) = exact_tsdo_filter(filter) else {
             return self.inner.subscribe(filter).await;
         };
@@ -201,7 +214,7 @@ impl CanBus for ExactSdoBus {
         self.inner.capabilities()
     }
 
-    async fn bus_state(&self) -> Result<Option<CanBusState>, CanIoError> {
+    async fn bus_state(&self) -> std::result::Result<Option<CanBusState>, CanIoError> {
         self.inner.bus_state().await
     }
 
@@ -251,10 +264,6 @@ impl CanRx for ValidatedSdoRx {
 
 fn with_exact_sdo_filter(bus: Arc<dyn CanBus>) -> Arc<dyn CanBus> {
     Arc::new(ExactSdoBus { inner: bus })
-}
-
-fn decorate_bus(inner: Arc<dyn CanBus>) -> Arc<dyn CanBus> {
-    protect_bus(with_exact_sdo_filter(inner))
 }
 
 /// Open a bus. `hw_timestamp` asks the backend to stamp received frames with
@@ -325,9 +334,7 @@ enum LinkProfile {
         data_bitrate: u32,
         hw_timestamp: bool,
     },
-    Classic1M {
-        hw_timestamp: bool,
-    },
+    Classic1M { hw_timestamp: bool },
 }
 
 async fn open_with_profile(
@@ -358,7 +365,7 @@ async fn open_with_profile(
             "gs_usb ch{channel} opened with {profile:?}: {:?}, hw_ts={hw_ts}",
             bus.capabilities()
         );
-        let bus = decorate_bus(Arc::new(bus));
+        let bus = with_exact_sdo_filter(Arc::new(bus));
         let bus = crate::can_lease::hold_open_bus(bus, can_lease).map_err(anyhow::Error::msg)?;
         return Ok((bus, hw_ts));
     }
@@ -377,7 +384,7 @@ async fn open_with_profile(
             }
             // SocketCAN hardware timestamps would need SO_TIMESTAMPING,
             // which can-transport does not expose yet.
-            let bus = decorate_bus(Arc::new(bus));
+            let bus = with_exact_sdo_filter(Arc::new(bus));
             let bus =
                 crate::can_lease::hold_open_bus(bus, can_lease).map_err(anyhow::Error::msg)?;
             Ok((bus, false))
@@ -501,6 +508,48 @@ mod tests {
                 max_dlen: 64,
             }
         }
+
+        async fn link_config(&self) -> Result<Option<CanLinkConfig>, CanIoError> {
+            Ok(Some(CanLinkConfig {
+                fd_enabled: Some(true),
+                nominal: Some(can_transport::CanBitTiming {
+                    bitrate: Some(1_000_000),
+                    sample_point_per_mille: Some(800),
+                }),
+                data: Some(can_transport::CanBitTiming {
+                    bitrate: Some(5_000_000),
+                    sample_point_per_mille: Some(750),
+                }),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn protected_bus_preserves_v1_4_link_metadata() {
+        let inner = Arc::new(HangingBus {
+            calls: AtomicUsize::new(0),
+        });
+        let bus = ProtectedCanBus::new(inner, Duration::from_millis(25));
+
+        let config = bus
+            .link_config()
+            .await
+            .unwrap()
+            .expect("link metadata");
+        assert_eq!(
+            config,
+            CanLinkConfig {
+                fd_enabled: Some(true),
+                nominal: Some(can_transport::CanBitTiming {
+                    bitrate: Some(1_000_000),
+                    sample_point_per_mille: Some(800),
+                }),
+                data: Some(can_transport::CanBitTiming {
+                    bitrate: Some(5_000_000),
+                    sample_point_per_mille: Some(750),
+                }),
+            }
+        );
     }
 
     #[tokio::test]

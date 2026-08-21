@@ -30,7 +30,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
-use can_transport::CanFrame;
+use can_transport::{CanBus, CanFrame};
 use hex_motor::canopen::rpdo_config::{build_rpdo_config_writes, RpdoRecipe};
 use hex_motor::canopen::sdo;
 use hex_motor::canopen::tpdo_config::TpdoEntry;
@@ -583,6 +583,46 @@ pub struct SmartKnobState {
 
 // ───────────────────────────── the driver ───────────────────────────────────
 
+/// Windows timer precision belongs to the host-side haptic loop, not to the
+/// application process. Acquiring it here keeps every v1.4 window on the stock
+/// system timer until a CANopen SmartKnob is actually running.
+struct SmartKnobTimerResolution {
+    #[cfg(windows)]
+    active: bool,
+}
+
+impl SmartKnobTimerResolution {
+    fn acquire() -> Self {
+        #[cfg(windows)]
+        {
+            let active = unsafe { windows_sys::Win32::Media::timeBeginPeriod(1) } == 0;
+            if active {
+                log::info!("SmartKnob: Windows timer resolution requested at 1 ms");
+            } else {
+                log::warn!("SmartKnob: Windows timeBeginPeriod(1) failed");
+            }
+            Self { active }
+        }
+
+        #[cfg(not(windows))]
+        {
+            Self {}
+        }
+    }
+}
+
+impl Drop for SmartKnobTimerResolution {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if self.active {
+            unsafe {
+                windows_sys::Win32::Media::timeEndPeriod(1);
+            }
+            log::info!("SmartKnob: restored the Windows timer resolution");
+        }
+    }
+}
+
 /// A running SmartKnob: owns the high-rate haptic loop for one motor.
 pub struct SmartKnob {
     node_id: u8,
@@ -602,6 +642,7 @@ pub struct SmartKnob {
     custom_config_dirty: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
     task: JoinHandle<()>,
+    _timer_resolution: SmartKnobTimerResolution,
 }
 
 /// How many times to attempt motor init before giving up (init can be flaky).
@@ -612,13 +653,13 @@ impl SmartKnob {
     /// haptic loop. The manager must already be connected with heartbeat on.
     pub async fn start(
         mgr: Arc<Cia402Manager>,
+        bus: Arc<dyn CanBus>,
         nid: u8,
         config_index: usize,
         shutdown_requested: &AtomicBool,
     ) -> anyhow::Result<Self> {
         let configs = preset_configs();
         let config_index = config_index.min(configs.len() - 1);
-        let bus = mgr.bus();
         let sdo_timeout = Some(mgr.options().sdo_timeout);
         // Seed live tunables from the selected preset so the sliders show the
         // preset's defaults on start.
@@ -686,6 +727,7 @@ impl SmartKnob {
         }));
         let running = Arc::new(AtomicBool::new(true));
 
+        let timer_resolution = SmartKnobTimerResolution::acquire();
         let task = {
             let mgr = mgr.clone();
             let bus = bus.clone();
@@ -723,6 +765,7 @@ impl SmartKnob {
             custom_config_dirty,
             running,
             task,
+            _timer_resolution: timer_resolution,
         })
     }
 

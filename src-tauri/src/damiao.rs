@@ -1,7 +1,7 @@
 //! Direct CAN 2.0 control for the DAMIAO DM-J4310-2EC V1.1 geared motor.
 //!
 //! This motor does not speak CiA 402.  The session only borrows the physical
-//! bus owned by `Cia402Manager`. A bus-level discovery monitor finds motors,
+//! bus opened by the v1.4 connection. A bus-level discovery monitor finds motors,
 //! while one independent session per motor implements the DAMIAO MIT /
 //! position-velocity / velocity frame formats.
 
@@ -12,7 +12,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Result};
 use can_transport::{CanBus, CanFilter, CanFrame, CanId, CanIoError, FrameKind};
-use hex_motor::cia402::Cia402Manager;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
@@ -212,8 +211,7 @@ pub struct DamiaoDiscovery {
 }
 
 impl DamiaoDiscovery {
-    pub async fn start(mgr: Arc<Cia402Manager>) -> Result<Arc<Self>> {
-        let bus = mgr.bus();
+    pub async fn start(bus: Arc<dyn CanBus>) -> Result<Arc<Self>> {
         let rx = bus
             .subscribe(CanFilter::pass_all_standard())
             .await
@@ -425,9 +423,8 @@ pub struct DamiaoSession {
 }
 
 impl DamiaoSession {
-    pub async fn start(mgr: Arc<Cia402Manager>, config: DamiaoConfig) -> Result<Arc<Self>> {
+    pub async fn start(bus: Arc<dyn CanBus>, config: DamiaoConfig) -> Result<Arc<Self>> {
         let config = config.validate()?;
-        let bus = mgr.bus();
         // Listen broadly so a stale/unknown Master ID cannot hide otherwise
         // valid feedback. The payload motor ID and status nibble are validated
         // in `decode_feedback`; the observed CAN ID is reported to the UI.

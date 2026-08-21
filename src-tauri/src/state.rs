@@ -70,11 +70,17 @@ pub struct AppState {
     /// transactions poll this flag between bounded bus operations so shutdown
     /// can roll them back before waiting for the lifecycle lock.
     pub shutdown_requested: AtomicBool,
-    /// Serialises physical adapter open/close operations. Tauri commands can
-    /// otherwise race a slow `connect` against `disconnect` and publish only
-    /// half of the manager/monitor pair.
-    pub connection_op: Mutex<()>,
+    /// True only after SmartKnob or an auxiliary-motor workspace has lazily
+    /// created its feature runtime. The v1.4 close/disconnect path checks this
+    /// synchronously and remains unchanged while the extension is dormant.
+    pub(crate) extension_runtime_active: AtomicBool,
+    /// Serializes new-feature creation/teardown. Normal v1.4 connect and
+    /// disconnect do not acquire this lock while the extension is dormant.
+    pub extension_op: Mutex<()>,
     pub manager: Mutex<Option<Arc<Cia402Manager>>>,
+    /// Cancellation-safe CAN sender created on first use by SmartKnob or an
+    /// auxiliary-motor window. Legacy v1.4 managers never receive this wrapper.
+    pub feature_bus: Mutex<Option<Arc<dyn CanBus>>>,
     /// Independent manager for the new protocol, sharing the same CAN transport. It never
     /// broadcasts a second host heartbeat and performs identification only on explicit GUI use.
     pub meow_manager: Mutex<Option<Arc<MeowMotorManager>>>,
@@ -119,6 +125,8 @@ pub struct AppState {
     /// Direct-CANopen lift debug session. It owns heartbeat/TPDO subscriptions
     /// and the velocity watchdog stream for exactly one lift node.
     pub lift: Mutex<Option<Arc<LiftSession>>>,
+    /// Stock v1.4 close guard for the lift's bounded safe-stop handshake.
+    pub lift_close_in_progress: AtomicBool,
     /// Base(Zenoh):到 hex-controller 的连接(至多一条)。
     pub zenoh: Mutex<Option<crate::zenoh_base::ZenohConn>>,
     /// Arm(Zenoh):到 hex-controller 机械臂的连接(至多一条)。
@@ -173,6 +181,10 @@ impl AppState {
 
     pub async fn calibration_host_node_id(&self) -> Option<u8> {
         *self.calibration_host_node_id.lock().await
+    }
+
+    pub(crate) fn extension_runtime_active(&self) -> bool {
+        self.extension_runtime_active.load(Ordering::Acquire)
     }
 
     /// Take a log handle out of the map (for stopping), if present.
@@ -278,5 +290,15 @@ mod tests {
         drop(first);
         assert!(!gate.is_active());
         assert_eq!(gate.pending_or_active.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn extension_can_runtime_is_dormant_by_default() {
+        let state = AppState::default();
+        assert!(!state.extension_runtime_active());
+        assert!(state.feature_bus.lock().await.is_none());
+        assert!(state.rollercan.lock().await.is_none());
+        assert!(state.damiao_discovery.lock().await.is_none());
+        assert!(state.rollercan_control.lock().await.is_none());
     }
 }

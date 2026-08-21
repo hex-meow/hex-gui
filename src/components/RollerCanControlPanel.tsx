@@ -418,7 +418,7 @@ function RollerCanControlDetail({
 
   const connectionPanel = (
     <Space direction="vertical" size={12} style={{ width: "100%" }}>
-      <Alert type="warning" showIcon message={copy.safety} description={copy.bitrate} />
+      <CollapsibleWarning zh={zh} message={copy.safety} description={copy.bitrate} />
       <Alert type="info" showIcon message={copy.smartknobBoundary} />
       {!connected && <Alert type="info" showIcon message={copy.connectFirst} />}
       <Field label={copy.nodeId}>
@@ -508,7 +508,9 @@ function RollerCanControlDetail({
           }
         >
           <Space direction="vertical" size={12} style={{ width: "100%" }}>
-            {state && !state.online && <Alert type="warning" showIcon message={copy.noFeedback} />}
+            {state && !state.online && (
+              <CollapsibleWarning zh={zh} message={copy.noFeedback} />
+            )}
             {state?.last_error && <Alert type="error" showIcon message={state.last_error} />}
             {view === "numeric" ? numericPanel : (
               <RollerCanControlChart
@@ -588,6 +590,27 @@ function RollerCanControlDetail({
         </Card>
       </Space>
     </div>
+  );
+}
+
+function CollapsibleWarning({
+  message,
+  description,
+  zh,
+}: {
+  message: ReactNode;
+  description?: ReactNode;
+  zh: boolean;
+}) {
+  return (
+    <Collapse
+      size="small"
+      items={[{
+        key: "warning",
+        label: <Typography.Text type="warning">{zh ? "注意" : "Caution"}</Typography.Text>,
+        children: <Alert type="warning" showIcon message={message} description={description} />,
+      }]}
+    />
   );
 }
 

@@ -6,6 +6,7 @@
 //! serialises overlapping ops via its `inflight_ops` set).
 
 use std::collections::BTreeMap;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -74,6 +75,54 @@ async fn meow_manager(state: &AppState) -> CmdResult<Arc<MeowMotorManager>> {
         .ok_or_else(|| "not connected: call connect() first".to_string())
 }
 
+fn mark_extension_runtime_active(state: &AppState) {
+    state
+        .extension_runtime_active
+        .store(true, Ordering::Release);
+}
+
+/// Lazily add the send-safety wrapper for SmartKnob and auxiliary motors.
+/// The manager and every stock v1.4 command keep the original bus handle.
+async fn feature_bus_locked(state: &AppState) -> CmdResult<Arc<dyn can_transport::CanBus>> {
+    // Mark the explicit extension entry before any backend await so a native
+    // close cannot slip onto the stock path while lazy setup is in flight.
+    mark_extension_runtime_active(state);
+    let mut guard = state.feature_bus.lock().await;
+    if let Some(bus) = guard.as_ref() {
+        return Ok(bus.clone());
+    }
+    let manager = match manager(state).await {
+        Ok(manager) => manager,
+        Err(error) => {
+            state
+                .extension_runtime_active
+                .store(false, Ordering::Release);
+            return Err(error);
+        }
+    };
+    let bus = backend::protect_feature_bus(manager.bus());
+    *guard = Some(bus.clone());
+    Ok(bus)
+}
+
+/// Create the firmware-SmartKnob monitor only after its workspace is mounted.
+async fn ensure_rollercan_monitor_locked(state: &AppState) -> CmdResult<()> {
+    if state.rollercan.lock().await.is_some() {
+        return Ok(());
+    }
+    let bus = feature_bus_locked(state).await?;
+    let session = crate::rollercan::RollerCanSession::attach(bus)
+        .await
+        .map_err(err)?;
+    let mut guard = state.rollercan.lock().await;
+    if guard.is_none() {
+        *guard = Some(session);
+    } else {
+        session.stop().await;
+    }
+    Ok(())
+}
+
 /// Clone the active lift session without keeping the application-state mutex
 /// across CAN I/O. In particular, directed NMT Stop/zero commands must not
 /// wait behind a slow SDO diagnostics refresh.
@@ -111,6 +160,10 @@ pub(crate) async fn stop_friction_calibration(state: &AppState) {
     let _ = state.friction_calibration.stop().await;
 }
 
+pub(crate) async fn stop_torque_calibration(state: &AppState) {
+    let _ = state.torque_calibration.stop().await;
+}
+
 async fn damiao_session(state: &AppState, motor_id: u16) -> CmdResult<Arc<DamiaoSession>> {
     state
         .damiao
@@ -122,11 +175,17 @@ async fn damiao_session(state: &AppState, motor_id: u16) -> CmdResult<Arc<Damiao
 }
 
 async fn damiao_discovery(state: &AppState) -> CmdResult<Arc<DamiaoDiscovery>> {
+    let _extension_op = state.extension_op.lock().await;
+    mark_extension_runtime_active(state);
+    damiao_discovery_locked(state).await
+}
+
+async fn damiao_discovery_locked(state: &AppState) -> CmdResult<Arc<DamiaoDiscovery>> {
     let mut guard = state.damiao_discovery.lock().await;
     if let Some(discovery) = guard.as_ref() {
         return Ok(discovery.clone());
     }
-    let discovery = DamiaoDiscovery::start(manager(state).await?)
+    let discovery = DamiaoDiscovery::start(feature_bus_locked(state).await?)
         .await
         .map_err(err)?;
     *guard = Some(discovery.clone());
@@ -134,6 +193,12 @@ async fn damiao_discovery(state: &AppState) -> CmdResult<Arc<DamiaoDiscovery>> {
 }
 
 async fn rollercan_control(state: &AppState) -> CmdResult<Arc<RollerCanControl>> {
+    let _extension_op = state.extension_op.lock().await;
+    mark_extension_runtime_active(state);
+    rollercan_control_locked(state).await
+}
+
+async fn rollercan_control_locked(state: &AppState) -> CmdResult<Arc<RollerCanControl>> {
     let mut guard = state.rollercan_control.lock().await;
     // The stock RollerCAN control workspace speaks Classic CAN. Quiesce the
     // SmartKnob firmware's FD discovery before every entry into its command
@@ -145,8 +210,9 @@ async fn rollercan_control(state: &AppState) -> CmdResult<Arc<RollerCanControl>>
     if let Some(controller) = guard.as_ref() {
         return Ok(controller.clone());
     }
-    let mgr = manager(state).await?;
-    let controller = RollerCanControl::start(mgr.bus()).await.map_err(err)?;
+    let controller = RollerCanControl::start(feature_bus_locked(state).await?)
+        .await
+        .map_err(err)?;
     *guard = Some(controller.clone());
     Ok(controller)
 }
@@ -230,7 +296,6 @@ pub async fn connect(
     our_nid: u8,
     broadcast_heartbeat: bool,
 ) -> CmdResult<ConnectionInfoDto> {
-    let _connection_op = state.connection_op.lock().await;
     let mut guard = state.manager.lock().await;
     if guard.is_some() {
         return Err("already connected; call disconnect() first".into());
@@ -262,16 +327,12 @@ pub async fn connect(
     };
     let meow_mgr = MeowMotorManager::new(bus.clone(), meow_opts).map_err(err)?;
     let calibration_bus = bus.clone();
-    let mgr = Arc::new(Cia402Manager::new(bus, opts).map_err(err)?);
-    let rollercan = crate::rollercan::RollerCanSession::attach(mgr.bus())
-        .await
-        .map_err(err)?;
+    let mgr = Cia402Manager::new(bus, opts).map_err(err)?;
     log::info!("connected to {iface} as nid 0x{our_nid:02X}");
     *state.meow_manager.lock().await = Some(Arc::new(meow_mgr));
     *state.calibration_bus.lock().await = Some(calibration_bus);
     *state.calibration_host_node_id.lock().await = Some(our_nid);
-    *state.rollercan.lock().await = Some(rollercan);
-    *guard = Some(mgr);
+    *guard = Some(Arc::new(mgr));
     Ok(ConnectionInfoDto::new(
         backend_name,
         link_config,
@@ -281,85 +342,55 @@ pub async fn connect(
 
 #[tauri::command]
 pub async fn disconnect(state: State<'_, AppState>) -> CmdResult<()> {
-    let _connection_op = state.connection_op.lock().await;
-    // Match the native-exit lock order so persistent settings cannot race a
-    // manual teardown and no new connection-scoped session can start between
-    // a confirmed motor stop and releasing the shared bus.
+    // Dormant v1.4 operation only pays for an uncontended mutex acquisition.
+    // If lazy extension startup is in flight, this makes the active check and
+    // its cleanup decision atomic with that startup.
+    let _extension_op = state.extension_op.lock().await;
+    if !state.extension_runtime_active() {
+        // Stock v1.4 lock and cleanup path.
+        let _operation = state.device_settings_operation.acquire().await;
+        return disconnect_v1_4_locked(&state, true).await;
+    }
+
     let _operation = state.device_settings_operation.acquire().await;
-    // Preserve every retryable hardware handle until its confirmed safe stop
-    // has completed. A manual disconnect reports failure instead of silently
-    // dropping the only handle that can retry a firmware-owned motor disable.
-    stop_active_smartknob(&state).await?;
-    stop_lift_session(&state).await?;
-    stop_rollercan_control(&state, false).await?;
-    stop_damiao_sessions(&state).await?;
-    disconnect_state_locked(&state).await;
-    Ok(())
+    stop_extension_runtime_locked(&state).await?;
+    disconnect_v1_4_locked(&state, true).await
 }
 
-/// Shared disconnect path used by both the Tauri command and the native exit
-/// handler. SmartKnob is stopped first so a window close cannot leave either
-/// the host loop or firmware-owned RollerCAN output enabled while slower
-/// application cleanup is still in progress.
-pub(crate) async fn disconnect_state(state: &AppState) {
-    log::info!("disconnect cleanup: waiting for lifecycle lock");
-    let _connection_op = state.connection_op.lock().await;
-    // Persistent settings and position commands take the same gate before
-    // touching the manager. Disconnect waits for an in-flight transaction and
-    // prevents a later transaction from racing teardown.
+/// Extended close cleanup. The native v1.4 close handler never calls this
+/// while SmartKnob/auxiliary-motor resources are dormant.
+pub(crate) async fn disconnect_extension_state(state: &AppState) {
+    let _extension_op = state.extension_op.lock().await;
     let _operation = state.device_settings_operation.acquire().await;
-    disconnect_state_locked(state).await;
+    force_stop_extension_runtime_locked(state).await;
+    // The extension close handler already made the stock bounded lift-stop
+    // attempt. Continue the remaining v1.4 teardown without a second wait.
+    if let Err(error) = disconnect_v1_4_locked(state, false).await {
+        log::warn!("v1.4 resource cleanup during extended close reported: {error}");
+    }
 }
 
-/// Tear down connection-owned state after the lifecycle and persistent
-/// settings gates have both been acquired.
-async fn disconnect_state_locked(state: &AppState) {
+/// Exact v1.4 disconnect body, with the lift call optionally omitted after the
+/// native close handler has already made its bounded attempt.
+async fn disconnect_v1_4_locked(state: &AppState, stop_lift: bool) -> CmdResult<()> {
     stop_friction_calibration(state).await;
     state.torque_calibration.reset().await;
     state.authenticity.clear().await;
     state.meow_calibration.clear().await;
-    log::info!("disconnect cleanup: lifecycle lock acquired; quiescing RollerCAN discovery");
-    if let Err(error) = stop_rollercan_control(state, true).await {
-        log::warn!(
-            "RollerCAN control disable during forced disconnect failed; motor power must be removed before handling it: {error}"
-        );
+    if stop_lift {
+        stop_lift_session(state).await?;
     }
-    if let Some(session) = state.rollercan.lock().await.as_ref() {
-        session.begin_shutdown();
-    }
-    log::info!("disconnect cleanup: stopping active SmartKnob");
-    if let Err(error) = stop_active_smartknob(state).await {
-        log::warn!(
-            "SmartKnob stop during disconnect failed; retrying with session teardown: {error}"
-        );
-    }
-    log::info!("disconnect cleanup: tearing down RollerCAN monitor");
-    if let Some(app) = state.rollercan.lock().await.take() {
-        app.stop().await;
-    }
-    // Session teardown above performs another best-effort RollerCAN disable.
-    // Do not retain an unusable marker after the physical bus is released.
-    state.smartknob.lock().await.take();
     if let (Some(app), Some(mgr)) = (state.hopea3.lock().await.take(), state.manager().await) {
         app.stop(&mgr).await;
     }
+    // An active SmartKnob always marks the extension runtime active and is
+    // stopped before this function. Retain a fail-safe fallback for malformed
+    // state without changing the dormant v1.4 path.
+    if state.smartknob.lock().await.is_some() {
+        stop_active_smartknob(state).await?;
+    }
     if let Some(app) = state.imu.lock().await.take() {
         app.stop().await;
-    }
-    let damiao_sessions = {
-        let mut guard = state.damiao.lock().await;
-        std::mem::take(&mut *guard)
-    };
-    for (motor_id, session) in damiao_sessions {
-        if let Err(error) = session.shutdown().await {
-            log::warn!(
-                "DAMIAO 0x{motor_id:X} safe disable during forced disconnect failed: {error}"
-            );
-            session.force_stop();
-        }
-    }
-    if let Some(discovery) = state.damiao_discovery.lock().await.take() {
-        discovery.stop();
     }
     // The analyzer owns its own bus, so stop it unconditionally (it may be the
     // only thing running — the user never called the manager-based connect()).
@@ -378,7 +409,60 @@ async fn disconnect_state_locked(state: &AppState) {
     if was {
         log::info!("disconnected");
     }
-    log::info!("disconnect cleanup: complete");
+    Ok(())
+}
+
+/// Confirm every extension-owned output is disabled before a manual
+/// disconnect releases the stock v1.4 manager and physical adapter.
+async fn stop_extension_runtime_locked(state: &AppState) -> CmdResult<()> {
+    stop_active_smartknob(state).await?;
+    stop_rollercan_control(state, false).await?;
+    stop_damiao_sessions(state).await?;
+    if let Some(app) = state.rollercan.lock().await.take() {
+        app.stop().await;
+    }
+    state.feature_bus.lock().await.take();
+    state
+        .extension_runtime_active
+        .store(false, Ordering::Release);
+    Ok(())
+}
+
+/// Best-effort variant used only after an extended window-close request.
+async fn force_stop_extension_runtime_locked(state: &AppState) {
+    if let Err(error) = stop_rollercan_control(state, true).await {
+        log::warn!(
+            "RollerCAN control disable during forced close failed; motor power must be removed before handling it: {error}"
+        );
+    }
+    if let Some(session) = state.rollercan.lock().await.as_ref() {
+        session.begin_shutdown();
+    }
+    if let Err(error) = stop_active_smartknob(state).await {
+        log::warn!("SmartKnob stop during forced close failed: {error}");
+    }
+    if let Some(app) = state.rollercan.lock().await.take() {
+        app.stop().await;
+    }
+    state.smartknob.lock().await.take();
+
+    let damiao_sessions = {
+        let mut guard = state.damiao.lock().await;
+        std::mem::take(&mut *guard)
+    };
+    for (motor_id, session) in damiao_sessions {
+        if let Err(error) = session.shutdown().await {
+            log::warn!("DAMIAO 0x{motor_id:X} disable during forced close failed: {error}");
+            session.force_stop();
+        }
+    }
+    if let Some(discovery) = state.damiao_discovery.lock().await.take() {
+        discovery.stop();
+    }
+    state.feature_bus.lock().await.take();
+    state
+        .extension_runtime_active
+        .store(false, Ordering::Release);
 }
 
 async fn stop_active_smartknob(state: &AppState) -> CmdResult<()> {
@@ -410,6 +494,24 @@ async fn stop_active_smartknob(state: &AppState) -> CmdResult<()> {
             Ok(())
         }
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod extension_isolation_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn failed_lazy_entry_restores_the_dormant_v1_4_path() {
+        let state = AppState::default();
+        let error = match feature_bus_locked(&state).await {
+            Ok(_) => panic!("a feature bus must require the stock connection"),
+            Err(error) => error,
+        };
+        assert!(error.contains("not connected"));
+        assert!(!state.extension_runtime_active());
+        assert!(state.feature_bus.lock().await.is_none());
+        assert!(state.rollercan.lock().await.is_none());
     }
 }
 
@@ -1200,7 +1302,9 @@ pub async fn damiao_attach(
     state: State<'_, AppState>,
     config: DamiaoConfig,
 ) -> CmdResult<DamiaoState> {
-    let mgr = manager(&state).await?;
+    let _extension_op = state.extension_op.lock().await;
+    mark_extension_runtime_active(&state);
+    let bus = feature_bus_locked(&state).await?;
     let mut guard = state.damiao.lock().await;
     if guard.contains_key(&config.motor_id) {
         return Err(format!(
@@ -1217,11 +1321,11 @@ pub async fn damiao_attach(
             config.motor_id
         ));
     }
-    let session = DamiaoSession::start(mgr, config).await.map_err(err)?;
+    let session = DamiaoSession::start(bus, config).await.map_err(err)?;
     let snapshot = session.snapshot();
     guard.insert(config.motor_id, session);
     drop(guard);
-    if let Ok(discovery) = damiao_discovery(&state).await {
+    if let Ok(discovery) = damiao_discovery_locked(&state).await {
         discovery.set_attached(config.motor_id, true);
     }
     Ok(snapshot)
@@ -1655,6 +1759,9 @@ pub fn smartknob_configs() -> Vec<crate::smartknob::KnobConfig> {
 /// is mounted. A normal bus connection remains receive-only for this protocol.
 #[tauri::command]
 pub async fn smartknob_monitor_start(state: State<'_, AppState>) -> CmdResult<()> {
+    let _extension_op = state.extension_op.lock().await;
+    mark_extension_runtime_active(&state);
+    ensure_rollercan_monitor_locked(&state).await?;
     let guard = state.rollercan.lock().await;
     let session = guard
         .as_ref()
@@ -1808,8 +1915,13 @@ pub async fn smartknob_start(
     // tear down the manager/monitor. Without this lifecycle lock, dropping a
     // just-started CANopen session can detach its 1 kHz task instead of asking
     // it to stop and disable the motor.
-    let _connection_op = state.connection_op.lock().await;
+    let _extension_op = state.extension_op.lock().await;
+    mark_extension_runtime_active(&state);
+    let feature_bus = feature_bus_locked(&state).await?;
     let mgr = manager(&state).await?;
+    if request.target.kind == SmartKnobKind::Rollercan {
+        ensure_rollercan_monitor_locked(&state).await?;
+    }
     let mut guard = state.smartknob.lock().await;
     if guard.is_some() {
         return Err("SmartKnob already running; stop it first".into());
@@ -1833,6 +1945,7 @@ pub async fn smartknob_start(
             }
             let app = crate::smartknob::SmartKnob::start(
                 mgr.clone(),
+                feature_bus,
                 request.target.node_id,
                 request.config_index,
                 &state.shutdown_requested,
