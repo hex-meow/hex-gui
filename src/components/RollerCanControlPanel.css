@@ -1,0 +1,136 @@
+.rollercan-workspace {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 16px;
+  width: 100%;
+  max-width: 1760px;
+  margin: 0 auto;
+}
+
+.rollercan-device-list {
+  align-self: start;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.32);
+}
+
+.rollercan-device-list__heading {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.rollercan-device-list__heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rollercan-device-list__item.ant-list-item {
+  margin-bottom: 7px;
+  padding: 10px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.rollercan-device-list__item.ant-list-item:hover,
+.rollercan-device-list__item--selected.ant-list-item {
+  border-color: rgba(79, 140, 255, 0.65);
+  background: rgba(79, 140, 255, 0.1);
+}
+
+.rollercan-device-list__item > div,
+.rollercan-device-list__manual.ant-btn {
+  width: 100%;
+}
+
+.rollercan-device-list__manual.ant-btn {
+  margin-top: 8px;
+}
+
+.rollercan-workspace__detail {
+  min-width: 0;
+}
+
+.rollercan-panel {
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+.rollercan-panel .ant-collapse-header {
+  align-items: center !important;
+  font-weight: 650;
+}
+
+.rollercan-panel .ant-collapse-content-box {
+  padding: 16px !important;
+}
+
+.rollercan-summary-card__content {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.rollercan-summary-card__meta {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rollercan-field {
+  display: inline-flex;
+  min-width: 160px;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.rollercan-field > .ant-input,
+.rollercan-field > .ant-input-number {
+  width: 180px;
+}
+
+.rollercan-target-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.28);
+}
+
+.rollercan-control-hint.ant-alert {
+  margin-top: 12px;
+}
+
+.rollercan-telemetry-table .ant-descriptions-item-label {
+  width: 180px;
+}
+
+.rollercan-tabular {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 980px) {
+  .rollercan-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .rollercan-summary-card__content {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 620px) {
+  .rollercan-telemetry-table .ant-descriptions-item-label {
+    width: auto;
+  }
+}
