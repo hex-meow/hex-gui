@@ -1,0 +1,35 @@
+{{!--
+  Custom desktop entry template (bundle.linux.{deb,rpm}.desktopTemplate).
+
+  It exists for one reason: the default template renders `Name={{name}}`, and
+  `name` is `productName` — a package name (`hexmeow-gui`), not something you
+  want staring back at you from the GNOME app grid. Everything else mirrors
+  tauri-bundler's built-in template, so `Exec`/`Icon`/`StartupWMClass` keep
+  tracking `mainBinaryName` and GNOME still matches a running window to this
+  entry.
+
+  Available variables: categories, comment, exec, icon, name, mime_type,
+  long_description.
+
+  The deb template also feeds the AppImage: its bundler calls
+  debian::generate_data(), so both read this file. The rpm bundler has its own
+  desktopTemplate key, pointed at this same template.
+--}}
+[Desktop Entry]
+Type=Application
+Name=hexmeow GUI
+Name[zh_CN]=hexmeow 上位机
+GenericName=Motor Service GUI
+GenericName[zh_CN]=电机上位机
+{{#if comment}}
+Comment={{comment}}
+{{/if}}
+Exec={{exec}}
+StartupWMClass={{exec}}
+Icon={{icon}}
+Terminal=false
+Categories={{categories}}
+Keywords=hexmeow;motor;CAN;CANopen;CiA402;DFU;firmware;robot;
+{{#if mime_type}}
+MimeType={{mime_type}}
+{{/if}}

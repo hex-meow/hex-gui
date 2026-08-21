@@ -31,8 +31,10 @@
     "shortDescription": "Service GUI for hexmeow motors, robots, and firmware",
     "icon": [
       "icons/32x32.png",
+      "icons/64x64.png",
       "icons/128x128.png",
-      "icons/128x128@2x.png",
+      "icons/256x256.png",
+      "icons/512x512.png",
       "icons/icon.icns",
       "icons/icon.ico"
     ],
@@ -40,7 +42,12 @@
       "deb": {
         "provides": ["hex-motor-gui"],
         "conflicts": ["hex-motor-gui"],
-        "replaces": ["hex-motor-gui"]
+        "replaces": ["hex-motor-gui"],
+        "desktopTemplate": "linux/app.desktop",
+        "postInstallScript": "linux/deb-postinst.sh"
+      },
+      "rpm": {
+        "desktopTemplate": "linux/app.desktop"
       }
     },
     "windows": {

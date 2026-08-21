@@ -181,6 +181,21 @@ Outputs land in `src-tauri/target/release/bundle/{deb,appimage}/`.
 > old registration in place, and the Debian package replaces `hex-motor-gui`.
 > On macOS the new `.app` has a different filename; after copying it, remove the
 > old `hex-motor-gui.app` manually. Preferences remain under the same bundle ID.
+>
+> **Duplicate Linux launcher.** The desktop entry is named after `productName`,
+> so it moved from `hex-motor-gui.desktop` to `hexmeow-gui.desktop` — while
+> `Exec`/`Icon` still point at the unchanged `hex-motor-gui` binary. `Conflicts`
+> + `Replaces` clean up an old *dpkg-installed* entry, but not one that AppImage
+> desktop integration or a manual `cp` left behind: that one survives, still
+> launches, and shows up as a second app in the GNOME grid.
+> `src-tauri/linux/deb-postinst.sh` removes such orphans under
+> `/usr/{,local/}share/applications` on install and reports (but never deletes)
+> per-user copies under `~/.local/share/applications`. To check by hand:
+>
+> ```bash
+> ls /usr/share/applications/*hex* /usr/local/share/applications/*hex* \
+>    ~/.local/share/applications/*hex* 2>/dev/null
+> ```
 
 > **glibc / build host:** an AppImage links against the build machine's glibc
 > and is **not** forward-compatible. Build releases on the **oldest** target
