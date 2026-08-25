@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Alert, App as AntdApp, Button, Empty, Layout, Tooltip, Typography } from "antd";
+import { Alert, App as AntdApp, Button, Collapse, Empty, Layout, Tooltip, Typography } from "antd";
 import { listen } from "@tauri-apps/api/event";
 import { api, errMsg } from "./api";
 import { useI18n } from "./i18n";
@@ -23,6 +23,8 @@ import { ControllerConfigPanel } from "./components/ControllerConfigPanel";
 import { CanAnalyzerPanel } from "./components/CanAnalyzerPanel";
 import { DfuPanel } from "./components/DfuPanel";
 import { AuthenticityPanel } from "./components/AuthenticityPanel";
+import { DamiaoMotorPanel } from "./components/DamiaoMotorPanel";
+import { RollerCanControlPanel } from "./components/RollerCanControlPanel";
 import { TutorialModal, TUTORIALS } from "./components/Tutorial";
 import { canDfuApi, hpmDfuApi } from "./dfuApi";
 import type { MotorInfo } from "./types";
@@ -44,7 +46,9 @@ type Tool =
   | "calibration"
   | "torqueCalibration"
   | "calibrationUpdate"
-  | "console";
+  | "console"
+  | "damiao"
+  | "rollercanControl";
 
 const DEVICE_POLL_MS = 700;
 
@@ -149,6 +153,9 @@ export default function App() {
       message.warning(t("settingsBusyLeave"));
       return;
     }
+    if (tool === "smartknob") {
+      await api.smartknobStop().catch(() => {});
+    }
     try {
       if (tool === "dfu") {
         await Promise.all([hpmDfuApi.leave(), canDfuApi.leave()]);
@@ -218,6 +225,8 @@ export default function App() {
     },
     liftApi: { title: t("toolLiftZenoh"), desc: t("toolLiftZenohDesc") },
     console: { title: t("toolConsole"), desc: t("toolConsoleDesc") },
+    damiao: { title: t("toolDamiao"), desc: t("toolDamiaoDesc") },
+    rollercanControl: { title: t("toolRollerCanControl"), desc: t("toolRollerCanControlDesc") },
   } satisfies Record<Tool, { title: string; desc: string }>;
   const { title: toolTitle, desc: toolDesc } = toolMeta[tool];
   const needsHeartbeat =
@@ -240,7 +249,9 @@ export default function App() {
     tool !== "authenticity" &&
     tool !== "calibration" &&
     tool !== "torqueCalibration" &&
-    tool !== "calibrationUpdate";
+    tool !== "calibrationUpdate" &&
+    tool !== "damiao" &&
+    tool !== "rollercanControl";
   const showConnectBar =
     tool !== "console" &&
     tool !== "zenoh" &&
@@ -321,12 +332,7 @@ export default function App() {
           ) : tool === "lift" ? (
             <LiftPanel connected={connected} />
           ) : tool === "smartknob" ? (
-            <SmartKnobPanel
-              connected={connected}
-              devices={devices.filter(
-                (device) => device.device_type === "cia402_motor",
-              )}
-            />
+            <SmartKnobPanel connected={connected} />
           ) : tool === "zenoh" ? (
             <ZenohPanel />
           ) : tool === "arm" ? (
@@ -337,6 +343,10 @@ export default function App() {
             <ControllerConfigPanel />
           ) : tool === "canalyzer" ? (
             <CanAnalyzerPanel />
+          ) : tool === "damiao" ? (
+            <DamiaoMotorPanel connected={connected} />
+          ) : tool === "rollercanControl" ? (
+            <RollerCanControlPanel connected={connected} />
           ) : tool === "dfu" ? (
             <DfuPanel onBusyChange={setDfuBusy} />
           ) : tool === "authenticity" ? (
@@ -601,6 +611,39 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
             onClick={() => onPick("dfu")}
           />
         </ToolSection>
+
+        <Collapse
+          className="tool-picker__damiao"
+          items={[
+            {
+              key: "damiao",
+              label: (
+                <span className="tool-picker__damiao-label">
+                  <strong>{t("catDamiao")}</strong>
+                  <span>{t("catDamiaoHint")}</span>
+                </span>
+              ),
+              children: (
+                <div className="tool-section__grid">
+                  <ToolCard
+                    title={t("toolDamiao")}
+                    desc={t("toolDamiaoDesc")}
+                    tag={t("tagDamiaoProtocol")}
+                    accent="orange"
+                    onClick={() => onPick("damiao")}
+                  />
+                  <ToolCard
+                    title={t("toolRollerCanControl")}
+                    desc={t("toolRollerCanControlDesc")}
+                    tag={t("tagRollerCanProtocol")}
+                    accent="blue"
+                    onClick={() => onPick("rollercanControl")}
+                  />
+                </div>
+              ),
+            },
+          ]}
+        />
       </div>
     </div>
   );
