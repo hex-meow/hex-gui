@@ -50,6 +50,7 @@ export function MeowMotorPanel({
   info,
   connected,
   settingsOnly = false,
+  settingsDisabled = false,
   logging = false,
   logPath = null,
   onToggleLog,
@@ -58,6 +59,7 @@ export function MeowMotorPanel({
   info: MotorInfo;
   connected: boolean;
   settingsOnly?: boolean;
+  settingsDisabled?: boolean;
   logging?: boolean;
   logPath?: string | null;
   onToggleLog?: (on: boolean) => void;
@@ -251,6 +253,7 @@ export function MeowMotorPanel({
   }, [connected, info.node_id, refreshHz]);
 
   const run = async (label: string, action: () => Promise<unknown>) => {
+    if (busy || settingsDisabled) return;
     setBusy(true);
     onBusyChange?.(true);
     try {
@@ -271,6 +274,7 @@ export function MeowMotorPanel({
   const activeMode = snapshot?.logic?.state === "Enabled" ? snapshot.logic.mode : null;
   const disabledActive = snapshot?.logic?.state === "Disabled";
   const canConfigure =
+    connected && !busy && !settingsDisabled &&
     snapshot?.online === true &&
     (snapshot.nmt_state === "PreOperational" || snapshot.nmt_state === "Stopped") &&
     (snapshot.lifecycle.kind === "Identified" || snapshot.lifecycle.kind === "NeedsReinit");

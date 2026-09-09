@@ -17,6 +17,9 @@ import { api, errMsg } from "../api";
 import { nid2hex } from "../format";
 import { useI18n } from "../i18n";
 import type { DeviceSettingsResult, MotorInfo } from "../types";
+import { MeowMotorPanel } from "./MeowMotorPanel";
+import { PositionPresetCard } from "./PositionPresetCard";
+import { SettingsField as Field } from "./SettingsField";
 
 const NOMINAL_BITRATE = 1_000_000;
 const STANDARD_DATA_BITRATES = [1_000_000, 2_000_000, 4_000_000, 5_000_000];
@@ -80,7 +83,7 @@ export function DeviceSettingsTool({
   const transmitPdoBrs = draft?.transmitPdoBrs ?? false;
   const isKnown =
     device != null && device.identity != null && device.device_type !== "unknown";
-  const isMotor = isKnown && device.device_type === "cia402_motor";
+  const isMotor = isKnown && supportsPositionPreset(device);
   const isFd = config?.data_bitrate != null;
   const operationBusy = operationCount > 0;
 
@@ -95,6 +98,11 @@ export function DeviceSettingsTool({
     if (mounted.current) setOperationCount(operationCountRef.current);
     if (operationCountRef.current === 0) onBusyChange(false);
   }, [onBusyChange]);
+
+  const onCommunicationBusyChange = useCallback((busy: boolean) => {
+    if (busy) beginOperation();
+    else endOperation();
+  }, [beginOperation, endOperation]);
 
   // A draft belongs to one exact online device session. Poll refreshes and
   // sidebar selection changes must not rehydrate it from an older cached
@@ -202,7 +210,7 @@ export function DeviceSettingsTool({
           devices
             .filter(
               (candidate) =>
-                candidate.device_type === "cia402_motor" &&
+                supportsPositionPreset(candidate) &&
                 candidate.online &&
                 candidate.identity != null,
             )
@@ -242,7 +250,7 @@ export function DeviceSettingsTool({
 
     if (
       !device ||
-      device.device_type !== "cia402_motor" ||
+      !supportsPositionPreset(device) ||
       !device.online ||
       !device.identity
     ) {
@@ -290,17 +298,6 @@ export function DeviceSettingsTool({
         showIcon
         message={t("settingsUnknownDevice")}
         description={t("settingsNoOperations")}
-      />
-    );
-  }
-
-  if (device.device_type === "meow_motor") {
-    return (
-      <Alert
-        type="info"
-        showIcon
-        message={device.friendly_name}
-        description={t("meowCanSettings")}
       />
     );
   }
@@ -463,188 +460,156 @@ export function DeviceSettingsTool({
 
   return (
     <Space direction="vertical" size={12} style={{ width: "100%", maxWidth: 720 }}>
-      <Card size="small" title={t("settingsCommunicationTitle")}>
-        <DeviceIdentitySummary device={device} />
-        {communicationBlocker && (
-          <Alert
-            type="warning"
-            showIcon
-            message={communicationBlocker}
-            style={{ marginBottom: 12 }}
-          />
-        )}
-
-        <Space align="end" wrap size={12}>
-          <Field label={t("settingsActiveNodeId")}>
-            <Typography.Text code>{nid2hex(device.node_id)}</Typography.Text>
-          </Field>
-          <span style={{ paddingBottom: 5 }}>→</span>
-          <Field label={t("settingsStoredTargetNodeId")}>
-            <InputNumber
-              min={1}
-              max={127}
-              value={newNodeId}
-              status={!nodeIdValid ? "error" : undefined}
-              disabled={communicationBlocker != null || operationBusy}
-              onChange={(value) =>
-                updateCurrentDraft({ newNodeId: value })
-              }
-              style={{ width: 110 }}
-            />
-          </Field>
-          <Field label={t("settingsNominalBitrate")}>
-            <Tag color="blue">
-              {formatTimingLabel(NOMINAL_BITRATE, 0.8)}
-            </Tag>
-          </Field>
-          {isFd && (
-            <>
-              <Field label={t("settingsDataBitrate")}>
-                <Select
-                  value={dataBitrate}
-                  disabled={communicationBlocker != null || operationBusy}
-                  onChange={(value) =>
-                    updateCurrentDraft({ dataBitrate: value })
-                  }
-                  style={{ width: 190 }}
-                  options={STANDARD_DATA_BITRATES.map((bitrate) => ({
-                    value: bitrate,
-                    label: formatTimingLabel(
-                      bitrate,
-                      bitrate === 5_000_000 ? 0.75 : 0.8,
-                    ),
-                  }))}
-                />
-              </Field>
-              <Field label={t("settingsTransmitPdoBrs")}>
-                <Switch
-                  checked={transmitPdoBrs}
-                  disabled={communicationBlocker != null || operationBusy}
-                  checkedChildren="BRS"
-                  unCheckedChildren="No BRS"
-                  onChange={(checked) =>
-                    updateCurrentDraft({ transmitPdoBrs: checked })
-                  }
-                />
-              </Field>
-            </>
-          )}
-        </Space>
-
-        {config && !isFd && (
-          <Alert
-            type="info"
-            showIcon
-            message={t("settingsClassicOnly")}
-            style={{ marginTop: 12 }}
-          />
-        )}
-        {nodeIdCollision && (
-          <Alert
-            type="error"
-            showIcon
-            message={t("settingsNodeIdCollision")}
-            style={{ marginTop: 12 }}
-          />
-        )}
-        {!nodeIdValid && (
-          <Alert
-            type="error"
-            showIcon
-            message={t("settingsInvalidNodeId")}
-            style={{ marginTop: 12 }}
-          />
-        )}
-        {nodeIdPolicyError && (
-          <Alert
-            type="error"
-            showIcon
-            message={nodeIdPolicyError}
-            style={{ marginTop: 12 }}
-          />
-        )}
-        {!dataRateValid && (
-          <Alert
-            type="error"
-            showIcon
-            message={t("settingsInvalidDataRate")}
-            style={{ marginTop: 12 }}
-          />
-        )}
-
-        <Button
-          type="primary"
-          loading={settingsBusy}
-          disabled={!canApply || operationBusy}
-          onClick={applySettings}
-          style={{ marginTop: 12 }}
-        >
-          {t("settingsApplyButton")}
-        </Button>
-
-        {draft?.boundResult && (
-          <SettingsResultAlert
-            boundResult={draft.boundResult}
-            t={t}
-          />
-        )}
-      </Card>
-
-      {isMotor && (
-        <Card size="small" title={t("settingsZeroTitle")}>
-          <Typography.Paragraph type="secondary">
-            {t("settingsZeroHint")}
-          </Typography.Paragraph>
-          {positionBlocker && (
+      {device.device_type === "meow_motor" ? (
+        <MeowMotorPanel
+          key={device.node_id}
+          info={device}
+          connected={connected}
+          settingsOnly
+          settingsDisabled={operationBusy}
+          onBusyChange={onCommunicationBusyChange}
+        />
+      ) : (
+        <Card size="small" title={t("settingsCommunicationTitle")}>
+          <DeviceIdentitySummary device={device} />
+          {communicationBlocker && (
             <Alert
               type="warning"
               showIcon
-              message={positionBlocker}
+              message={communicationBlocker}
               style={{ marginBottom: 12 }}
             />
           )}
+
           <Space align="end" wrap size={12}>
-            <Field label={t("currentId")}>
+            <Field label={t("settingsActiveNodeId")}>
               <Typography.Text code>{nid2hex(device.node_id)}</Typography.Text>
             </Field>
-            <Button
-              disabled={positionBlocker != null || operationBusy}
-              loading={positionBusy}
-              onClick={readPositionNow}
-            >
-              {t("readPos")}
-            </Button>
-            <Typography.Text>
-              {t("currentPos")}:{" "}
-              <b>
-                {currentPosition == null
-                  ? "—"
-                  : `${currentPosition.toFixed(4)} rev`}
-              </b>
-            </Typography.Text>
-          </Space>
-          <Space align="end" wrap size={12} style={{ marginTop: 12 }}>
-            <Field label={t("presetPos")}>
+            <span style={{ paddingBottom: 5 }}>→</span>
+            <Field label={t("settingsStoredTargetNodeId")}>
               <InputNumber
-                min={-0.5}
-                max={0.5}
-                step={0.01}
-                value={presetPosition}
-                disabled={positionBlocker != null || operationBusy}
-                onChange={(value) => setPresetPosition(value ?? 0)}
-                style={{ width: 150 }}
+                min={1}
+                max={127}
+                value={newNodeId}
+                status={!nodeIdValid ? "error" : undefined}
+                disabled={communicationBlocker != null || operationBusy}
+                onChange={(value) =>
+                  updateCurrentDraft({ newNodeId: value })
+                }
+                style={{ width: 110 }}
               />
             </Field>
-            <Button
-              type="primary"
-              disabled={positionBlocker != null || operationBusy}
-              loading={positionBusy}
-              onClick={savePosition}
-            >
-              {t("savePos")}
-            </Button>
+            <Field label={t("settingsNominalBitrate")}>
+              <Tag color="blue">
+                {formatTimingLabel(NOMINAL_BITRATE, 0.8)}
+              </Tag>
+            </Field>
+            {isFd && (
+              <>
+                <Field label={t("settingsDataBitrate")}>
+                  <Select
+                    value={dataBitrate}
+                    disabled={communicationBlocker != null || operationBusy}
+                    onChange={(value) =>
+                      updateCurrentDraft({ dataBitrate: value })
+                    }
+                    style={{ width: 190 }}
+                    options={STANDARD_DATA_BITRATES.map((bitrate) => ({
+                      value: bitrate,
+                      label: formatTimingLabel(
+                        bitrate,
+                        bitrate === 5_000_000 ? 0.75 : 0.8,
+                      ),
+                    }))}
+                  />
+                </Field>
+                <Field label={t("settingsTransmitPdoBrs")}>
+                  <Switch
+                    checked={transmitPdoBrs}
+                    disabled={communicationBlocker != null || operationBusy}
+                    checkedChildren="BRS"
+                    unCheckedChildren="No BRS"
+                    onChange={(checked) =>
+                      updateCurrentDraft({ transmitPdoBrs: checked })
+                    }
+                  />
+                </Field>
+              </>
+            )}
           </Space>
+
+          {config && !isFd && (
+            <Alert
+              type="info"
+              showIcon
+              message={t("settingsClassicOnly")}
+              style={{ marginTop: 12 }}
+            />
+          )}
+          {nodeIdCollision && (
+            <Alert
+              type="error"
+              showIcon
+              message={t("settingsNodeIdCollision")}
+              style={{ marginTop: 12 }}
+            />
+          )}
+          {!nodeIdValid && (
+            <Alert
+              type="error"
+              showIcon
+              message={t("settingsInvalidNodeId")}
+              style={{ marginTop: 12 }}
+            />
+          )}
+          {nodeIdPolicyError && (
+            <Alert
+              type="error"
+              showIcon
+              message={nodeIdPolicyError}
+              style={{ marginTop: 12 }}
+            />
+          )}
+          {!dataRateValid && (
+            <Alert
+              type="error"
+              showIcon
+              message={t("settingsInvalidDataRate")}
+              style={{ marginTop: 12 }}
+            />
+          )}
+
+          <Button
+            type="primary"
+            loading={settingsBusy}
+            disabled={!canApply || operationBusy}
+            onClick={applySettings}
+            style={{ marginTop: 12 }}
+          >
+            {t("settingsApplyButton")}
+          </Button>
+
+          {draft?.boundResult && (
+            <SettingsResultAlert
+              boundResult={draft.boundResult}
+              t={t}
+            />
+          )}
         </Card>
+      )}
+
+      {isMotor && (
+        <PositionPresetCard
+          nodeId={device.node_id}
+          currentPosition={currentPosition}
+          presetPosition={presetPosition}
+          blocker={positionBlocker}
+          disabled={positionBlocker != null || operationBusy}
+          loading={positionBusy}
+          onRead={readPositionNow}
+          onSave={savePosition}
+          onPresetChange={setPresetPosition}
+        />
       )}
     </Space>
   );
@@ -770,6 +735,10 @@ function formatTimingLabel(bitrate: number, samplePoint: number): string {
   return `${rate} · SP ${samplePoint.toFixed(2)}`;
 }
 
+function supportsPositionPreset(device: MotorInfo): boolean {
+  return device.device_type === "cia402_motor" || device.device_type === "meow_motor";
+}
+
 function positionKey(device: MotorInfo): string {
   const identity = device.identity;
   if (!identity) return `unknown:${device.node_id}:${device.session_epoch}`;
@@ -786,21 +755,4 @@ function positionKey(device: MotorInfo): string {
 function settingsSessionKey(device: MotorInfo): string | null {
   if (!device.identity) return null;
   return `settings:${positionKey(device)}`;
-}
-
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <div style={{ fontSize: 12, color: "#8a93a3", marginBottom: 4 }}>
-        {label}
-      </div>
-      {children}
-    </div>
-  );
 }

@@ -701,12 +701,14 @@ pub async fn identify(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
 
 #[tauri::command]
 pub async fn initialize(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
+    let _operation = state.device_settings_operation.acquire().await;
     let mgr = manager(&state).await?;
     mgr.initialize(nid).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn initialize_all(state: State<'_, AppState>) -> CmdResult<Vec<(u8, Option<String>)>> {
+    let _operation = state.device_settings_operation.acquire().await;
     let mgr = manager(&state).await?;
     let meow_mgr = meow_manager(&state).await?;
     let motor_nodes = mgr
@@ -749,6 +751,7 @@ fn motor_initialization_kind(
 
 #[tauri::command]
 pub async fn set_mode(state: State<'_, AppState>, nid: u8, mode: MotorModeDto) -> CmdResult<()> {
+    let _operation = state.device_settings_operation.acquire().await;
     let mgr = manager(&state).await?;
     let mode: MotorMode = mode.into();
     mgr.set_mode(nid, mode).await.map_err(err)
@@ -760,24 +763,28 @@ pub async fn set_target(
     nid: u8,
     target: MotorTargetDto,
 ) -> CmdResult<()> {
+    let _operation = state.device_settings_operation.acquire().await;
     let mgr = manager(&state).await?;
     mgr.set_target(nid, target.into()).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn set_max_torque(state: State<'_, AppState>, nid: u8, permille: u16) -> CmdResult<()> {
+    let _operation = state.device_settings_operation.acquire().await;
     let mgr = manager(&state).await?;
     mgr.set_max_torque(nid, permille).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn disable(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
+    let _operation = state.device_settings_operation.acquire().await;
     let mgr = manager(&state).await?;
     mgr.disable(nid).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn clear_error(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
+    let _operation = state.device_settings_operation.acquire().await;
     let mgr = manager(&state).await?;
     mgr.clear_error(nid).await.map_err(err)
 }
@@ -845,6 +852,7 @@ pub async fn meow_initialize(
     nid: u8,
     event_timer_ms: u16,
 ) -> CmdResult<MeowMotorSnapshotDto> {
+    let _operation = state.device_settings_operation.acquire().await;
     // Reject malformed IPC input before identification performs any SDO I/O
     // or changes the cached lifecycle state.
     let profile = meow_pdo_profile(event_timer_ms)?;
@@ -869,6 +877,7 @@ pub async fn meow_activate_target(
     nid: u8,
     target: MeowMotorTargetDto,
 ) -> CmdResult<()> {
+    let _operation = state.device_settings_operation.acquire().await;
     let manager = meow_manager(&state).await?;
     let torque_factor = meow_calibration::factor_for(&state, &manager, nid).await?;
     // `set_mode_sdo` is deliberately ordered: every target object is written
@@ -1130,6 +1139,7 @@ pub async fn meow_set_target(
     nid: u8,
     target: MeowMotorTargetDto,
 ) -> CmdResult<()> {
+    let _operation = state.device_settings_operation.acquire().await;
     let manager = meow_manager(&state).await?;
     let torque_factor = meow_calibration::factor_for(&state, &manager, nid).await?;
     manager
@@ -1144,6 +1154,7 @@ pub async fn meow_set_max_torque(
     nid: u8,
     permille: u16,
 ) -> CmdResult<()> {
+    let _operation = state.device_settings_operation.acquire().await;
     let manager = meow_manager(&state).await?;
     manager.set_max_torque(nid, permille).await.map_err(err)
 }
@@ -1154,6 +1165,7 @@ pub async fn meow_set_profile_limits(
     nid: u8,
     limits: MeowProfileLimitsDto,
 ) -> CmdResult<()> {
+    let _operation = state.device_settings_operation.acquire().await;
     let manager = meow_manager(&state).await?;
     manager
         .set_profile_limits(
@@ -1170,12 +1182,14 @@ pub async fn meow_set_profile_limits(
 
 #[tauri::command]
 pub async fn meow_disable(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
+    let _operation = state.device_settings_operation.acquire().await;
     let manager = meow_manager(&state).await?;
     manager.disable(nid).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn meow_clear_error(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
+    let _operation = state.device_settings_operation.acquire().await;
     let manager = meow_manager(&state).await?;
     manager.clear_error(nid).await.map_err(err)
 }
@@ -1268,9 +1282,8 @@ pub async fn forget_offline(state: State<'_, AppState>) -> CmdResult<()> {
 }
 
 /// Set this exact registered motor's current rotor position to `pos`
-/// (Rev, -0.5..0.5) via the 0x3001 user-position-preset. The driver force
-/// refreshes identity, requests Disable Voltage and confirms
-/// Switch-On-Disabled before committing the preset.
+/// (Rev, -0.5..0.5) via the shared 0x3001 user-position-preset. Verify identity
+/// and confirm disabled using the motor's own dialect before committing.
 #[tauri::command]
 pub async fn set_position_preset(
     state: State<'_, AppState>,
@@ -1280,21 +1293,21 @@ pub async fn set_position_preset(
     pos: f32,
 ) -> CmdResult<()> {
     let _operation = state.device_settings_operation.acquire().await;
-    if !crate::device_registry::classify(expected_vendor_id, expected_product_code)
-        .supports_position_preset()
-    {
+    let kind = crate::device_registry::classify(expected_vendor_id, expected_product_code);
+    if !kind.supports_position_preset() {
         return Err(format!(
             "position preset is unavailable for identity 0x{expected_vendor_id:08X}/0x{expected_product_code:08X}"
         ));
     }
     let mgr = manager(&state).await?;
-    mgr.set_position_preset_for(nid, expected_vendor_id, expected_product_code, pos)
-        .await
-        .map_err(err)
+    crate::position_preset::set_position_preset(
+        &mgr, nid, expected_vendor_id, expected_product_code, pos,
+    )
+    .await
 }
 
-/// Read 0x6064 (actual position, Rev) once, on demand, after exact identity
-/// verification.
+/// Read actual position once after exact identity verification: CiA402 uses
+/// 0x6064/f32; Meow Motor uses 0x4564/signed Q8.24. Both return revolutions.
 #[tauri::command]
 pub async fn read_position(
     state: State<'_, AppState>,
@@ -1303,14 +1316,19 @@ pub async fn read_position(
     expected_product_code: u32,
 ) -> CmdResult<f32> {
     let _operation = state.device_settings_operation.acquire().await;
-    if !crate::device_registry::classify(expected_vendor_id, expected_product_code)
-        .supports_position_preset()
-    {
+    let kind = crate::device_registry::classify(expected_vendor_id, expected_product_code);
+    if !kind.supports_position_preset() {
         return Err(format!(
             "position read is unavailable for identity 0x{expected_vendor_id:08X}/0x{expected_product_code:08X}"
         ));
     }
     let mgr = manager(&state).await?;
+    if kind == crate::device_registry::DeviceKind::MeowMotor {
+        return crate::position_preset::read_meow_position(
+            &mgr, nid, expected_vendor_id, expected_product_code,
+        )
+        .await;
+    }
     mgr.read_position_for(nid, expected_vendor_id, expected_product_code)
         .await
         .map_err(err)
