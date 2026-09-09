@@ -20,7 +20,9 @@ use crate::logging::LogHandle;
 use crate::unified_smartknob::ActiveSmartKnob;
 
 /// Serializes persistent communication settings and motor position operations
-/// with disconnect. The counter includes both the current holder and queued
+/// with disconnect. Motor mode/target commands also hold this gate so they
+/// cannot re-enable a motor between confirmed disable and the 0x3001 commit.
+/// The counter includes both the current holder and queued
 /// callers, so a window close cannot slip past a command waiting for the lock.
 #[derive(Default)]
 pub(crate) struct DeviceSettingsOperationGate {

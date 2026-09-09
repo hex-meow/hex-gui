@@ -122,9 +122,12 @@ Communication settings and motor zero are separate button transactions:
   `0x2100:00` value controls capability: `1` exposes only nominal timing,
   while `3` also exposes data bitrate and TPDO BRS. These fields are
   write-through and are never followed by `0x1010` or an automatic reset;
-- only registered motor tuples expose `0x3001` position preset. The backend
-  first requests Disable Voltage and confirms the CiA402
-  Switch-On-Disabled status before issuing the preset command.
+- only registered motor tuples expose `0x3001` position preset. CiA402 and
+  Meow Motor both write f32 revolutions to `0x3001:01`, then `"pres"` to
+  `0x3001:02`. The backend verifies identity and confirms disabled first:
+  CiA402 uses Disable Voltage / Switch-On-Disabled; Meow Motor uses
+  `0x4401 = 0` / `0x4402 = 0`. Actual position is read from `0x6064` (f32)
+  for CiA402 or `0x4564` (signed Q8.24) for Meow Motor, and displayed in rev.
 
 Relevant files:
 
