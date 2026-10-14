@@ -1,7 +1,7 @@
 //! Thin adapter over the shared build-time firmware target catalog.
 
-use hexmeow_motor_iap::TargetRegistry;
 use hexmeow_dfu_targets::CatalogBuildError;
+use hexmeow_motor_iap::TargetRegistry;
 
 pub(crate) fn target_registry() -> Result<TargetRegistry, CatalogBuildError> {
     hexmeow_dfu_targets::motor_img_target_registry()
@@ -24,7 +24,7 @@ mod tests {
     #[test]
     fn wrapper_enables_qualified_4310_and_4342_rows_only() {
         let registry = target_registry().unwrap();
-        assert_eq!(registry.targets().len(), 5);
+        assert_eq!(registry.targets().len(), 6);
         assert_eq!(
             registry
                 .targets()
@@ -46,6 +46,10 @@ mod tests {
         }
         assert!(matches!(
             registry.authorize(identity(0x4859_444C, 0xAAAA_0005)),
+            Err(PolicyError::DisabledTarget { .. })
+        ));
+        assert!(matches!(
+            registry.authorize(identity(0x0068_6578, 0x6C64_AE8D)),
             Err(PolicyError::DisabledTarget { .. })
         ));
     }

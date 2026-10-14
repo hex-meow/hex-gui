@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  MEOW_MOTOR_3525_PRODUCT_CODE,
   MEOW_MOTOR_4310_PRODUCT_CODE,
   MEOW_MOTOR_4342_PRODUCT_CODE,
   RADIANS_PER_REVOLUTION,
@@ -17,6 +18,7 @@ import {
 } from "../src/meowMotorUi.ts";
 
 test("PV limits follow the exact Meow Motor product", () => {
+  assert.equal(meowVelocityLimit(MEOW_MOTOR_3525_PRODUCT_CODE), 10);
   assert.equal(meowVelocityLimit(MEOW_MOTOR_4310_PRODUCT_CODE), 8);
   assert.equal(meowVelocityLimit(MEOW_MOTOR_4342_PRODUCT_CODE), 3);
   assert.equal(meowVelocityLimit(null), 3);

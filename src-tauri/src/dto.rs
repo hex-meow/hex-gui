@@ -233,6 +233,8 @@ pub struct MeowMotorSnapshotDto {
     pub node_id: u8,
     pub session_epoch: u64,
     pub friendly_name: String,
+    /// Nominal reduction metadata; all commands and feedback use output-shaft units.
+    pub gear_ratio: Option<u16>,
     pub identity: Option<MotorIdentityDto>,
     pub can_config: DeviceCanConfigStatusDto,
     pub lifecycle: MeowMotorLifecycleDto,
@@ -268,6 +270,7 @@ impl MeowMotorSnapshotDto {
             node_id: info.node_id,
             session_epoch: info.session_epoch,
             friendly_name: info.friendly_name(),
+            gear_ratio: info.model.map(|model| model.gear_ratio()),
             identity: info.identity.as_ref().map(MotorIdentityDto::from),
             can_config: (&info.can_settings).into(),
             lifecycle: (&info.lifecycle).into(),

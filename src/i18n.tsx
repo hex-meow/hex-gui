@@ -372,6 +372,7 @@ const STRINGS = {
   },
   meowMaxTorque: { en: "Max torque (permille)", zh: "最大力矩 (千分比)" },
   meowProfileVelocity: { en: "Profile velocity (rev/s)", zh: "规划速度 (圈/秒)" },
+  meowGearRatio: { en: "Gear ratio", zh: "减速比" },
   meowProfileAcceleration: { en: "Acceleration (rev/s²)", zh: "加速度 (圈/秒²)" },
   meowProfileDeceleration: { en: "Deceleration (rev/s²)", zh: "减速度 (圈/秒²)" },
   meowApplyProfile: { en: "Apply profile limits", zh: "应用规划限制" },

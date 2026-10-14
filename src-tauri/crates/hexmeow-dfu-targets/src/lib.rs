@@ -170,6 +170,7 @@ pub const CIA402_MOTOR_4342_PRODUCT_CODE: u32 = 0xAAAA_0002;
 pub const CIA402_MOTOR_4360_PRODUCT_CODE: u32 = 0xAAAA_0005;
 
 pub const MEOW_MOTOR_VENDOR_ID: u32 = 0x0068_6578;
+pub const MEOW_MOTOR_3525_PRODUCT_CODE: u32 = 0x6C64_AE8D;
 pub const MEOW_MOTOR_4310_PRODUCT_CODE: u32 = 0x6C64_BC78;
 pub const MEOW_MOTOR_4342_PRODUCT_CODE: u32 = 0x6C64_BCAA;
 
@@ -338,6 +339,23 @@ pub const TARGETS: &[TargetDescriptor] = &[
         support: TargetSupport::Disabled {
             backend: TargetBackend::MotorImg,
             reason: "Known CANopen product, but its IAP identity is not qualified",
+        },
+    },
+    TargetDescriptor {
+        profile_id: "custom-motor-3525-v1",
+        display_name: "hexmeow 3525",
+        device_name: Some("hexmeow 3525"),
+        device_class: DeviceClass::MeowMotor,
+        vendor_id: MEOW_MOTOR_VENDOR_ID,
+        product_code: MEOW_MOTOR_3525_PRODUCT_CODE,
+        expected_postflash_identity: current_identity(
+            MEOW_MOTOR_VENDOR_ID,
+            MEOW_MOTOR_3525_PRODUCT_CODE,
+        ),
+        preflight: PreflightPolicy::None,
+        support: TargetSupport::Disabled {
+            backend: TargetBackend::MotorImg,
+            reason: "Motor control is supported, but the 3525 IAP identity and firmware policy are not qualified",
         },
     },
     TargetDescriptor {
@@ -611,7 +629,7 @@ mod tests {
     #[test]
     fn catalog_is_unique_and_freezes_backend_routing() {
         validate_catalog().unwrap();
-        assert_eq!(TARGETS.len(), 8);
+        assert_eq!(TARGETS.len(), 9);
         assert_eq!(
             TARGETS.iter().filter(|target| target.is_enabled()).count(),
             6
@@ -628,7 +646,7 @@ mod tests {
                 .iter()
                 .filter(|target| target.backend() == TargetBackend::MotorImg)
                 .count(),
-            5
+            6
         );
     }
 
@@ -683,6 +701,17 @@ mod tests {
     }
 
     #[test]
+    fn motor_3525_is_identified_without_enabling_unqualified_firmware_updates() {
+        let target =
+            target_by_identity(MEOW_MOTOR_VENDOR_ID, MEOW_MOTOR_3525_PRODUCT_CODE).unwrap();
+        assert_eq!(target.device_class, DeviceClass::MeowMotor);
+        assert_eq!(target.device_name, Some("hexmeow 3525"));
+        assert!(!target.is_enabled());
+        assert!(target.motor_img_policy().is_none());
+        assert_eq!(target.preflight, PreflightPolicy::None);
+    }
+
+    #[test]
     fn normal_updates_preserve_the_canopen_firmware_family() {
         for target in TARGETS {
             assert_eq!(target.expected_postflash_identity, target.identity());
@@ -694,7 +723,7 @@ mod tests {
         let standard = standard_target_registry().unwrap();
         let motor = motor_img_target_registry().unwrap();
         assert_eq!(standard.targets().len(), 3);
-        assert_eq!(motor.targets().len(), 5);
+        assert_eq!(motor.targets().len(), 6);
         assert_eq!(
             standard
                 .targets()

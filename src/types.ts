@@ -386,6 +386,8 @@ export interface MeowMotorSnapshot {
   node_id: number;
   session_epoch: number;
   friendly_name: string;
+  /** Nominal reduction; commands and feedback already use output-shaft units. */
+  gear_ratio: number | null;
   identity: MotorIdentity | null;
   can_config: DeviceCanConfigStatus;
   lifecycle: MeowMotorLifecycle;

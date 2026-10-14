@@ -966,12 +966,16 @@ fn raw_torque_nm(desired_nm: f32, torque_factor: f64) -> CmdResult<f32> {
 mod meow_command_tests {
     use super::*;
     use crate::device_registry::{
-        DeviceKind, MEOW_MOTOR_4310_PRODUCT_CODE, MEOW_MOTOR_4342_PRODUCT_CODE,
-        MEOW_MOTOR_VENDOR_ID,
+        DeviceKind, MEOW_MOTOR_3525_PRODUCT_CODE, MEOW_MOTOR_4310_PRODUCT_CODE,
+        MEOW_MOTOR_4342_PRODUCT_CODE, MEOW_MOTOR_VENDOR_ID,
     };
 
     #[test]
     fn initialize_all_routes_both_motor_protocols() {
+        assert_eq!(
+            motor_initialization_kind(MEOW_MOTOR_VENDOR_ID, MEOW_MOTOR_3525_PRODUCT_CODE),
+            Some(DeviceKind::MeowMotor)
+        );
         assert_eq!(
             motor_initialization_kind(MEOW_MOTOR_VENDOR_ID, MEOW_MOTOR_4310_PRODUCT_CODE),
             Some(DeviceKind::MeowMotor)

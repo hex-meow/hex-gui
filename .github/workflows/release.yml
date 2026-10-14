@@ -10,9 +10,10 @@
 #   • Windows (windows-latest) → .msi + .exe NSIS installer  (x86-64)
 #   • macOS (macos-latest) → .dmg + .app, built `universal` (Intel + Apple Silicon)
 #
-# Fresh checkouts resolve the Rust libraries from crates.io. The shared proto
-# remains a pinned source input: CI checks it out into `_proto` and points
-# ROBOT_PROTO_DIR at it instead of relying on a local sibling repository.
+# The 3525-capable hex-motor driver is a pinned sibling source input, installed
+# by the setup-motor action. Other Rust libraries resolve from crates.io.
+# The shared proto is also pinned: CI checks it out into `_proto` and sets
+# ROBOT_PROTO_DIR.
 #
 # ⚠️ Bundles here are UNSIGNED. macOS users hit Gatekeeper (right-click → Open);
 # Windows users hit SmartScreen. Add code signing later via tauri-action env.
@@ -37,6 +38,7 @@ jobs:
       app_version: ${{ steps.read.outputs.app_version }}
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-motor
       - uses: dtolnay/rust-toolchain@stable
       - name: Read and validate the single application version
         id: read
@@ -76,6 +78,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-motor
       - name: Check out shared proto (hex-robot-proto)
         uses: actions/checkout@v6
         with:
@@ -126,6 +129,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-motor
 
       # Shared proto contract lives in a sibling repo. CI consumes only the
       # Pinned verified contract; build.rs compiles it via ROBOT_PROTO_DIR.

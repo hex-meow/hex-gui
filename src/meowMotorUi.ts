@@ -1,3 +1,4 @@
+export const MEOW_MOTOR_3525_PRODUCT_CODE = 0x6c64_ae8d;
 export const MEOW_MOTOR_4310_PRODUCT_CODE = 0x6c64_bc78;
 export const MEOW_MOTOR_4342_PRODUCT_CODE = 0x6c64_bcaa;
 export const RADIANS_PER_REVOLUTION = 2 * Math.PI;
@@ -85,6 +86,9 @@ const DETAILED_ERROR_NAMES: Partial<Record<number, LocalizedName>> = {
 /** Model-specific PV target limit in Rev/s. Unknown products fail closed at 3 Rev/s. */
 export function meowVelocityLimit(productCode: number | null | undefined): number {
   switch (productCode) {
+    case MEOW_MOTOR_3525_PRODUCT_CODE:
+      // TODO: Replace this provisional 10 Rev/s ceiling with the measured 3525 output-shaft limit.
+      return 10;
     case MEOW_MOTOR_4310_PRODUCT_CODE:
       return 8;
     case MEOW_MOTOR_4342_PRODUCT_CODE:

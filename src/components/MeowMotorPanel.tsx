@@ -285,6 +285,11 @@ export function MeowMotorPanel({
                 {snapshot?.friendly_name ?? info.friendly_name}
               </Typography.Title>
               <Typography.Text code>{nid2hex(info.node_id)}</Typography.Text>
+              {snapshot?.gear_ratio != null && (
+                <Typography.Text type="secondary">
+                  {t("meowGearRatio")}: {snapshot.gear_ratio}:1
+                </Typography.Text>
+              )}
             </Space>
             <Typography.Text type="secondary">
               {t("meowLifecycle")}: {snapshot?.lifecycle.kind ?? "Identifying"} · NMT{" "}

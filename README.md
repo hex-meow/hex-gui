@@ -34,6 +34,11 @@ tauri-test/
 
 ## Prerequisites
 
+The 3525-capable `hex-motor` 0.3.2 driver currently comes from the sibling
+checkout `../hex-motor`. Use commit
+`b390541ef81f2c8bb70685555b4bdfb061287a59`; CI installs this exact revision via
+`.github/actions/setup-motor`. Other Rust dependencies remain registry-based.
+
 ### 1. System libraries (Linux)
 
 Tauri 2.x on Linux links WebKit2GTK + libsoup-3. On Debian/Ubuntu:
@@ -252,8 +257,9 @@ a maintainer may explicitly delete and recreate both.
 > env vars.
 >
 > **Fresh-checkout inputs** (see the header comment in the workflow):
-> Rust library dependencies are resolved from crates.io. CI checks out the verified
-> shared contract from pinned `hex-meow/hex-robot-proto` commit `6848962` via `ROBOT_PROTO_DIR`.
+> CI checks out the 3525-capable `hex-meow/hex-motor` driver at pinned commit
+> `b390541` and the verified `hex-meow/hex-robot-proto` contract at commit
+> `6848962` via `ROBOT_PROTO_DIR`. Other Rust libraries resolve from crates.io.
 
 ## Usage
 

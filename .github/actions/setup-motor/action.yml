@@ -1,0 +1,16 @@
+name: Set up pinned motor driver
+description: Check out the 3525-capable driver at the sibling path required by Cargo.
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v6
+      with:
+        repository: hex-meow/hex-motor
+        ref: b390541ef81f2c8bb70685555b4bdfb061287a59
+        path: _hex-motor
+        persist-credentials: false
+    - name: Place the driver at the Cargo sibling path
+      shell: bash
+      run: |
+        mkdir -p "$GITHUB_WORKSPACE/../hex-motor"
+        cp -R "$GITHUB_WORKSPACE/_hex-motor/." "$GITHUB_WORKSPACE/../hex-motor/"

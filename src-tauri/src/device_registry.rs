@@ -12,8 +12,9 @@ use serde::Serialize;
 #[allow(unused_imports)]
 pub use hexmeow_dfu_targets::{
     CIA402_MOTOR_4310_PRODUCT_CODE, CIA402_MOTOR_4342_PRODUCT_CODE, CIA402_MOTOR_4360_PRODUCT_CODE,
-    CIA402_MOTOR_VENDOR_ID, MEOW_MOTOR_4310_PRODUCT_CODE, MEOW_MOTOR_4342_PRODUCT_CODE,
-    MEOW_MOTOR_VENDOR_ID, PRODUCT_ARM_IMU, PRODUCT_IMU_G4, PRODUCT_LIFT, VENDOR_HEXM,
+    CIA402_MOTOR_VENDOR_ID, MEOW_MOTOR_3525_PRODUCT_CODE, MEOW_MOTOR_4310_PRODUCT_CODE,
+    MEOW_MOTOR_4342_PRODUCT_CODE, MEOW_MOTOR_VENDOR_ID, PRODUCT_ARM_IMU, PRODUCT_IMU_G4,
+    PRODUCT_LIFT, VENDOR_HEXM,
 };
 
 /// Which panel a discovered device opens. Unknown exact tuples remain
@@ -144,6 +145,18 @@ mod tests {
 
     #[test]
     fn meow_motors_require_exact_tuples_and_keep_public_names() {
+        assert_eq!(
+            classify(MEOW_MOTOR_VENDOR_ID, MEOW_MOTOR_3525_PRODUCT_CODE),
+            DeviceKind::MeowMotor
+        );
+        assert_eq!(
+            display_name(MEOW_MOTOR_VENDOR_ID, MEOW_MOTOR_3525_PRODUCT_CODE),
+            Some("hexmeow 3525")
+        );
+        assert_eq!(
+            classify(CIA402_MOTOR_VENDOR_ID, MEOW_MOTOR_3525_PRODUCT_CODE),
+            DeviceKind::Unknown
+        );
         assert_eq!(
             classify(MEOW_MOTOR_VENDOR_ID, MEOW_MOTOR_4310_PRODUCT_CODE),
             DeviceKind::MeowMotor
