@@ -61,6 +61,18 @@ and 50 Hz TPDO2 feedback, then returned the motor to Disabled/Pre-operational.
 It did not qualify the maximum speed or firmware updating. Its updater
 profile remains disabled until the exact IAP device/firmware policy is known.
 
+The shared discovery path also registers the 3525 tuple in `hex-motor`'s
+`cia402::device_can` and `cia402::known_devices` tables. The sidebar and link
+checks use this path's cached `0x2001` result, independently of the custom motor
+control manager; omitting the tuple there produces `CAN config schema unsupported`
+even when custom motor control works.
+
+The supplied `GB4658_Hexfellow_V2.img` was inspected on 2026-10-15 without
+flashing: its encrypted IMG header reports IAP device ID `0xAAAA0006`, firmware
+ID `0x20260711`, version `0x65780002`, and start address `0x1000C000`. File size,
+address range and the embedded SHA-256 are consistent. These artifact checks
+do not confirm the device's IAP handshake identity or enable OTA by themselves.
+
 > SmartKnob and HopeA3 are **applications** that run *on* these motors, not
 > separate identities. SmartKnob lets the user choose one motor; the raw
 > HopeA3 application uses the fixed base Node-IDs `21`, `22`, and `23`.
