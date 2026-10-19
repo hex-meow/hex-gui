@@ -36,7 +36,7 @@ tauri-test/
 
 The 3525-capable `hex-motor` 0.3.2 driver currently comes from the sibling
 checkout `../hex-motor`. Use commit
-`17dd087362ec6dea675cc16c8b144524f0a21bb1`; CI installs this exact revision via
+`9466813ef26f9b9323843911560a57f6a201c5d5`; CI installs this exact revision via
 `.github/actions/setup-motor`. Other Rust dependencies remain registry-based.
 
 ### 1. System libraries (Linux)
@@ -258,7 +258,7 @@ a maintainer may explicitly delete and recreate both.
 >
 > **Fresh-checkout inputs** (see the header comment in the workflow):
 > CI checks out the 3525-capable `hex-meow/hex-motor` driver at pinned commit
-> `17dd087` and the verified `hex-meow/hex-robot-proto` contract at commit
+> `9466813` and the verified `hex-meow/hex-robot-proto` contract at commit
 > `6848962` via `ROBOT_PROTO_DIR`. Other Rust libraries resolve from crates.io.
 
 ## Usage
@@ -412,13 +412,17 @@ bus with the right settings:
   NMT just to force that state.
 
   Every write button force-reads `0x1018` again and verifies the exact expected
-  tuple in the same per-node exclusive SDO transaction. Motor `0x2001` changes
-  are stored with one final `0x1010:01 = "save"` and take effect after a
-  physical power cycle. `0x2100/0x2101` changes are write-through, are not
+  tuple in the same per-node exclusive SDO transaction. CiA402 motor `0x2001`
+  changes use `0x1010:01 = "save"`; custom Meow Motor uses `0x1010:04`.
+  Both take effect after a physical power cycle. `0x2100/0x2101` changes are write-through, are not
   followed by `0x1010`, and are never auto-reset; wait for persistence before
   restarting and verify after the next heartbeat. Position preset is a
-  separate button transaction that confirms Switch On Disabled before writing
-  `0x3001`.
+  separate button transaction for both CiA402 and custom Meow Motor products.
+  Both write REAL32 revolutions to `0x3001:01` followed by `0x3001:02 = "pres"`.
+  CiA402 confirms Switch On Disabled through `0x6040/0x6041`; Meow Motor confirms
+  Disabled through `0x4401/0x4402`. Neither path re-enables the motor afterward.
+  Position readback uses `0x6064` REAL32 for CiA402 and `0x4564` signed Q8.24
+  for Meow Motor, displayed in output-shaft revolutions.
 
   This workspace does **not** broadcast a host heartbeat. It sends CAN traffic
   only after receiving a device heartbeat or after a user click. Position is

@@ -51,9 +51,9 @@ impl DeviceKind {
         )
     }
 
-    /// The existing position-preset path belongs only to exact legacy tuples.
+    /// Both registered motor protocols share the 0x3001 position preset.
     pub fn supports_position_preset(self) -> bool {
-        matches!(self, DeviceKind::Cia402Motor)
+        matches!(self, DeviceKind::Cia402Motor | DeviceKind::MeowMotor)
     }
 
     /// Only the legacy motor type may enter existing CiA402 command paths.
@@ -193,7 +193,7 @@ mod tests {
 
         let meow_motor = classify(MEOW_MOTOR_VENDOR_ID, MEOW_MOTOR_4310_PRODUCT_CODE);
         assert!(!meow_motor.supports_device_settings());
-        assert!(!meow_motor.supports_position_preset());
+        assert!(meow_motor.supports_position_preset());
         assert!(!meow_motor.supports_cia402_controls());
         assert_eq!(meow_motor.as_str(), "meow_motor");
 

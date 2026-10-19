@@ -50,6 +50,7 @@ export function MeowMotorPanel({
   info,
   connected,
   settingsOnly = false,
+  externalBusy = false,
   logging = false,
   logPath = null,
   onToggleLog,
@@ -58,6 +59,7 @@ export function MeowMotorPanel({
   info: MotorInfo;
   connected: boolean;
   settingsOnly?: boolean;
+  externalBusy?: boolean;
   logging?: boolean;
   logPath?: string | null;
   onToggleLog?: (on: boolean) => void;
@@ -251,6 +253,7 @@ export function MeowMotorPanel({
   }, [connected, info.node_id, refreshHz]);
 
   const run = async (label: string, action: () => Promise<unknown>) => {
+    if (busy || externalBusy) return;
     setBusy(true);
     onBusyChange?.(true);
     try {
@@ -342,7 +345,7 @@ export function MeowMotorPanel({
           settings={settings}
           setSettings={setSettings}
           canConfigure={canConfigure}
-          busy={busy}
+          busy={busy || externalBusy}
           apply={() => {
             if (settings) {
               void run(t("apply"), async () => {

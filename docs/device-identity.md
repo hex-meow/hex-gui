@@ -101,8 +101,10 @@ snapshot as authorization to write. Every Apply or zero-preset transaction:
 
 Communication Apply additionally requires the last inbound heartbeat state to
 be Pre-operational or Stopped. The tool does not send NMT to force that state.
-Motor zero is separate: its explicit transaction requests Disable Voltage and
-then confirms Switch-On-Disabled before the preset write.
+Motor zero is separate: CiA402 requests Disable Voltage and confirms
+Switch-On-Disabled through `0x6040/0x6041`; custom Meow Motor requests Disabled
+through `0x4401` and confirms `0x4402 == 0`. Both then write the same `0x3001`
+position preset, leaving output disabled.
 
 When a node ages offline, its cached identity/configuration is invalidated.
 The next inbound heartbeat triggers identification again. Device Settings does
@@ -115,16 +117,20 @@ known-device CAN-profile mismatch warnings.
 
 Communication settings and motor zero are separate button transactions:
 
-- the three registered motor tuples use `0x2001`; changed fields are written
+- registered CiA402 motor tuples use `0x2001`; changed fields are written
   before Node-ID, then one `0x1010:01 = "save"` stores the complete change.
   The old link settings remain active until a physical power cycle;
+- custom Meow Motor communication settings also use `0x2001`, but retain their
+  dedicated `0x1010:04` save transaction;
 - registered hex-meow products use `0x2100/0x2101`. The actual
   `0x2100:00` value controls capability: `1` exposes only nominal timing,
   while `3` also exposes data bitrate and TPDO BRS. These fields are
   write-through and are never followed by `0x1010` or an automatic reset;
 - only registered motor tuples expose `0x3001` position preset. The backend
-  first requests Disable Voltage and confirms the CiA402
-  Switch-On-Disabled status before issuing the preset command.
+  first requests and confirms the protocol-specific disabled state before
+  issuing the preset command. The UI shares one zeroing card across both motor
+  protocols, including manual readback and one read after saving. Meow Motor
+  position reads decode signed Q8.24 at `0x4564` rather than reading `0x6064`.
 
 Relevant files:
 

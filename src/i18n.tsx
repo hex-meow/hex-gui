@@ -1383,8 +1383,8 @@ const STRINGS = {
     zh: "位置预设（独立事务）",
   },
   settingsZeroHint: {
-    en: "Available for an exact known motor while it is online. Position is read once after each online edge; use Read position for a manual refresh.",
-    zh: "精确识别的已知电机在线时可用。每次上线后只自动读取一次位置；可使用“读取位置”手动刷新。",
+    en: "Available for an exact known motor while it is online. Position is read once after each online edge; use Read position for a manual refresh. Saving first disables the motor and leaves it disabled.",
+    zh: "精确识别的已知电机在线时可用。每次上线后只自动读取一次位置；可使用“读取位置”手动刷新。保存位置前会先失能电机，保存后保持失能。",
   },
   settingsDeviceOffline: {
     en: "The selected device is offline",

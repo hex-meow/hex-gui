@@ -6,7 +6,7 @@ runs:
     - uses: actions/checkout@v6
       with:
         repository: hex-meow/hex-motor
-        ref: 17dd087362ec6dea675cc16c8b144524f0a21bb1
+        ref: 9466813ef26f9b9323843911560a57f6a201c5d5
         path: _hex-motor
         persist-credentials: false
     - name: Place the driver at the Cargo sibling path

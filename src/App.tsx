@@ -370,22 +370,12 @@ export default function App() {
               onBusyChange={setCalibrationUpdateBusy}
             />
           ) : tool === "settings" ? (
-            selected?.device_type === "meow_motor" ? (
-              <MeowMotorPanel
-                key={selected.node_id}
-                info={selected}
-                connected={connected}
-                settingsOnly
-                onBusyChange={setSettingsBusy}
-              />
-            ) : (
-              <DeviceSettingsTool
-                device={selected}
-                devices={devices}
-                connected={connected}
-                onBusyChange={setSettingsBusy}
-              />
-            )
+            <DeviceSettingsTool
+              device={selected}
+              devices={devices}
+              connected={connected}
+              onBusyChange={setSettingsBusy}
+            />
           ) : selected && selected.device_type === "imu" ? (
             <ImuPanel key={selected.node_id} info={selected} connected={connected} />
           ) : selected && selected.device_type === "lift" ? (

@@ -811,6 +811,9 @@ async fn refresh_torque_factor(state: &AppState, manager: &Arc<MeowMotorManager>
 
 #[tauri::command]
 pub async fn meow_identify(state: State<'_, AppState>, nid: u8) -> CmdResult<MeowMotorSnapshotDto> {
+    // Device Settings shares the zeroing card and its SDO owner with this
+    // protocol-specific communication panel. Serialize its initial identify too.
+    let _operation = state.device_settings_operation.acquire().await;
     let manager = meow_manager(&state).await?;
     manager.identify(nid).await.map_err(err)?;
     refresh_torque_factor(&state, &manager, nid).await;
@@ -1273,8 +1276,8 @@ pub async fn forget_offline(state: State<'_, AppState>) -> CmdResult<()> {
 
 /// Set this exact registered motor's current rotor position to `pos`
 /// (Rev, -0.5..0.5) via the 0x3001 user-position-preset. The driver force
-/// refreshes identity, requests Disable Voltage and confirms
-/// Switch-On-Disabled before committing the preset.
+/// refreshes identity, requests the protocol-specific disable and confirms
+/// Disabled before committing the preset.
 #[tauri::command]
 pub async fn set_position_preset(
     state: State<'_, AppState>,
@@ -1297,8 +1300,8 @@ pub async fn set_position_preset(
         .map_err(err)
 }
 
-/// Read 0x6064 (actual position, Rev) once, on demand, after exact identity
-/// verification.
+/// Read actual position in Rev once after exact identity verification:
+/// CiA402 0x6064 REAL32 or Meow Motor 0x4564 signed Q8.24.
 #[tauri::command]
 pub async fn read_position(
     state: State<'_, AppState>,
