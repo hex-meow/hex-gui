@@ -34,10 +34,9 @@ tauri-test/
 
 ## Prerequisites
 
-The 3525-capable `hex-motor` 0.3.2 driver currently comes from the sibling
-checkout `../hex-motor`. Use commit
-`9466813ef26f9b9323843911560a57f6a201c5d5`; CI installs this exact revision via
-`.github/actions/setup-motor`. Other Rust dependencies remain registry-based.
+The `hex-motor` 0.3.2 driver, including 3525 support and position presets,
+is downloaded from crates.io. `src-tauri/Cargo.lock` pins the resolved version
+and package checksum for local and CI builds.
 
 ### 1. System libraries (Linux)
 
@@ -257,9 +256,9 @@ a maintainer may explicitly delete and recreate both.
 > env vars.
 >
 > **Fresh-checkout inputs** (see the header comment in the workflow):
-> CI checks out the 3525-capable `hex-meow/hex-motor` driver at pinned commit
-> `9466813` and the verified `hex-meow/hex-robot-proto` contract at commit
-> `6848962` via `ROBOT_PROTO_DIR`. Other Rust libraries resolve from crates.io.
+> The motor driver resolves from crates.io using `src-tauri/Cargo.lock`.
+> CI checks out the verified `hex-meow/hex-robot-proto` contract at commit
+> `6848962` via `ROBOT_PROTO_DIR`.
 
 ## Usage
 
