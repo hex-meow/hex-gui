@@ -70,28 +70,23 @@ function decodeSdo(kind: "SDO_TX" | "SDO_RX", node: number, d: number[]): Decode
       d.length >= 8 ? (d[4] | (d[5] << 8) | (d[6] << 16) | (d[7] << 24)) >>> 0 : 0;
     return { kind, node, label, detail: `ABORT ${hex(idx, 4)}:${hex(sub, 2)} = ${hex(abort, 8)}` };
   }
-  // Initiate frames carry index:sub in bytes 1..4. Command-specifier decode per
-  // CiA-301: server (scs, up) 2=upload-init-resp(read), 3=download-init-resp
-  // (write ack), 0=upload-segment; client (ccs, down) 1=download-init(write),
-  // 2=upload-init(read req), 0=download-segment, 3=upload-segment req.
-  if (d.length >= 4) {
+  // Only initiate commands carry index:sub. Segment bytes 1..7 contain
+  // payload (or are reserved in a request/ack), never an object address.
+  if (cs === 0) {
+    const toggle = (d[0] >> 4) & 1;
+    const last = (d[0] & 1) !== 0;
+    const op = up ? "upload-seg" : "write-seg";
+    return { kind, node, label, detail: `${op} toggle=${toggle}${last ? " last" : ""}` };
+  }
+  if ((up && cs === 1) || (!up && cs === 3)) {
+    const op = up ? "write-seg-ack" : "upload-seg-req";
+    return { kind, node, label, detail: `${op} toggle=${(d[0] >> 4) & 1}` };
+  }
+  const initiate = up ? cs === 2 || cs === 3 : cs === 1 || cs === 2;
+  if (initiate && d.length >= 4) {
     const idx = d[1] | (d[2] << 8);
     const sub = d[3];
-    const op = up
-      ? cs === 2
-        ? "read"
-        : cs === 3
-          ? "write-ack"
-          : cs === 0
-            ? "upload-seg"
-            : "resp"
-      : cs === 1
-        ? "write"
-        : cs === 2
-          ? "read-req"
-          : cs === 0
-            ? "write-seg"
-            : "req";
+    const op = up ? (cs === 2 ? "read" : "write-ack") : (cs === 1 ? "write" : "read-req");
     return { kind, node, label, detail: `${op} ${hex(idx, 4)}:${hex(sub, 2)}` };
   }
   return { kind, node, label };

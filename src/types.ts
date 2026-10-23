@@ -1079,7 +1079,10 @@ export interface CanTraceFrame {
 
 export interface CanAnalyzerStatus {
   capturing: boolean;
+  connection_error: string | null;
   total: number;
+  /** Received frames only; excludes the local TX mirror. */
+  rx_total: number;
   /** Frames dropped by our subscriber queue (GUI backpressure, NOT bus health). */
   our_dropped: number;
   distinct_ids: number;

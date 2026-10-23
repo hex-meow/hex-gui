@@ -164,6 +164,7 @@ const STRINGS = {
   canBus: { en: "Bus", zh: "总线" },
   canConnectHint: { en: "e.g. can0 / socketcan:vcan0 / gs_usb", zh: "例如 can0 / socketcan:vcan0 / gs_usb" },
   canConnectFailed: { en: "Capture failed", zh: "抓包失败" },
+  canCaptureLost: { en: "Capture stopped. Disconnect and reconnect the adapter to resume.", zh: "采集已停止，请断开后重新连接适配器。" },
   canModeTrace: { en: "Trace", zh: "逐帧" },
   canModeGrouped: { en: "Grouped by ID", zh: "按 ID 汇总" },
   canInterpret: { en: "CANopen decode", zh: "CANopen 解析" },
