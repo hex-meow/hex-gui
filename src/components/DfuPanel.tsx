@@ -42,6 +42,7 @@ export function DfuPanel({
   const inputRef = useRef<HTMLInputElement>(null);
   const [transport, setTransport] = useState<Transport>("usb");
   const [probing, setProbing] = useState(false);
+  const [fetchingLatest, setFetchingLatest] = useState(false);
   const [device, setDevice] = useState<HpmDfuDevice | null>(null);
   const [prepared, setPrepared] = useState<HpmDfuPrepared | null>(null);
   const [fileName, setFileName] = useState("");
@@ -51,11 +52,12 @@ export function DfuPanel({
   const [progress, setProgress] = useState<HpmDfuProgress | null>(null);
   const [outcome, setOutcome] = useState<HpmDfuOutcome | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [onlineError, setOnlineError] = useState<string | null>(null);
 
   useEffect(() => {
-    onBusyChange(busy || canBusy);
+    onBusyChange(busy || canBusy || probing || fetchingLatest);
     return () => onBusyChange(false);
-  }, [busy, canBusy, onBusyChange]);
+  }, [busy, canBusy, fetchingLatest, onBusyChange, probing]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -72,11 +74,19 @@ export function DfuPanel({
     setFileName("");
     setProgress(null);
     setOutcome(null);
+    setOnlineError(null);
     if (inputRef.current) inputRef.current.value = "";
   };
 
   const changeTransport = async (next: Transport) => {
-    if (next === transport || busy || canBusy || probing) return;
+    if (
+      next === transport ||
+      busy ||
+      canBusy ||
+      probing ||
+      fetchingLatest
+    )
+      return;
     setError(null);
     setOutcome(null);
     try {
@@ -93,6 +103,27 @@ export function DfuPanel({
     }
   };
 
+  const prepareLatest = async () => {
+    setFetchingLatest(true);
+    setError(null);
+    setOnlineError(null);
+    setOutcome(null);
+    setProgress(null);
+    setPrepared(null);
+    setFileName("");
+    if (inputRef.current) inputRef.current.value = "";
+    try {
+      const staged = await hpmDfuApi.prepareLatest();
+      setPrepared(staged);
+      setDevice(staged.device);
+      message.success(copy.latestReady);
+    } catch (caught) {
+      setOnlineError(dfuError(caught));
+    } finally {
+      setFetchingLatest(false);
+    }
+  };
+
   const probe = async () => {
     setProbing(true);
     setError(null);
@@ -102,6 +133,11 @@ export function DfuPanel({
       const found = await hpmDfuApi.probe();
       setDevice(found);
       message.success(copy.deviceRecognized);
+      if (found.security_mode === "production_confidential") {
+        await prepareLatest();
+      } else {
+        setOnlineError(copy.developmentLocalOnly);
+      }
     } catch (caught) {
       setError(dfuError(caught));
     } finally {
@@ -120,6 +156,7 @@ export function DfuPanel({
   const fileSelected = async (file: File | undefined) => {
     if (!file) return;
     setError(null);
+    setOnlineError(null);
     setOutcome(null);
     setPrepared(null);
     setFileName(file.name);
@@ -204,7 +241,7 @@ export function DfuPanel({
         </div>
         <Segmented
           value={transport}
-          disabled={busy || canBusy || probing}
+          disabled={busy || canBusy || probing || fetchingLatest}
           options={[
             { label: copy.canTransportLabel, value: "can" },
             { label: "USB", value: "usb" },
@@ -226,11 +263,15 @@ export function DfuPanel({
               />
               <Button
                 type="primary"
-                loading={probing}
-                disabled={busy}
+                loading={probing || fetchingLatest}
+                disabled={busy || fetchingLatest}
                 onClick={() => void probe()}
               >
-                {probing ? copy.probing : copy.probe}
+                {fetchingLatest
+                  ? copy.downloadingLatest
+                  : probing
+                    ? copy.probing
+                    : copy.probe}
               </Button>
               {device && <DeviceDetails device={device} copy={copy} />}
             </Space>
@@ -238,24 +279,73 @@ export function DfuPanel({
 
           <Card className="dfu-card" title={copy.artifactStep}>
             <Space direction="vertical" size="middle" className="dfu-stack">
-              <Alert
-                type="warning"
-                showIcon
-                message={copy.remoteUnavailable}
-                description={copy.localStillValidated}
-              />
+              {fetchingLatest ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={copy.downloadingLatest}
+                  description={copy.onlineValidation}
+                />
+              ) : prepared?.artifact_source === "r2" ? (
+                <Alert
+                  type="success"
+                  showIcon
+                  message={copy.latestReady}
+                  description={copy.onlineValidation}
+                />
+              ) : prepared?.artifact_source === "local" ? (
+                <Alert
+                  type="success"
+                  showIcon
+                  message={copy.validationPassed}
+                  description={copy.localStillValidated}
+                />
+              ) : onlineError ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={copy.onlineUnavailable}
+                  description={
+                    <Space direction="vertical" size="small">
+                      <Typography.Text>{onlineError}</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {copy.localStillValidated}
+                      </Typography.Text>
+                    </Space>
+                  }
+                />
+              ) : (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={copy.scanForLatest}
+                  description={copy.localStillValidated}
+                />
+              )}
               <input
                 ref={inputRef}
                 className="dfu-panel__file-input"
                 type="file"
                 accept=".hpmota,.bin"
-                disabled={busy}
+                disabled={busy || probing || fetchingLatest}
                 onChange={(event) => {
                   void fileSelected(event.currentTarget.files?.[0]);
                 }}
               />
               <Space wrap>
-                <Button disabled={!device || busy} onClick={chooseFile}>
+                {device?.security_mode === "production_confidential" && (
+                  <Button
+                    disabled={busy || probing || fetchingLatest}
+                    loading={fetchingLatest}
+                    onClick={() => void prepareLatest()}
+                  >
+                    {copy.retryLatest}
+                  </Button>
+                )}
+                <Button
+                  disabled={!device || busy || probing || fetchingLatest}
+                  onClick={chooseFile}
+                >
                   {copy.chooseFile}
                 </Button>
                 {fileName && (
@@ -277,7 +367,7 @@ export function DfuPanel({
                 <Button
                   danger
                   type="primary"
-                  disabled={!prepared || busy}
+                  disabled={!prepared || busy || probing || fetchingLatest}
                   onClick={confirmUpgrade}
                 >
                   {copy.startUpgrade}
@@ -402,6 +492,16 @@ function ArtifactDetails({
         </Tag>
       </Space>
       <Descriptions size="small" column={1} className="dfu-descriptions">
+        <Descriptions.Item label={copy.artifactSource}>
+          {prepared.artifact_source === "r2"
+            ? copy.onlineSource
+            : copy.localSource}
+        </Descriptions.Item>
+        {prepared.release_version && (
+          <Descriptions.Item label={copy.releaseLabel}>
+            {prepared.release_version} · {copy.notAntiRollback}
+          </Descriptions.Item>
+        )}
         <Descriptions.Item label={copy.fileSha}>
           <Typography.Text copyable={{ text: prepared.source_sha256 }}>
             {shortHash(prepared.source_sha256)}
@@ -506,13 +606,21 @@ function textFor(lang: "en" | "zh") {
       bootloaderHint: "请先让设备进入 USB Bootloader",
       probe: "扫描 USB Bootloader",
       probing: "扫描中…",
+      downloadingLatest: "正在下载并校验最新固件…",
       deviceRecognized: "已识别受支持的 gs_can Bootloader",
       probeFirst: "请先扫描并识别设备",
-      artifactStep: "2 · 校验升级文件",
-      remoteUnavailable: "在线发布源尚未接入",
+      artifactStep: "2 · 获取并校验升级文件",
+      latestReady: "最新 R2 固件已下载并通过前置校验",
+      onlineValidation:
+        "固定 HTTPS 路径提供 release 与整包 SHA 绑定；下载内容仍执行和手选文件完全相同的设备、格式、长度与密钥指纹校验。",
+      onlineUnavailable: "在线固件暂不可用，可重试或手动选择文件",
+      scanForLatest: "识别受保护设备后会自动获取最新固件",
       localStillValidated:
-        "当前请选择本地文件。手动选择不会绕过身份、格式、SHA、长度或密钥指纹检查。",
-      chooseFile: "选择 .hpmota / .bin",
+        "手动选择只改变文件来源，不会绕过身份、格式、SHA、长度或密钥指纹检查。",
+      developmentLocalOnly:
+        "开发模式设备不请求在线 secure 制品，请手动选择 plaintext .bin。",
+      retryLatest: "重新获取最新固件",
+      chooseFile: "手动选择 .hpmota / .bin",
       fileTooLarge: "文件超过 2 MiB 的硬上限。",
       validationPassed: "全部前置校验已通过",
       upgradeStep: "3 · 写入与校验",
@@ -544,6 +652,11 @@ function textFor(lang: "en" | "zh") {
       arvCorrupt: "OTP bit pattern 异常；当前仍仅诊断",
       notEnforced: "仅报告，未启用",
       rawDevelopment: "裸 bin · 开发模式",
+      artifactSource: "制品来源",
+      onlineSource: "R2 HTTPS 发布",
+      localSource: "本地手选文件",
+      releaseLabel: "R2 发布标签",
+      notAntiRollback: "不是防回滚版本证明",
       fileSha: "原文件 SHA-256",
       imageSha: "写入镜像 SHA-256",
       sizes: "文件 → 擦除长度",
@@ -551,7 +664,7 @@ function textFor(lang: "en" | "zh") {
       metadataOnly: "公开 metadata，仅显示；未启用防回滚",
       legacyEncodingUnproven: "当前 v2 格式无法证明打包时启用了 EXIP 加密",
       legacyEncodingDetail:
-        "请只使用可信发布方提供的包。本地严格校验不会被跳过，设备仍会在启动前执行最终 APP0 验签；未来官方 catalog 会补充发布者和加密模式证明。",
+        "R2 HTTPS 与 whole-file SHA 绑定只负责选择完整制品，无法让 v2 在 host 侧证明 EXIP 打包模式。相同的严格本地校验仍会执行，设备在启动前继续承担最终 APP0 验签。",
       transferComplete: "传输完成，已收到 JUMP ACK",
       startupUnconfirmed:
         "USB 协议无法确认 APP 是否正常启动。请实际检查设备功能；异常时可重新进入 Bootloader 完整升级。",
@@ -583,13 +696,23 @@ function textFor(lang: "en" | "zh") {
     bootloaderHint: "Put the device in USB Bootloader mode first",
     probe: "Scan USB Bootloader",
     probing: "Scanning…",
+    downloadingLatest: "Downloading and validating the latest firmware…",
     deviceRecognized: "Supported gs_can Bootloader recognized",
     probeFirst: "Probe and recognize the device first",
-    artifactStep: "2 · Validate firmware",
-    remoteUnavailable: "The online release source is not connected yet",
+    artifactStep: "2 · Fetch and validate firmware",
+    latestReady: "The latest R2 firmware passed preflight validation",
+    onlineValidation:
+      "The fixed HTTPS path binds the release and whole-file SHA. Downloaded bytes still pass the same device, format, length and key-fingerprint checks as a local file.",
+    onlineUnavailable:
+      "Online firmware is unavailable; retry or select a local file",
+    scanForLatest:
+      "Recognizing a protected device automatically fetches its latest firmware",
     localStillValidated:
-      "Choose a local file for now. Manual selection never bypasses identity, format, SHA, size or key-fingerprint checks.",
-    chooseFile: "Choose .hpmota / .bin",
+      "Manual selection changes only the source; it never bypasses identity, format, SHA, size or key-fingerprint checks.",
+    developmentLocalOnly:
+      "Development devices do not request an online secure artifact; select a plaintext .bin locally.",
+    retryLatest: "Fetch latest again",
+    chooseFile: "Choose local .hpmota / .bin",
     fileTooLarge: "The file exceeds the 2 MiB hard limit.",
     validationPassed: "All preflight checks passed",
     upgradeStep: "3 · Write and verify",
@@ -621,6 +744,11 @@ function textFor(lang: "en" | "zh") {
     arvCorrupt: "OTP bit pattern is abnormal; currently diagnostic only",
     notEnforced: "reported only, not enforced",
     rawDevelopment: "raw bin · development",
+    artifactSource: "Artifact source",
+    onlineSource: "R2 HTTPS release",
+    localSource: "Locally selected file",
+    releaseLabel: "R2 release label",
+    notAntiRollback: "not anti-rollback evidence",
     fileSha: "Source file SHA-256",
     imageSha: "Wire image SHA-256",
     sizes: "File → erase length",
@@ -629,7 +757,7 @@ function textFor(lang: "en" | "zh") {
     legacyEncodingUnproven:
       "The current v2 format cannot prove that EXIP encryption was enabled while packing",
     legacyEncodingDetail:
-      "Use only an artifact from a trusted publisher. Strict local validation still applies and the device performs the final APP0 signature check before boot; the future official catalog will attest publisher and encoding mode.",
+      "R2 HTTPS and whole-file SHA binding select one complete artifact, but cannot make v2 prove its EXIP packing mode to the host. The same strict local checks still run, and the device remains the final APP0 signature verifier before boot.",
     transferComplete: "Transfer complete; JUMP ACK received",
     startupUnconfirmed:
       "USB cannot confirm that the application became healthy. Check the device's actual function; on failure, re-enter Bootloader and run a complete upgrade.",

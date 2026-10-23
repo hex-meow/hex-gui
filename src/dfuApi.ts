@@ -36,6 +36,9 @@ export interface HpmDfuPrepared {
   app_arv: number | null;
   app_arv_state: "metadata_only_not_enforced" | "not_present";
   pack_tool_version: string | null;
+  artifact_source: "local" | "r2";
+  // HPM v2 cannot bind this label to a host-visible native firmware version.
+  release_version: string | null;
 }
 
 export type HpmDfuStage =
@@ -192,6 +195,10 @@ export const hpmDfuApi = {
   // large JSON number array and does not disclose a host filesystem path.
   prepare: (bytes: Uint8Array) =>
     invoke<HpmDfuPrepared>("hpm_dfu_prepare", bytes),
+
+  // The Rust session owns the exact authorized 0x0100/gcan identity and fixed
+  // HTTPS path. The WebView supplies neither a URL nor release identity.
+  prepareLatest: () => invoke<HpmDfuPrepared>("hpm_dfu_prepare_latest"),
 
   start: (
     token: string,

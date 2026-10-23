@@ -314,17 +314,18 @@ bus with the right settings:
 - **Firmware Update** — an independent DFU workspace with a CAN/USB selector.
   The current USB path recognizes only exact Bootloader version `0x0100`,
   mapped locally to product code `0x6763616E` (ASCII `gcan`). Protected devices
-  accept only strict `.hpmota` v2; development devices accept only structural
-  plaintext APP0 `.bin`. Local selection does not bypass validation. HPM CAN is
-  visible but disabled until hardware validation exists. A matching JUMP ACK
+  automatically fetch the fixed-path R2 release and accept only strict
+  `.hpmota` v2; development devices make no online request and accept only a
+  locally selected structural plaintext APP0 `.bin`. Online and local bytes
+  pass the same native validation. HPM CAN is visible but disabled until
+  hardware validation exists. A matching JUMP ACK
   means transfer completion, not confirmed application health; check the
-  device's actual function after upgrading. The STM32 CAN page is currently a
-  read-only safety preview: it passively discovers valid CANopen heartbeat
-  nodes and strictly reads/classifies complete `0x1018` identities. Every known
-  product profile remains disabled, so no proprietary object or CAN update
-  write is sent. The common streaming engine is present behind the final
-  same-transport identity gate, ready for a separately qualified product
-  profile without duplicating the CLI protocol logic.
+  device's actual function after upgrading. CAN discovery strictly reads and
+  classifies complete `0x1018` identities; only exact locally enabled profiles
+  can fetch their fixed-path R2 release or stage a local file. Both sources use
+  the same backend-native validation and the device identity is re-read on the
+  mutation transport before writing. Unknown, incomplete and disabled
+  identities never receive an update write.
 - **Lift (Raw CAN)** — direct CANopen commissioning for one `lift-driver`
   node (default `0x14`) on the already-open bus. Attach is observation-only:
   it reads identity, nameplate/CRC, effective limits, heartbeat, TPDOs and SDO

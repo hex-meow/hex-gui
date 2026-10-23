@@ -234,15 +234,15 @@ const DFU_SLIDES: Slide[] = [
   {
     title: { en: "1 · Choose transport", zh: "1 · 选择传输方式" },
     body: {
-      en: "For the current HPM product, enter USB Bootloader mode and select USB. The STM32 CAN page currently provides read-only Classic-CAN discovery; all known product profiles remain write-locked.",
-      zh: "当前 HPM 产品请进入 USB Bootloader 并选择 USB。STM32 CAN 页面目前只提供 Classic CAN 只读发现；所有已知产品 profile 仍保持写锁定。",
+      en: "For the current HPM product, enter USB Bootloader mode and select USB. CAN reads a complete 0x1018 identity before an exact local profile can enable any update backend; HPM over CAN remains disabled.",
+      zh: "当前 HPM 产品请进入 USB Bootloader 并选择 USB。CAN 必须先读完 0x1018，并命中精确本地 profile 后才可能启用升级后端；HPM CAN 仍保持禁用。",
     },
   },
   {
     title: { en: "2 · Validate firmware", zh: "2 · 校验固件" },
     body: {
-      en: "USB accepts a local artifact after strict validation. STM32 .meowpkg selection appears only after an exact product profile is qualified; manual selection never bypasses validation.",
-      zh: "USB 可在严格校验后选择本地制品。STM32 只有在精确产品 profile 完成资格确认后才开放 .meowpkg；手动选择不会绕过校验。",
+      en: "Scanning the exact protected USB profile automatically fetches its fixed-path R2 release and runs the same strict native validation as a local file. Development USB devices remain local-bin only, and manual selection never bypasses validation.",
+      zh: "扫描命中精确的受保护 USB profile 后，会从固定 R2 路径自动获取固件，并执行与手选文件完全相同的严格原生校验。开发模式 USB 仍只使用本地 bin；手选不会绕过校验。",
     },
   },
   {

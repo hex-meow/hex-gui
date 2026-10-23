@@ -150,6 +150,12 @@ fn prepare_v2_pack(bytes: Vec<u8>, device: DeviceInfo) -> Result<PreparedArtifac
             device.app0_max_size
         )));
     }
+    if image.len() <= CODE_OFFSET {
+        return Err(DfuError::InvalidArtifact(format!(
+            "app0.bin is only {} bytes; it contains no code beyond offset 0x{CODE_OFFSET:X}",
+            image.len()
+        )));
+    }
     if image.len() % FLASH_SECTOR_SIZE as usize != 0 {
         return Err(DfuError::InvalidArtifact(format!(
             "app0.bin wire size {} is not 4 KiB aligned",
@@ -236,9 +242,9 @@ fn prepare_development_raw(bytes: Vec<u8>, device: DeviceInfo) -> Result<Prepare
         ));
     };
 
-    if image.len() < CODE_OFFSET {
+    if image.len() <= CODE_OFFSET {
         return Err(DfuError::InvalidArtifact(format!(
-            "slot-aligned APP0 is only {} bytes; it does not reach code offset 0x{CODE_OFFSET:X}",
+            "slot-aligned APP0 is only {} bytes; it contains no code beyond offset 0x{CODE_OFFSET:X}",
             image.len()
         )));
     }
@@ -594,22 +600,22 @@ mod tests {
         archive.resize(archive.len().div_ceil(TAR_BLOCK) * TAR_BLOCK, 0);
     }
 
-    fn valid_pack() -> Vec<u8> {
-        let image = slot_image();
+    fn pack_with_image(image: Vec<u8>, app0_size_bytes: usize) -> Vec<u8> {
         let meta = format!(
             concat!(
                 "{{",
                 "\"format\":\"hpm-bl-ota/2\",",
                 "\"key_fingerprint\":\"0x11223344\",",
                 "\"pubkey_fingerprint\":\"0x55667788\",",
-                "\"app0_size_bytes\":12288,",
+                "\"app0_size_bytes\":{},",
                 "\"ciphertext_app0_sha256\":\"{}\",",
                 "\"kn_blob_size\":128,",
                 "\"app_arv\":7,",
                 "\"tool_version\":\"0.2.0\"",
                 "}}"
             ),
-            sha256_hex(&image)
+            app0_size_bytes,
+            sha256_hex(&image),
         );
         let mut archive = Vec::new();
         push_member(&mut archive, MEMBER_META, meta.as_bytes());
@@ -617,6 +623,10 @@ mod tests {
         push_member(&mut archive, MEMBER_KN, &[0xC3; KN_DATA_SIZE]);
         archive.resize(archive.len() + TAR_BLOCK * 2, 0);
         archive
+    }
+
+    fn valid_pack() -> Vec<u8> {
+        pack_with_image(slot_image(), 12288)
     }
 
     #[test]
@@ -627,6 +637,22 @@ mod tests {
         assert_eq!(prepared.summary.app_arv, Some(7));
         assert_eq!(prepared.image.len(), 0x4000);
         assert_eq!(prepared.kn_data.unwrap(), [0xC3; KN_DATA_SIZE]);
+    }
+
+    #[test]
+    fn exact_code_offset_without_code_is_rejected_for_secure_and_development() {
+        let mut image = vec![0xA5; CODE_OFFSET];
+        image[..PAD_PREFIX_SIZE].fill(0xFF);
+        image[PAD_PREFIX_SIZE..PAD_PREFIX_SIZE + 4].copy_from_slice(&0xFCF9_0002u32.to_le_bytes());
+        let error = prepare_for_device(
+            pack_with_image(image.clone(), 0x2000),
+            device(SecurityMode::ProductionConfidential),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("contains no code beyond offset"));
+
+        let error = prepare_for_device(image, device(SecurityMode::Development)).unwrap_err();
+        assert!(error.to_string().contains("contains no code beyond offset"));
     }
 
     #[test]

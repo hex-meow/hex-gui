@@ -14,6 +14,7 @@ mod commands;
 mod damiao;
 mod device_registry;
 mod dfu_gate;
+mod dfu_release;
 mod diag;
 mod dto;
 mod friction_calibration;
@@ -457,6 +458,7 @@ pub fn run() {
             commands::config_restart,
             hpm_dfu::hpm_dfu_probe,
             hpm_dfu::hpm_dfu_prepare,
+            hpm_dfu::hpm_dfu_prepare_latest,
             hpm_dfu::hpm_dfu_start,
             hpm_dfu::hpm_dfu_cancel,
             hpm_dfu::hpm_dfu_leave,
