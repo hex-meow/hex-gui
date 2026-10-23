@@ -112,6 +112,9 @@ pub struct ConfigGetDto {
     pub mtime_unix: i64,
     pub schema_version: Option<ApiVersionDto>,
     pub recovery_mode: bool,
+    /// Best-effort history from the existing launcher log queryable. None means
+    /// unavailable, not that the configuration is invalid or the robot is ready.
+    pub recovery_logs: Option<Vec<crate::diag::LogLine>>,
 }
 
 impl From<pb::ConfigGet> for ConfigGetDto {
@@ -123,6 +126,7 @@ impl From<pb::ConfigGet> for ConfigGetDto {
             mtime_unix: g.mtime_unix,
             schema_version: g.schema_version.map(Into::into),
             recovery_mode: g.recovery_mode,
+            recovery_logs: None,
         }
     }
 }
@@ -284,7 +288,29 @@ impl ZenohConfigConn {
         let g: pb::ConfigGet = query_one(&self.session, &format!("{cid}/config"), vec![])
             .await
             .ok_or_else(|| anyhow!("config get 无回复(控制器在吗?)"))?;
-        Ok(g.into())
+        let mut result = ConfigGetDto::from(g);
+        if result.recovery_mode {
+            // v0.3.7 exposes detailed startup failures in launcher/log/recent,
+            // while ConfigGet only exposes a recovery boolean. Keep a missing
+            // log endpoint from preventing configuration access on older firmware.
+            result.recovery_logs = tokio::time::timeout(Duration::from_secs(2), async {
+                let key = format!("{cid}/launcher/log/recent");
+                let replies = self.session.get(key.as_str()).await.ok()?;
+                let reply = replies.recv_async().await.ok()?;
+                let sample = reply.result().ok()?;
+                let bytes = sample.payload().to_bytes();
+                let text = std::str::from_utf8(&bytes).ok()?;
+                Some(
+                    text.lines()
+                        .map(|line| crate::diag::parse_log_line("launcher", line))
+                        .collect(),
+                )
+            })
+            .await
+            .ok()
+            .flatten();
+        }
+        Ok(result)
     }
 
     /// 干跑校验:语法 + 结构 + 语义红线 diff。不落盘。
@@ -338,6 +364,85 @@ impl ZenohConfigConn {
             .await
             .ok_or_else(|| anyhow!("restart 无回复"))?;
         Ok(RestartResult { ok: r.ok, robots: r.robots })
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    // Reproduce the v0.3.7 contract: unchanged, valid YAML can enter recovery
+    // after a child reports a hardware failure. Logs are a separate endpoint.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recovery_history_is_optional_and_tracks_runtime_without_yaml_changes() {
+        let mut config = zenoh::Config::default();
+        config
+            .insert_json5("scouting/multicast/enabled", "false")
+            .unwrap();
+        config.insert_json5("listen/endpoints", "[]").unwrap();
+        let session = zenoh::open(config).await.unwrap();
+        let conn = ZenohConfigConn {
+            session: session.clone(),
+        };
+        let state = std::sync::Arc::new(std::sync::Mutex::new(pb::ConfigGet {
+            yaml: "robots: [{ id: arm0, kind: arm, can: can0 }]".into(),
+            sha256: "unchanged-config".into(),
+            recovery_mode: true,
+            ..Default::default()
+        }));
+        let queryable = session
+            .declare_queryable("hexmeow/test/config")
+            .await
+            .unwrap();
+        let state2 = state.clone();
+        let config_task = tokio::spawn(async move {
+            while let Ok(query) = queryable.recv_async().await {
+                let payload = enc(&*state2.lock().unwrap());
+                query.reply("hexmeow/test/config", payload).await.unwrap();
+            }
+        });
+        let logs = session
+            .declare_queryable("hexmeow/test/launcher/log/recent")
+            .await
+            .unwrap();
+        let log_task = tokio::spawn(async move {
+            while let Ok(query) = logs.recv_async().await {
+                query.reply("hexmeow/test/launcher/log/recent",
+                    "1 E launcher launcher 子进程 Fatal 报告 → 立即进入恢复模式: phase=CanDevicePreflight code=arm.startup.can_device_preflight_failed summary=expected node 0x01 was not discovered"
+                ).await.unwrap();
+            }
+        });
+
+        let recovering = conn.get("hexmeow/test").await.unwrap();
+        assert!(recovering.recovery_mode);
+        let entries = recovering.recovery_logs.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].level, "E");
+        assert!(entries[0]
+            .msg
+            .contains("expected node 0x01 was not discovered"));
+
+        state.lock().unwrap().recovery_mode = false;
+        let running = conn.get("hexmeow/test").await.unwrap();
+        assert_eq!(running.sha256, recovering.sha256);
+        assert!(!running.recovery_mode);
+        assert!(
+            running.recovery_logs.is_none(),
+            "old recovery logs must not follow a healthy state"
+        );
+
+        log_task.abort();
+        let _ = log_task.await;
+        state.lock().unwrap().recovery_mode = true;
+        let unavailable = conn.get("hexmeow/test").await.unwrap();
+        assert_eq!(unavailable.yaml, recovering.yaml);
+        assert!(unavailable.recovery_mode);
+        assert!(
+            unavailable.recovery_logs.is_none(),
+            "missing logs must not block configuration reads"
+        );
+        config_task.abort();
+        let _ = config_task.await;
     }
 }
 

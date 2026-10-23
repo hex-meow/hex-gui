@@ -775,12 +775,18 @@ const STRINGS = {
   cfgSchemaVersion: { en: "Schema", zh: "schema 版本" },
   // Recovery mode banner
   cfgRecoveryTitle: {
-    en: "Recovery mode — config missing/invalid, robots not started",
-    zh: "恢复模式 —— 配置缺失/非法，机器人未启动",
+    en: "Recovery mode — robots are not running",
+    zh: "恢复模式 —— 机器人未运行",
   },
   cfgRecoveryDesc: {
-    en: "Save a valid configuration to recover. The controller is still discoverable and writable in this state.",
-    zh: "保存一份有效配置以恢复运行。此状态下控制器仍可发现、可写入。",
+    en: "Recovery can follow a configuration error, failed hardware checks, or a robot process failure. Configuration validation and robot readiness are separate checks; validating the file does not leave recovery mode.",
+    zh: "配置错误、硬件预检失败或机器人进程异常都可能进入恢复模式。配置文件校验与机器人就绪是两项独立检查；校验文件不会退出恢复模式。",
+  },
+  cfgRecoveryLogTitle: { en: "Latest controller error (log history)", zh: "控制器最近错误（历史日志）" },
+  cfgRecoveryLogMore: { en: "Earlier error details", zh: "查看更早的错误详情" },
+  cfgRecoveryReasonUnavailable: {
+    en: "No recovery error log is available. Refresh to retry; logs may be unavailable or no longer retained. Recovery mode alone does not establish that the configuration file is invalid.",
+    zh: "暂未读到恢复错误日志，可刷新重试；日志可能不可用或已不再保留。仅凭恢复模式不能判定配置文件非法。",
   },
   // Editor
   cfgEditorTitle: { en: "launch.yaml", zh: "launch.yaml" },
@@ -796,9 +802,13 @@ const STRINGS = {
     zh: "此配置的 schema 主版本高于本 GUI 支持范围。请升级 GUI 后再编辑。",
   },
   // Validate
-  cfgValidate: { en: "Validate", zh: "校验" },
-  cfgValidateOk: { en: "Validation passed", zh: "校验通过" },
-  cfgValidateFail: { en: "Validation failed", zh: "校验未通过" },
+  cfgValidate: { en: "Validate configuration file", zh: "校验配置文件" },
+  cfgValidateOk: { en: "Configuration file validation passed", zh: "配置文件校验通过" },
+  cfgValidateFail: { en: "Configuration file validation failed", zh: "配置文件校验未通过" },
+  cfgValidateScope: {
+    en: "This result covers the editor's YAML syntax and configuration rules. It does not establish hardware connectivity or robot readiness.",
+    zh: "此结果仅表示编辑器中的 YAML 通过了语法和配置规则检查，不代表硬件已连接或机器人已就绪。",
+  },
   cfgErrors: { en: "Errors", zh: "错误" },
   cfgNoErrors: { en: "No errors", zh: "无错误" },
   cfgCriticalTitle: { en: "Semantic red-line changes", zh: "语义红线变更" },

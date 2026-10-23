@@ -347,3 +347,14 @@
 .cfg-scope-map__row > :nth-child(2) {
   min-width: 10em;
 }
+.cfg-recovery-log {
+  margin: 8px 0;
+  padding: 10px;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono, monospace);
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 6px;
+}

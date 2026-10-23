@@ -1033,6 +1033,8 @@ export interface ConfigGetDto {
   mtime_unix: number;
   schema_version: ApiVersion | null;
   recovery_mode: boolean;
+  /** Recent launcher logs while recovering; null when unavailable. Not a structured status reason. */
+  recovery_logs: LogLine[] | null;
 }
 
 /** A semantic red-line change (mock flip / CAN swap / kind swap / calibration env). */

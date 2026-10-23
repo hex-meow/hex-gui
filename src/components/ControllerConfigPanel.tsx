@@ -9,6 +9,7 @@ import { App as AntdApp, Alert, Button, Input, Modal, Select, Switch, Tag, Toolt
 import { ReloadOutlined } from "@ant-design/icons";
 import { api, errMsg } from "../api";
 import { useI18n } from "../i18n";
+import { recoveryErrors } from "../controllerConfigStatus";
 import type { ApiVersion, ConfigGetDto, ConfigValidateResult, ControllerInfo, CriticalChange, DiscoveredController, ScopeCandidate } from "../types";
 import { WifiSettingsDrawer } from "./WifiSettingsDrawer";
 import "./ControllerConfigPanel.css";
@@ -70,8 +71,10 @@ export function ControllerConfigPanel() {
   // 供轮询/异步回调读取最新值,避免闭包过期。
   const cidRef = useRef<string | null>(null);
   const loadedShaRef = useRef("");
+  const yamlRef = useRef("");
   cidRef.current = cid;
   loadedShaRef.current = loadedSha;
+  yamlRef.current = yaml;
 
   const dirty = yaml !== loadedYaml;
   const selected = controllers.find((c) => c.cid === cid) ?? null;
@@ -104,6 +107,7 @@ export function ControllerConfigPanel() {
     async (targetCid: string) => {
       try {
         const g = await api.configGet(targetCid);
+        if (cidRef.current !== targetCid) return;
         applyLoaded(g);
       } catch (e) {
         message.error(errMsg(e));
@@ -159,6 +163,7 @@ export function ControllerConfigPanel() {
       }
       setControllers(list);
       const first = list[0]?.cid ?? null;
+      cidRef.current = first;
       setCid(first);
       if (first) await loadConfig(first);
       if (list.length === 0) message.warning(t("cfgNoController"));
@@ -177,6 +182,7 @@ export function ControllerConfigPanel() {
     }
     setConnected(false);
     setControllers([]);
+    cidRef.current = null;
     setCid(null);
     setCfg(null);
     setYaml("");
@@ -192,6 +198,7 @@ export function ControllerConfigPanel() {
       const list = await api.configDiscover();
       setControllers(list);
       if (!cid && list[0]) {
+        cidRef.current = list[0].cid;
         setCid(list[0].cid);
         await loadConfig(list[0].cid);
       }
@@ -203,7 +210,11 @@ export function ControllerConfigPanel() {
 
   const onSelectController = useCallback(
     (next: string) => {
+      cidRef.current = next;
       setCid(next);
+      setCfg(null);
+      setValidateResult(null);
+      setExternal(null);
       loadConfig(next);
     },
     [loadConfig]
@@ -217,16 +228,24 @@ export function ControllerConfigPanel() {
   useEffect(() => {
     if (!connected || !cid) return;
     let alive = true;
+    let inFlight = false;
     const tick = async () => {
+      if (inFlight) return;
       const target = cidRef.current;
       if (!target) return;
+      inFlight = true;
       try {
         const g = await api.configGet(target);
         if (!alive || cidRef.current !== target) return;
+        // Recovery can change after a child fails without changing the YAML.
+        // Refresh metadata and logs without overwriting unsaved editor content.
+        setCfg(g);
         if (g.sha256 !== loadedShaRef.current) setExternal(g);
         else setExternal(null);
       } catch {
         /* transient */
+      } finally {
+        inFlight = false;
       }
     };
     const h = window.setInterval(tick, EXTERNAL_POLL_MS);
@@ -241,6 +260,7 @@ export function ControllerConfigPanel() {
     setAction("validate");
     try {
       const r = await api.configValidate(cid, yaml);
+      if (cidRef.current !== cid || yamlRef.current !== yaml) return;
       setValidateResult(r);
       if (r.ok) message.success(t("cfgValidateOk"));
       else message.error(t("cfgValidateFail"));
@@ -319,6 +339,7 @@ export function ControllerConfigPanel() {
       setAction(apply ? "apply" : "save");
       try {
         const r = await api.configValidate(cid, yaml);
+        if (cidRef.current !== cid || yamlRef.current !== yaml) return;
         setValidateResult(r);
         if (!r.ok) {
           message.error(t("cfgValidateFail"));
@@ -450,7 +471,7 @@ export function ControllerConfigPanel() {
       </section>
 
       {cfg?.recovery_mode && (
-        <Alert type="error" showIcon message={t("cfgRecoveryTitle")} description={t("cfgRecoveryDesc")} />
+        <RecoveryStatus config={cfg} />
       )}
 
       {external && (
@@ -497,7 +518,15 @@ export function ControllerConfigPanel() {
           </div>
         </div>
 
-        <YamlEditor value={yaml} onChange={setYaml} readOnly={!canEdit} disabled={!cfg} />
+        <YamlEditor
+          value={yaml}
+          onChange={(value) => {
+            setYaml(value);
+            setValidateResult(null);
+          }}
+          readOnly={!canEdit}
+          disabled={!cfg}
+        />
 
         <div className="cfg-actions">
           <Button loading={action === "validate"} disabled={!cid || !cfg || action !== null} onClick={validate}>
@@ -670,6 +699,39 @@ function MetaItem({
   );
 }
 
+function RecoveryStatus({ config }: { config: ConfigGetDto }) {
+  const { t } = useI18n();
+  const errors = recoveryErrors(config);
+  return (
+    <Alert
+      type="error"
+      showIcon
+      message={t("cfgRecoveryTitle")}
+      description={
+        <div>
+          <p>{t("cfgRecoveryDesc")}</p>
+          {errors.length > 0 ? (
+            <>
+              <Typography.Text strong>{t("cfgRecoveryLogTitle")}</Typography.Text>
+              <pre className="cfg-recovery-log">{errors[0].msg}</pre>
+              {errors.length > 1 && (
+                <details>
+                  <summary>{t("cfgRecoveryLogMore")}</summary>
+                  {errors.slice(1).map((line, i) => (
+                    <pre className="cfg-recovery-log" key={i}>{line.msg}</pre>
+                  ))}
+                </details>
+              )}
+            </>
+          ) : (
+            <p>{t("cfgRecoveryReasonUnavailable")}</p>
+          )}
+        </div>
+      }
+    />
+  );
+}
+
 function ValidationResults({ result }: { result: ConfigValidateResult }) {
   const { t } = useI18n();
   return (
@@ -686,7 +748,10 @@ function ValidationResults({ result }: { result: ConfigValidateResult }) {
           </ul>
         </div>
       ) : (
-        <Tag color={result.ok ? "green" : "default"}>{result.ok ? t("cfgValidateOk") : t("cfgNoErrors")}</Tag>
+        <div>
+          <Tag color={result.ok ? "green" : "default"}>{result.ok ? t("cfgValidateOk") : t("cfgNoErrors")}</Tag>
+          {result.ok && <Typography.Paragraph type="secondary">{t("cfgValidateScope")}</Typography.Paragraph>}
+        </div>
       )}
 
       {result.critical_changes.length > 0 && (
