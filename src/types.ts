@@ -6,8 +6,39 @@ export type MotorMode =
   | "Torque"
   | "Mit";
 
-// DAMIAO DM-J4310-2EC V1.1 direct-CAN protocol (not CiA 402).
-export type DamiaoMode = "Mit" | "PositionVelocity" | "Velocity";
+// DAMIAO DM-J4310-2EC direct-CAN protocol (not CiA 402).
+export type DamiaoMode = "Unspecified" | "Mit" | "PositionVelocity" | "Velocity" | "ForcePosition";
+
+export interface DamiaoRegisterDefinition {
+  address: number;
+  name: string;
+  label_zh: string;
+  label_en: string;
+  group: string;
+  data_type: "Float32" | "Uint32";
+  writable: boolean;
+  min: number | null;
+  max: number | null;
+  min_inclusive: boolean;
+  max_inclusive: boolean;
+  range: string;
+  unit: string;
+  note_zh: string;
+  note_en: string;
+}
+
+export interface DamiaoRegisterReading {
+  address: number;
+  value: number | null;
+  raw: number;
+}
+
+export interface DamiaoRegisterWriteResult {
+  reading: DamiaoRegisterReading | null;
+  state: DamiaoState;
+  id_change: DamiaoIdChangeResult | null;
+  bitrate: DamiaoBitrateState | null;
+}
 
 export interface DamiaoConfig {
   motor_id: number;
@@ -43,10 +74,12 @@ export type DamiaoTarget =
       position_rad: number;
       velocity_rad_s: number;
     }
-  | { kind: "Velocity"; velocity_rad_s: number };
+  | { kind: "Velocity"; velocity_rad_s: number }
+  | { kind: "ForcePosition"; position_rad: number; velocity_rad_s: number; current_limit_ratio: number };
 
 export interface DamiaoState {
   attached: boolean;
+  requires_reconnect: boolean;
   motor_id: number;
   master_id: number;
   feedback_can_id: number | null;
@@ -60,6 +93,12 @@ export interface DamiaoState {
   status_code: number;
   status: string;
   position_rad: number | null;
+  feedback_position_rad: number | null;
+  precise_position_rad: number | null;
+  output_position_rad: number | null;
+  position_read_age_ms: number | null;
+  position_read_count: number;
+  position_read_error: string | null;
   velocity_rad_s: number | null;
   torque_nm: number | null;
   mos_temp_c: number | null;
@@ -68,6 +107,24 @@ export interface DamiaoState {
   feedback_rate_hz: number | null;
   rx_count: number;
   last_error: string | null;
+}
+
+export interface DamiaoBitrateState {
+  motor_id: number;
+  bitrate: number;
+  register_code: number;
+  can_fd: boolean;
+  acknowledged: boolean;
+  requires_reconnect: boolean;
+}
+
+export interface DamiaoIdChangeResult {
+  previous_motor_id: number;
+  requested_motor_id: number;
+  verified: boolean;
+  saved: boolean;
+  error: string | null;
+  state: DamiaoState;
 }
 
 // Unit RollerCAN stock motor-control firmware (CAN 2.0B, 29-bit, 1 Mbps).

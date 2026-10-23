@@ -1,3 +1,46 @@
+.damiao-app {
+  width: 100%;
+  max-width: 1760px;
+  margin: 0 auto;
+}
+
+.damiao-workspace-tabs.ant-segmented {
+  margin-bottom: 16px;
+  padding: 5px;
+  background: #13283e;
+  border: 1px solid #3b82f6;
+  border-radius: 10px;
+}
+
+.damiao-workspace-tabs.ant-segmented .ant-segmented-item {
+  color: #cfe5ff;
+  border-radius: 6px;
+}
+
+.damiao-workspace-tabs.ant-segmented .ant-segmented-item-selected,
+.damiao-workspace-tabs.ant-segmented .ant-segmented-thumb {
+  color: #fff;
+  background: #2563eb;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
+}
+
+.damiao-workspace-tabs.ant-segmented .ant-segmented-item:not(.ant-segmented-item-selected):hover {
+  color: #fff;
+  background: #1e3a5f;
+}
+
+.damiao-workspace-tabs.ant-segmented .ant-segmented-item-label {
+  padding: 10px 20px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.damiao-workspace-tabs .ant-segmented-item-input:focus-visible + .ant-segmented-item-label {
+  outline: 2px solid #bfdbfe;
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
 .damiao-workspace {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
@@ -38,6 +81,7 @@
 }
 
 .damiao-device-list__item.ant-list-item:hover,
+.damiao-device-list__item.ant-list-item:focus-visible,
 .damiao-device-list__item--selected.ant-list-item {
   border-color: rgba(231, 91, 43, 0.62);
   background: rgba(231, 91, 43, 0.1);
@@ -47,8 +91,17 @@
   width: 100%;
 }
 
+.damiao-device-list__item[aria-disabled="true"] {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .damiao-device-list__manual {
   margin-top: 8px;
+}
+
+.damiao-discovery-error {
+  margin-bottom: 10px;
 }
 
 .damiao-workspace__detail {
@@ -110,6 +163,73 @@
   margin-top: 8px;
 }
 
+.damiao-id-settings,
+.damiao-bitrate-settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+.damiao-id-current,
+.damiao-bitrate-current {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.damiao-id-current > .ant-typography:nth-child(2),
+.damiao-bitrate-current > .ant-typography:nth-child(2) {
+  font-size: 20px;
+}
+
+.damiao-bitrate-actions .ant-select {
+  min-width: 210px;
+}
+
+.damiao-id-hint.ant-typography,
+.damiao-bitrate-hint.ant-typography {
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+
+.damiao-id-card .ant-alert,
+.damiao-bitrate-card .ant-alert {
+  margin-top: 12px;
+}
+
+.damiao-zero-settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.damiao-zero-current {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.damiao-zero-current > .ant-typography:nth-child(2) {
+  font-size: 20px;
+}
+
+.damiao-zero-hint.ant-typography {
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+
+.damiao-zero-card .ant-alert {
+  margin-top: 12px;
+}
+
+.damiao-zero-confirm {
+  max-width: min(420px, calc(100vw - 24px));
+}
+
 .damiao-target-editor {
   display: flex;
   flex-direction: column;
@@ -122,6 +242,59 @@
 
 .damiao-target-actions {
   margin-top: 12px;
+}
+
+.damiao-register-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.damiao-register-toolbar > .ant-input-affix-wrapper {
+  flex: 1 1 220px;
+  min-width: 150px;
+}
+
+.damiao-register-toolbar > .ant-select {
+  min-width: 180px;
+}
+
+.damiao-register-secondary {
+  color: #94a3b8;
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.damiao-register-card .ant-table {
+  overflow-wrap: anywhere;
+}
+
+.damiao-register-card .ant-table-tbody > .damiao-register-selected > td {
+  background: rgba(37, 99, 235, 0.18);
+}
+
+.damiao-register-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #3b82f6;
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.07);
+}
+
+.damiao-register-value-input {
+  width: min(280px, 100%);
+}
+
+.damiao-panel .damiao-register-card,
+.damiao-register-editor .ant-space-item {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.damiao-panel .ant-segmented-group {
+  flex-wrap: wrap;
 }
 
 .damiao-target-editor + .ant-alert {
@@ -158,5 +331,24 @@
 
   .damiao-telemetry-table .ant-descriptions-item-label {
     width: auto;
+  }
+
+  .damiao-panel .ant-card-head-wrapper {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .damiao-panel .ant-card-extra {
+    margin-inline-start: 0;
+    max-width: 100%;
+    white-space: normal;
+  }
+
+  .damiao-panel .ant-card-head-title {
+    white-space: normal;
+  }
+
+  .damiao-bitrate-actions {
+    width: 100%;
   }
 }

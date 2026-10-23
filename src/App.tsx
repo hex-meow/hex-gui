@@ -71,6 +71,7 @@ export default function App() {
   // the one-shot automatic position reads. Keep navigation and disconnect
   // locked until the backend command has actually returned.
   const [settingsBusy, setSettingsBusy] = useState(false);
+  const [damiaoBusy, setDamiaoBusy] = useState(false);
   const [calibrationBusy, setCalibrationBusy] = useState(false);
   const [calibrationUpdateBusy, setCalibrationUpdateBusy] = useState(false);
 
@@ -137,6 +138,10 @@ export default function App() {
   }, []);
 
   const switchTool = useCallback(async () => {
+    if (tool === "damiao" && damiaoBusy) {
+      message.warning(t("settingsBusyLeave"));
+      return;
+    }
     if (tool === "dfu" && dfuBusy) {
       message.warning(t("dfuBusyLeave"));
       return;
@@ -172,7 +177,7 @@ export default function App() {
     setDevices([]);
     setTutorialOpen(false);
     setTool(null);
-  }, [calibrationBusy, calibrationUpdateBusy, dfuBusy, message, settingsBusy, t, tool]);
+  }, [calibrationBusy, calibrationUpdateBusy, damiaoBusy, dfuBusy, message, settingsBusy, t, tool]);
 
   const onToggleLog = useCallback(
     async (nid: number, on: boolean, meowMotor = false) => {
@@ -270,6 +275,7 @@ export default function App() {
             size="small"
             disabled={
               (tool === "dfu" && dfuBusy) ||
+              (tool === "damiao" && damiaoBusy) ||
               (tool === "settings" && settingsBusy) ||
               ((tool === "calibration" || tool === "torqueCalibration") && calibrationBusy)
               || (tool === "calibrationUpdate" && calibrationUpdateBusy)
@@ -298,11 +304,13 @@ export default function App() {
           <section className="app-command-dock" aria-label={t("connectionDock")}>
             <div className="app-command-dock__label">{t("connectionDock")}</div>
             <ConnectBar
+              damiao={tool === "damiao"}
               connected={connected}
               onChange={onConnChange}
               broadcastHeartbeat={needsHeartbeat}
               devices={devices}
               disconnectDisabled={
+                (tool === "damiao" && damiaoBusy) ||
                 (tool === "settings" && settingsBusy) ||
                 ((tool === "calibration" || tool === "torqueCalibration") && calibrationBusy)
                 || (tool === "calibrationUpdate" && calibrationUpdateBusy)
@@ -344,7 +352,7 @@ export default function App() {
           ) : tool === "canalyzer" ? (
             <CanAnalyzerPanel />
           ) : tool === "damiao" ? (
-            <DamiaoMotorPanel connected={connected} />
+            <DamiaoMotorPanel connected={connected} onBusyChange={setDamiaoBusy} />
           ) : tool === "rollercanControl" ? (
             <RollerCanControlPanel connected={connected} />
           ) : tool === "dfu" ? (

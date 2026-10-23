@@ -417,11 +417,11 @@ const STRINGS = {
   mitKp: { en: "kp (Nm/rad)", zh: "kp (Nm/rad)" },
   mitKd: { en: "kd (Nm·s/rad)", zh: "kd (Nm·s/rad)" },
 
-  // Dedicated DAMIAO DM-J4310-2EC V1.1 workspace
+  // Dedicated DAMIAO DM-J4310-2EC workspace
   toolDamiao: { en: "DM-J4310-2EC Motor Control", zh: "DM-J4310-2EC 电机控制" },
   toolDamiaoDesc: {
-    en: "Dedicated raw-CAN control and telemetry for the DAMIAO DM-J4310-2EC V1.1 geared motor.",
-    zh: "面向达妙 DM-J4310-2EC V1.1 减速电机的专用原始 CAN 控制与反馈窗口。",
+    en: "Configure and control DAMIAO DM-J4310-2EC 24 V / 48 V motors with live CAN feedback.",
+    zh: "面向达妙 DM-J4310-2EC 24 V / 48 V 电机的配置、控制与实时 CAN 反馈。",
   },
   catDamiao: { en: "Other motors", zh: "其他电机" },
   catDamiaoHint: {
