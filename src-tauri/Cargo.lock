@@ -1852,6 +1852,7 @@ dependencies = [
  "log",
  "mdns-sd",
  "motor-img-release",
+ "nusb",
  "p256",
  "prost",
  "prost-build",

@@ -164,6 +164,7 @@ const STRINGS = {
   canBus: { en: "Bus", zh: "总线" },
   canConnectHint: { en: "e.g. can0 / socketcan:vcan0 / gs_usb", zh: "例如 can0 / socketcan:vcan0 / gs_usb" },
   canConnectFailed: { en: "Capture failed", zh: "抓包失败" },
+  canCaptureLost: { en: "Capture stopped. Disconnect and reconnect the adapter to resume.", zh: "采集已停止，请断开后重新连接适配器。" },
   canModeTrace: { en: "Trace", zh: "逐帧" },
   canModeGrouped: { en: "Grouped by ID", zh: "按 ID 汇总" },
   canInterpret: { en: "CANopen decode", zh: "CANopen 解析" },
@@ -416,11 +417,11 @@ const STRINGS = {
   mitKp: { en: "kp (Nm/rad)", zh: "kp (Nm/rad)" },
   mitKd: { en: "kd (Nm·s/rad)", zh: "kd (Nm·s/rad)" },
 
-  // Dedicated DAMIAO DM-J4310-2EC V1.1 workspace
+  // Dedicated DAMIAO DM-J4310-2EC workspace
   toolDamiao: { en: "DM-J4310-2EC Motor Control", zh: "DM-J4310-2EC 电机控制" },
   toolDamiaoDesc: {
-    en: "Dedicated raw-CAN control and telemetry for the DAMIAO DM-J4310-2EC V1.1 geared motor.",
-    zh: "面向达妙 DM-J4310-2EC V1.1 减速电机的专用原始 CAN 控制与反馈窗口。",
+    en: "Configure and control DAMIAO DM-J4310-2EC 24 V / 48 V motors with live CAN feedback.",
+    zh: "面向达妙 DM-J4310-2EC 24 V / 48 V 电机的配置、控制与实时 CAN 反馈。",
   },
   catDamiao: { en: "Other motors", zh: "其他电机" },
   catDamiaoHint: {
