@@ -328,13 +328,36 @@ pub async fn open_classic_1m_bus(
     Ok(bus)
 }
 
+/// Open the dedicated DAMIAO workspace using the motor's selected bitrate.
+///
+/// SocketCAN remains system-managed, so this never changes Linux link timing.
+/// For gs_usb, rates through 1 Mbit/s use Classic CAN at that nominal rate.
+/// Above 1 Mbit/s we use 1 Mbit/s arbitration and the selected FD data rate.
+/// The DAMIAO manuals describe FD switching but omit arbitration/BRS timing;
+/// the latter profile is therefore a host configuration assumption that must
+/// be confirmed with the motor's feedback before saving a new setting.
+pub async fn open_damiao_bus(
+    spec: &str,
+    bitrate: u32,
+    can_lease: crate::can_lease::CanLease,
+) -> Result<(Arc<dyn CanBus>, bool)> {
+    // Validate even when SocketCAN leaves the physical timing untouched.
+    damiao_gs_usb_config(bitrate)?;
+    open_with_profile(spec, LinkProfile::Damiao { bitrate }, can_lease, true).await
+}
+
 #[derive(Debug, Clone, Copy)]
 enum LinkProfile {
     Fd1M {
         data_bitrate: u32,
         hw_timestamp: bool,
     },
-    Classic1M { hw_timestamp: bool },
+    Classic1M {
+        hw_timestamp: bool,
+    },
+    Damiao {
+        bitrate: u32,
+    },
 }
 
 async fn open_with_profile(
@@ -356,10 +379,17 @@ async fn open_with_profile(
             LinkProfile::Classic1M { hw_timestamp } => GsUsbConfig::classic_1m()
                 .with_channel(channel)
                 .with_hw_timestamp(hw_timestamp),
+            LinkProfile::Damiao { bitrate } => damiao_gs_usb_config(bitrate)?.with_channel(channel),
         };
         let bus = GsUsbBus::open(config)
             .await
             .with_context(|| format!("opening gs_usb / candleLight channel {channel}"))?;
+        if let LinkProfile::Damiao { bitrate } = profile {
+            // The dependency's native 80 MHz check recognizes only its stock
+            // profiles. Custom nominal rates and 2.5/3.2 Mbit FD timing need
+            // the same protection using its device-clock-derived metadata.
+            validate_damiao_gs_usb_clock(bitrate, bus.link_config().await?)?;
+        }
         let hw_ts = bus.hw_timestamps_active();
         log::info!(
             "gs_usb ch{channel} opened with {profile:?}: {:?}, hw_ts={hw_ts}",
@@ -394,6 +424,70 @@ async fn open_with_profile(
              (known: 'socketcan' on Linux, 'gs_usb<channel>' everywhere)"
         ),
     }
+}
+
+fn damiao_gs_usb_config(bitrate: u32) -> Result<can_transport::gs_usb::GsUsbConfig> {
+    use can_transport::gs_usb::{GsTiming, GsUsbConfig};
+
+    let mut config = GsUsbConfig::classic_1m();
+    match bitrate {
+        // Keep the known 80 TQ nominal timing and scale only its prescaler.
+        125_000 | 200_000 | 250_000 | 500_000 | 1_000_000 => {
+            config.nominal.brp = 1_000_000 / bitrate;
+        }
+        2_000_000 | 4_000_000 | 5_000_000 => {
+            config = GsUsbConfig::fd_1m(gs_usb_data_rate(bitrate)?);
+        }
+        2_500_000 => {
+            // 80 MHz / 32 TQ = 2.5 Mbit/s; SP = 26/32 = 81.25%.
+            config.fd = true;
+            config.data = Some(GsTiming {
+                prop_seg: 12,
+                phase_seg1: 13,
+                phase_seg2: 6,
+                sjw: 3,
+                brp: 1,
+            });
+        }
+        3_200_000 => {
+            // 80 MHz / 25 TQ = 3.2 Mbit/s; SP = 20/25 = 80%.
+            config.fd = true;
+            config.data = Some(GsTiming {
+                prop_seg: 9,
+                phase_seg1: 10,
+                phase_seg2: 5,
+                sjw: 3,
+                brp: 1,
+            });
+        }
+        other => bail!(
+            "unsupported DAMIAO bitrate {other}; choose 125000, 200000, 250000, 500000, 1000000, 2000000, 2500000, 3200000, 4000000, or 5000000 bit/s"
+        ),
+    }
+    Ok(config)
+}
+
+fn validate_damiao_gs_usb_clock(bitrate: u32, link: Option<CanLinkConfig>) -> Result<()> {
+    let nominal = link
+        .and_then(|link| link.nominal)
+        .and_then(|timing| timing.bitrate);
+    let expected_nominal = bitrate.min(1_000_000);
+    if nominal != Some(expected_nominal) {
+        bail!(
+            "DAMIAO gs_usb timing requires a verified 80 MHz CAN clock; expected nominal bitrate {expected_nominal}, device reports {nominal:?}"
+        );
+    }
+    if bitrate > 1_000_000 {
+        let data = link
+            .and_then(|link| link.data)
+            .and_then(|timing| timing.bitrate);
+        if data != Some(bitrate) {
+            bail!(
+                "DAMIAO gs_usb timing requires a verified 80 MHz CAN clock; expected data bitrate {bitrate}, device reports {data:?}"
+            );
+        }
+    }
+    Ok(())
 }
 
 fn gs_usb_data_rate(bitrate: u32) -> Result<GsUsbDataRate> {
@@ -482,6 +576,76 @@ mod tests {
     use tokio::sync::Semaphore;
 
     use super::*;
+
+    #[test]
+    fn damiao_profiles_produce_every_documented_rate_at_80mhz() {
+        fn rate(timing: can_transport::gs_usb::GsTiming) -> u32 {
+            assert!(timing.brp > 0);
+            assert!(timing.sjw > 0 && timing.sjw <= timing.phase_seg2);
+            80_000_000
+                / (timing.brp * (1 + timing.prop_seg + timing.phase_seg1 + timing.phase_seg2))
+        }
+
+        for bitrate in [
+            125_000, 200_000, 250_000, 500_000, 1_000_000, 2_000_000, 2_500_000, 3_200_000,
+            4_000_000, 5_000_000,
+        ] {
+            let config = damiao_gs_usb_config(bitrate).unwrap();
+            assert_eq!(rate(config.nominal), bitrate.min(1_000_000));
+            assert_eq!(config.fd, bitrate > 1_000_000);
+            if bitrate > 1_000_000 {
+                assert_eq!(rate(config.data.expect("FD data timing")), bitrate);
+            } else {
+                assert!(config.data.is_none());
+            }
+        }
+        assert!(damiao_gs_usb_config(800_000).is_err());
+    }
+
+    #[test]
+    fn damiao_custom_profiles_require_device_clock_verification() {
+        let classic = CanLinkConfig {
+            fd_enabled: Some(false),
+            nominal: Some(can_transport::CanBitTiming {
+                bitrate: Some(200_000),
+                sample_point_per_mille: Some(800),
+            }),
+            data: None,
+        };
+        assert!(validate_damiao_gs_usb_clock(200_000, Some(classic)).is_ok());
+        assert!(validate_damiao_gs_usb_clock(250_000, Some(classic)).is_err());
+        assert!(validate_damiao_gs_usb_clock(200_000, None).is_err());
+
+        let fd = CanLinkConfig {
+            fd_enabled: Some(true),
+            nominal: Some(can_transport::CanBitTiming {
+                bitrate: Some(1_000_000),
+                sample_point_per_mille: Some(800),
+            }),
+            data: Some(can_transport::CanBitTiming {
+                bitrate: Some(2_500_000),
+                sample_point_per_mille: Some(813),
+            }),
+        };
+        assert!(validate_damiao_gs_usb_clock(2_500_000, Some(fd)).is_ok());
+        assert!(validate_damiao_gs_usb_clock(3_200_000, Some(fd)).is_err());
+    }
+
+    #[tokio::test]
+    async fn invalid_damiao_rate_releases_can_ownership_without_opening() {
+        let gate = crate::can_lease::CanTransportGate::default();
+        let lease = gate
+            .try_acquire(crate::can_lease::CanOwner::Manager)
+            .unwrap();
+        let error = match open_damiao_bus("gs_usb", 800_000, lease).await {
+            Ok(_) => panic!("an undocumented rate must not open the adapter"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("unsupported DAMIAO bitrate"));
+        let _next = gate
+            .try_acquire(crate::can_lease::CanOwner::Analyzer)
+            .expect("validation failure must release its lease");
+    }
 
     fn frame(id: u16) -> CanFrame {
         CanFrame::new_data(id, &[id as u8]).unwrap()

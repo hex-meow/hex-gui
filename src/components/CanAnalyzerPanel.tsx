@@ -4,8 +4,8 @@
 // connect()). Two views: a live "trace" (one row per frame, virtualized, fixed
 // cap) and "grouped by ID" (per-ID count / rate, sortable). A CANopen decode
 // toggle, two filter kinds (node / id+mask), a status strip, and a manual-send
-// widget. The kHz firehose is drained into refs by useCanTrace; only a 10 Hz
-// tick re-renders.
+// widget. The kHz firehose is drained into refs by useCanTrace; only the
+// selected refresh-rate tick re-renders.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -88,9 +88,8 @@ function parseCia309Int(s: string): number {
 function parseHexBytes(s: string): number[] {
   const parts = s.trim().split(/[\s,]+/).filter(Boolean);
   return parts.map((p) => {
-    const b = parseInt(p, 16);
-    if (!Number.isInteger(b) || b < 0 || b > 255) throw new Error(`bad byte '${p}'`);
-    return b;
+    if (!/^(?:0x)?[0-9a-f]{1,2}$/i.test(p)) throw new Error(`bad byte '${p}'`);
+    return parseInt(p.replace(/^0x/i, ""), 16);
   });
 }
 
@@ -103,6 +102,8 @@ export function CanAnalyzerPanel() {
   const [hwTs, setHwTs] = useState(true);
   const [running, setRunning] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const connectionBusyRef = useRef(false);
 
   const [mode, setMode] = useState<CanMode>("trace");
   const [interpret, setInterpret] = useState(true);
@@ -134,7 +135,7 @@ export function CanAnalyzerPanel() {
   }, [filterType, node, includeNodeless, maskIdStr, maskStr, maskExt]);
 
   const { bufRef, groupedRef, statusRef, rateRef, gapRef, evictedRef, lastActivityRef, healthRef, version, clear } =
-    useCanTrace(running, mode, filter, paused, refreshHz);
+    useCanTrace(running, mode, filter, refreshHz);
 
   // Stop capture on unmount (tool switch also calls disconnect() as a safety net).
   useEffect(() => {
@@ -144,30 +145,42 @@ export function CanAnalyzerPanel() {
   }, []);
 
   const connect = async () => {
+    if (connectionBusyRef.current || running) return;
+    connectionBusyRef.current = true;
     setConnecting(true);
     try {
       await api.analyzerStart(iface.trim(), dataBitrate, hwTs);
+      setPaused(false);
       setRunning(true);
     } catch (e) {
       message.error(`${t("canConnectFailed")}: ${errMsg(e)}`);
     } finally {
+      connectionBusyRef.current = false;
       setConnecting(false);
     }
   };
 
   const disconnect = async () => {
+    if (connectionBusyRef.current) return;
+    connectionBusyRef.current = true;
+    setDisconnecting(true);
     try {
       await api.analyzerStop();
-    } catch {
-      /* ignore */
+      setRunning(false);
+      setPaused(false);
+    } catch (e) {
+      message.error(`${t("disconnectFailed")}: ${errMsg(e)}`);
+    } finally {
+      connectionBusyRef.current = false;
+      setDisconnecting(false);
     }
-    setRunning(false);
   };
 
   const status = statusRef.current;
+  const capturing = running && status?.capturing === true && !disconnecting;
   // Active = a frame arrived within ACTIVE_WINDOW_MS (re-evaluated each render
   // tick), so a slow heartbeat keeps it green instead of flickering idle.
-  const active = running && performance.now() - lastActivityRef.current < ACTIVE_WINDOW_MS;
+  const active = capturing && lastActivityRef.current > 0 && performance.now() - lastActivityRef.current < ACTIVE_WINDOW_MS;
   void version; // re-render trigger
 
   return (
@@ -181,7 +194,7 @@ export function CanAnalyzerPanel() {
               value={iface}
               onChange={(e) => setIface(e.target.value)}
               style={{ width: 160 }}
-              disabled={running}
+              disabled={running || connecting || disconnecting}
               placeholder="can0 / gs_usb"
             />
           </Tooltip>
@@ -199,7 +212,7 @@ export function CanAnalyzerPanel() {
               </Tooltip>
               <Select
                 value={dataBitrate == null ? "classic" : dataBitrate}
-                disabled={running}
+                disabled={running || connecting || disconnecting}
                 style={{ width: 210 }}
                 onChange={(value) =>
                   setDataBitrate(value === "classic" ? null : Number(value))
@@ -215,12 +228,12 @@ export function CanAnalyzerPanel() {
             </>
           )}
           <Tooltip title={t("canHwTsHint")}>
-            <Checkbox checked={hwTs} disabled={running} onChange={(e) => setHwTs(e.target.checked)}>
+            <Checkbox checked={hwTs} disabled={running || connecting || disconnecting} onChange={(e) => setHwTs(e.target.checked)}>
               {t("canHwTs")}
             </Checkbox>
           </Tooltip>
           {running ? (
-            <Button danger onClick={disconnect}>
+            <Button danger loading={disconnecting} onClick={disconnect}>
               {t("disconnect")}
             </Button>
           ) : (
@@ -233,7 +246,7 @@ export function CanAnalyzerPanel() {
 
       {/* status strip */}
       <StatusStrip
-        running={running}
+        running={capturing}
         active={active}
         rate={rateRef.current}
         total={status?.total ?? 0}
@@ -241,8 +254,17 @@ export function CanAnalyzerPanel() {
         guiDrops={status?.our_dropped ?? 0}
         aggOverflow={status?.agg_overflow ?? 0}
         hwTs={status?.hw_ts ?? false}
-        health={healthRef.current}
+        health={capturing ? healthRef.current : null}
       />
+
+      {running && status?.capturing === false && (
+        <Alert
+          type="error"
+          showIcon
+          message={t("canCaptureLost")}
+          description={status.connection_error ?? undefined}
+        />
+      )}
 
       <div className="can-analyzer-workspace">
         <div className="can-analyzer-main">
@@ -251,7 +273,7 @@ export function CanAnalyzerPanel() {
             <Space wrap size={12}>
               <Segmented
                 value={mode}
-                onChange={(v) => setMode(v as CanMode)}
+                onChange={(v) => { setPaused(false); setMode(v as CanMode); }}
                 options={[
                   { label: t("canModeTrace"), value: "trace" },
                   { label: t("canModeGrouped"), value: "grouped" },
@@ -370,13 +392,13 @@ export function CanAnalyzerPanel() {
                   key: "send",
                   label: t("canTabSend"),
                   children: (
-                    <SendWidget running={running} fd={status?.fd ?? false} maxDlen={status?.max_dlen ?? 8} />
+                    <SendWidget running={capturing} fd={status?.fd ?? false} maxDlen={status?.max_dlen ?? 8} />
                   ),
                 },
                 {
                   key: "sdo",
                   label: "SDO",
-                  children: <SdoWidget running={running} />,
+                  children: <SdoWidget running={capturing} />,
                 },
               ]}
             />
@@ -528,7 +550,16 @@ function TraceList({
   const lastEvictedRef = useRef(0);
   const [scrollTop, setScrollTop] = useState(0);
   const [widths, setWidths] = useState<TraceColumnWidths>(DEFAULT_TRACE_WIDTHS);
-  const total = frames.length;
+  // Polling mutates the live ring in place. Freeze owns a separate snapshot,
+  // including its eviction count, so scrolling/decoding cannot change it.
+  // Clear/filter reset the array identity and intentionally reset the snapshot.
+  const frozen = useMemo(
+    () => paused ? { frames: frames.slice(), evicted: evictedRef.current } : null,
+    [paused, frames],
+  );
+  const viewFrames = frozen?.frames ?? frames;
+  const evicted = frozen?.evicted ?? evictedRef.current;
+  const total = viewFrames.length;
   const gridTemplate = TRACE_COLUMNS.map((c) => `${widths[c.key]}px`).join(" ");
   const tableWidth = TRACE_COLUMNS.reduce((sum, c) => sum + widths[c.key], 0);
 
@@ -540,14 +571,14 @@ function TraceList({
     if (!paused && atBottomRef.current) {
       el.scrollTop = el.scrollHeight;
     } else {
-      const delta = evictedRef.current - lastEvictedRef.current;
+      const delta = evicted - lastEvictedRef.current;
       if (delta > 0) {
         const next = Math.max(0, el.scrollTop - delta * ROW_H);
         el.scrollTop = next;
         setScrollTop(next);
       }
     }
-    lastEvictedRef.current = evictedRef.current;
+    lastEvictedRef.current = evicted;
   });
 
   const onScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -558,7 +589,7 @@ function TraceList({
 
   const start = Math.max(0, Math.floor(scrollTop / ROW_H) - 6);
   const end = Math.min(total, Math.ceil((scrollTop + VIEW_H) / ROW_H) + 6);
-  const visible = frames.slice(start, end);
+  const visible = viewFrames.slice(start, end);
   void version;
 
   const startResize = (key: TraceColumnKey, min: number, startX: number) => {
@@ -745,24 +776,38 @@ function SendWidget({ running, fd, maxDlen }: { running: boolean; fd: boolean; m
 
   // Mirror the live inputs into a ref so the repeat interval (whose closure is
   // captured once at toggle time) always transmits the CURRENT field values.
-  const liveRef = useRef({ idStr, ext, isFd, brs, rtr, dataStr, rtrDlc, fd });
-  liveRef.current = { idStr, ext, isFd, brs, rtr, dataStr, rtrDlc, fd };
+  const liveRef = useRef({ idStr, ext, isFd, brs, rtr, dataStr, rtrDlc, fd, running, maxDlen });
+  liveRef.current = { idStr, ext, isFd, brs, rtr, dataStr, rtrDlc, fd, running, maxDlen };
 
   const buildSpec = (): CanSendSpec => {
     const s = liveRef.current;
+    if (!s.running) throw new Error("CAN is not connected");
+    const id = parseHexId(s.idStr);
+    const maxId = s.ext ? 0x1fffffff : 0x7ff;
+    if (!Number.isSafeInteger(id) || id > maxId) {
+      throw new Error(`CAN ID must be between 0 and 0x${maxId.toString(16).toUpperCase()}`);
+    }
+    if (s.isFd && !s.fd) throw new Error("CAN FD is unavailable on this connection");
+    if (s.rtr && s.isFd) throw new Error("CAN FD does not support RTR frames");
+    if (s.rtr && (!Number.isInteger(s.rtrDlc) || s.rtrDlc < 0 || s.rtrDlc > 8)) {
+      throw new Error("RTR DLC must be an integer between 0 and 8");
+    }
+    const data = s.rtr ? [] : parseHexBytes(s.dataStr);
+    const maxBytes = s.isFd ? Math.min(64, s.maxDlen) : 8;
+    if (data.length > maxBytes) throw new Error(`data exceeds ${maxBytes} bytes`);
     return {
-      id: parseHexId(s.idStr),
+      id,
       extended: s.ext,
-      fd: s.isFd && s.fd,
-      brs: s.brs && s.isFd && s.fd,
+      fd: s.isFd,
+      brs: s.brs && s.isFd,
       rtr: s.rtr,
       dlc: s.rtr ? s.rtrDlc : 0,
-      data: s.rtr ? [] : parseHexBytes(s.dataStr),
+      data,
     };
   };
 
   const sendOnce = async () => {
-    if (busyRef.current) return;
+    if (!liveRef.current.running || busyRef.current) return;
     busyRef.current = true;
     try {
       await api.analyzerSend(buildSpec());
@@ -786,6 +831,7 @@ function SendWidget({ running, fd, maxDlen }: { running: boolean; fd: boolean; m
     if (repeating) {
       stopRepeat();
     } else {
+      if (!liveRef.current.running || timerRef.current != null) return;
       try {
         buildSpec(); // validate before starting
       } catch (e) {
@@ -798,10 +844,11 @@ function SendWidget({ running, fd, maxDlen }: { running: boolean; fd: boolean; m
   };
 
   useEffect(() => () => stopRepeat(), []);
-  // Stop repeating if we disconnect.
+  // Losing a connection/capability must stop the timer, never change an FD
+  // transmission into a classic frame. Keep the selection editable below.
   useEffect(() => {
-    if (!running) stopRepeat();
-  }, [running]);
+    if (!running || (isFd && !fd)) stopRepeat();
+  }, [running, fd, isFd]);
 
   const maxBytes = isFd && fd ? maxDlen : 8;
   return (
@@ -809,8 +856,11 @@ function SendWidget({ running, fd, maxDlen }: { running: boolean; fd: boolean; m
         <Input addonBefore={t("canId")} value={idStr} onChange={(e) => setIdStr(e.target.value)} />
         <Space wrap>
           <Checkbox checked={ext} onChange={(e) => setExt(e.target.checked)}>{t("canExt")}</Checkbox>
-          <Checkbox checked={isFd} disabled={!fd || rtr} onChange={(e) => setIsFd(e.target.checked)}>FD</Checkbox>
-          <Checkbox checked={brs} disabled={!isFd || !fd} onChange={(e) => setBrs(e.target.checked)}>BRS</Checkbox>
+          <Checkbox checked={isFd} disabled={!isFd && (!fd || rtr)} onChange={(e) => {
+            setIsFd(e.target.checked);
+            if (!e.target.checked) setBrs(false);
+          }}>FD</Checkbox>
+          <Checkbox checked={brs} disabled={!brs && (!isFd || !fd)} onChange={(e) => setBrs(e.target.checked)}>BRS</Checkbox>
           <Checkbox checked={rtr} disabled={isFd} onChange={(e) => setRtr(e.target.checked)}>RTR</Checkbox>
         </Space>
         {rtr ? (
@@ -879,6 +929,7 @@ function SdoWidget({ running }: { running: boolean }) {
   const [timeoutMs, setTimeoutMs] = useState(500);
   const [retries, setRetries] = useState(1);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [log, setLog] = useState<SdoLogLine[]>([]);
   const logIdRef = useRef(0);
   const logRef = useRef<HTMLDivElement>(null);
@@ -889,11 +940,16 @@ function SdoWidget({ running }: { running: boolean }) {
     if (el) el.scrollTop = el.scrollHeight;
   }, [log]);
 
-  const append = (text: string, ok: boolean) =>
-    setLog((l) => [...l.slice(-199), { id: ++logIdRef.current, text, ok }]);
+  const append = (text: string, ok: boolean) => {
+    const line = { id: ++logIdRef.current, text, ok };
+    setLog((l) => [...l.slice(-199), line]);
+  };
 
   const run = async (op: "r" | "w") => {
-    if (busy) return;
+    // State only disables the buttons after React commits. Lock immediately
+    // so read/write events from the same render cannot queue two transfers.
+    if (!running || busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     try {
       // comeow semantics on all three fields: bare digits = decimal, 0x = hex.
@@ -910,6 +966,7 @@ function SdoWidget({ running }: { running: boolean }) {
     } catch (e) {
       append(`✗ ${errMsg(e)}`, false);
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };

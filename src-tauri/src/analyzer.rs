@@ -153,6 +153,8 @@ struct AnalyzerState {
     /// distinct ids we could not track because the map hit `MAX_IDS`.
     agg_overflow: u64,
     total: u64,
+    /// Received frames only; local TX mirrors must not inflate RX activity.
+    rx_total: u64,
     /// Fixed device-clock → host-axis offset (`device_ts − host_elapsed`),
     /// captured at the first hardware-stamped frame. Stamped frames display
     /// as `device_ts − offset` ≈ their host arrival time, so their *deltas*
@@ -172,6 +174,7 @@ impl AnalyzerState {
             agg: HashMap::new(),
             agg_overflow: 0,
             total: 0,
+            rx_total: 0,
             hw_offset: None,
         }
     }
@@ -198,6 +201,9 @@ impl AnalyzerState {
         let seq = self.next_seq;
         self.next_seq += 1;
         self.total += 1;
+        if matches!(dir, Dir::Rx) {
+            self.rx_total += 1;
+        }
 
         let mut rec = TraceRecord {
             seq,
@@ -240,6 +246,7 @@ impl AnalyzerState {
         self.agg.clear();
         self.agg_overflow = 0;
         self.total = 0;
+        self.rx_total = 0;
         self.first_seq = self.next_seq; // keep seq monotonic; empty ring
     }
 }
@@ -249,6 +256,80 @@ struct AnalyzerStatus {
     /// Cumulative frames dropped by *our* 256-deep subscriber queues (both
     /// widths). This is GUI/host backpressure — NOT a bus-level error.
     our_dropped: AtomicU64,
+    /// Terminal transport/capture failure. Keep the first cause until the
+    /// session is explicitly stopped, so late polls cannot revive a dead bus.
+    connection_error: StdMutex<Option<String>>,
+}
+
+impl AnalyzerStatus {
+    fn fail(&self, error: impl Into<String>) {
+        self.connection_error
+            .lock()
+            .unwrap()
+            .get_or_insert_with(|| error.into());
+    }
+
+    fn connection_error(&self) -> Option<String> {
+        self.connection_error.lock().unwrap().clone()
+    }
+
+    fn check_connected(&self) -> Result<(), CanIoError> {
+        if self.connection_error.lock().unwrap().is_some() {
+            Err(CanIoError::Disconnected)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn observe_error(&self, error: &CanIoError) {
+        if is_disconnected(error) {
+            self.fail(error.to_string());
+        }
+    }
+}
+
+/// Only terminal transport failures invalidate a session. A stalled/unsupported
+/// health request, USB timeout, or CAN bus-off state is not a physical disconnect.
+fn is_disconnected(error: &CanIoError) -> bool {
+    if matches!(error, CanIoError::Disconnected) {
+        return true;
+    }
+    let mut source: Option<&(dyn std::error::Error + 'static)> = match error {
+        CanIoError::Backend(error) => Some(error.as_ref()),
+        _ => None,
+    };
+    while let Some(error) = source {
+        if error.downcast_ref::<nusb::transfer::TransferError>()
+            == Some(&nusb::transfer::TransferError::Disconnected)
+            || error
+                .downcast_ref::<nusb::Error>()
+                .is_some_and(|error| error.kind() == nusb::ErrorKind::Disconnected)
+            || error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotConnected
+                        | std::io::ErrorKind::NotFound
+                        | std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::ConnectionAborted
+                ) || cfg!(target_os = "linux") && matches!(error.raw_os_error(), Some(6 | 19))
+            })
+        {
+            return true;
+        }
+        source = error.source();
+    }
+    false
+}
+
+/// can-transport opens the first matching gs_usb adapter without exposing its
+/// identity. Only bind a presence monitor when enumeration is unambiguous both
+/// before and after open; never guess which of several adapters it selected.
+async fn sole_gs_usb_device() -> Option<nusb::DeviceId> {
+    let mut devices = nusb::list_devices().await.ok()?.filter(|device| {
+        can_transport::gs_usb::KNOWN_IDS.contains(&(device.vendor_id(), device.product_id()))
+    });
+    let first = devices.next()?.id();
+    devices.next().is_none().then_some(first)
 }
 
 // ─────────────────────────────── DTOs ───────────────────────────────
@@ -319,6 +400,8 @@ pub struct SendSpec {
 pub struct AnalyzerStatusDto {
     pub capturing: bool,
     pub total: u64,
+    pub rx_total: u64,
+    pub connection_error: Option<String>,
     pub our_dropped: u64,
     pub distinct_ids: u32,
     pub agg_overflow: u64,
@@ -337,6 +420,8 @@ impl AnalyzerStatusDto {
         Self {
             capturing: false,
             total: 0,
+            rx_total: 0,
+            connection_error: None,
             our_dropped: 0,
             distinct_ids: 0,
             agg_overflow: 0,
@@ -473,13 +558,19 @@ impl AggReplyDto {
 struct TxMirror {
     inner: Arc<dyn CanBus>,
     state: Arc<StdMutex<AnalyzerState>>,
+    status: Arc<AnalyzerStatus>,
+    usb_device: Option<nusb::DeviceId>,
     t0: Instant,
 }
 
 #[async_trait]
 impl CanBus for TxMirror {
     async fn send(&self, frame: CanFrame) -> Result<(), CanIoError> {
-        self.inner.send(frame).await?;
+        self.status.check_connected()?;
+        if let Err(error) = self.inner.send(frame).await {
+            self.status.observe_error(&error);
+            return Err(error);
+        }
         let host_us = self.t0.elapsed().as_micros() as u64;
         let (data, len): (&[u8], u8) = match frame.kind() {
             FrameKind::Remote => (&[], frame.dlc() as u8),
@@ -494,7 +585,11 @@ impl CanBus for TxMirror {
     }
 
     async fn subscribe(&self, filter: CanFilter) -> Result<Box<dyn CanRx>, CanIoError> {
-        self.inner.subscribe(filter).await
+        self.status.check_connected()?;
+        self.inner
+            .subscribe(filter)
+            .await
+            .inspect_err(|error| self.status.observe_error(error))
     }
 
     fn capabilities(&self) -> CanCapabilities {
@@ -503,11 +598,30 @@ impl CanBus for TxMirror {
 
     // Forward explicitly — the trait default would mask the inner backend.
     async fn bus_state(&self) -> Result<Option<can_transport::CanBusState>, CanIoError> {
-        self.inner.bus_state().await
+        self.status.check_connected()?;
+        // Old gs_usb firmware returns Ok(None) for GET_STATE, while the
+        // dependency's reader may exit without closing subscriber queues.
+        // Check the exact USB device instead of inferring health from traffic.
+        if let Some(expected) = self.usb_device {
+            if let Ok(mut devices) = nusb::list_devices().await {
+                if !devices.any(|device| device.id() == expected) {
+                    self.status.fail("CAN USB adapter disconnected");
+                    return Err(CanIoError::Disconnected);
+                }
+            }
+        }
+        self.inner
+            .bus_state()
+            .await
+            .inspect_err(|error| self.status.observe_error(error))
     }
 
     async fn link_config(&self) -> Result<Option<can_transport::CanLinkConfig>, CanIoError> {
-        self.inner.link_config().await
+        self.status.check_connected()?;
+        self.inner
+            .link_config()
+            .await
+            .inspect_err(|error| self.status.observe_error(error))
     }
 }
 
@@ -544,8 +658,30 @@ impl CanAnalyzer {
         hw_timestamp: bool,
         can_lease: crate::can_lease::CanLease,
     ) -> Result<Self> {
+        let before = if crate::backend::backend_name(spec) == "gs_usb" {
+            sole_gs_usb_device().await
+        } else {
+            None
+        };
         let (bus, hw_ts) =
             crate::backend::open_analyzer_bus(spec, data_bitrate, hw_timestamp, can_lease).await?;
+        let usb_device = match before {
+            Some(id) if sole_gs_usb_device().await == Some(id) => Some(id),
+            _ => None,
+        };
+        let analyzer = Self::from_bus(bus, hw_ts, usb_device).await?;
+        log::info!(
+            "CAN analyzer capturing on {spec:?} ({:?})",
+            analyzer.bus.capabilities()
+        );
+        Ok(analyzer)
+    }
+
+    async fn from_bus(
+        bus: Arc<dyn CanBus>,
+        hw_ts: bool,
+        usb_device: Option<nusb::DeviceId>,
+    ) -> Result<Self> {
         // Two subscriptions: a single CanFilter is standard-XOR-extended.
         let rx_std = bus
             .subscribe(CanFilter::pass_all_standard())
@@ -569,10 +705,11 @@ impl CanAnalyzer {
         let mirror = Arc::new(TxMirror {
             inner: bus.clone(),
             state: state.clone(),
+            status: status.clone(),
+            usb_device,
             t0,
         });
 
-        log::info!("CAN analyzer capturing on {spec:?} ({:?})", bus.capabilities());
         Ok(Self {
             bus,
             t0,
@@ -586,10 +723,10 @@ impl CanAnalyzer {
         })
     }
 
-    /// The raw bus, for on-demand health queries (`bus_state`). Clone out and
-    /// drop the `AppState.analyzer` guard before awaiting.
+    /// The monitored bus, for on-demand health queries (`bus_state`). Clone
+    /// out and drop the `AppState.analyzer` guard before awaiting.
     pub fn bus_handle(&self) -> Arc<dyn CanBus> {
-        self.bus.clone()
+        self.mirror.clone()
     }
 
     /// The analyzer's TX-mirrored bus + the SDO serialization lock, cloned out
@@ -665,9 +802,16 @@ impl CanAnalyzer {
 
     fn status_dto(&self, st: &AnalyzerState) -> AnalyzerStatusDto {
         let caps = self.bus.capabilities();
+        if self.std_task.is_finished() || self.ext_task.is_finished() {
+            self.status
+                .fail("CAN receive task stopped; disconnect and reconnect the adapter");
+        }
+        let connection_error = self.status.connection_error();
         AnalyzerStatusDto {
-            capturing: true,
+            capturing: connection_error.is_none(),
             total: st.total,
+            rx_total: st.rx_total,
+            connection_error,
             our_dropped: self.status.our_dropped.load(Ordering::Relaxed),
             distinct_ids: st.agg.len() as u32,
             agg_overflow: st.agg_overflow,
@@ -758,7 +902,10 @@ async fn drain_loop(
             Err(CanIoError::Lagged { dropped }) => {
                 status.our_dropped.fetch_add(dropped, Ordering::Relaxed);
             }
-            Err(CanIoError::Disconnected) => break,
+            Err(e) if is_disconnected(&e) => {
+                status.fail(format!("CAN bus disconnected: {e}"));
+                break;
+            }
             Err(e) => {
                 log::warn!("analyzer rx: {e}");
             }
@@ -831,5 +978,248 @@ fn agg_dto(key: AggKey, e: AggEntry, now_us: u64) -> AggRowDto {
         last_data,
         first_us: e.first_us,
         last_us: e.last_us,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use tokio::sync::mpsc;
+
+    #[derive(Default)]
+    struct TestBus {
+        subscribers: StdMutex<Vec<mpsc::UnboundedSender<Result<CanFrame, CanIoError>>>>,
+        disconnect_send: AtomicBool,
+        health: AtomicU64,
+        sends: AtomicU64,
+    }
+
+    struct TestRx(mpsc::UnboundedReceiver<Result<CanFrame, CanIoError>>);
+
+    #[async_trait]
+    impl CanRx for TestRx {
+        async fn recv(&mut self) -> Result<CanFrame, CanIoError> {
+            self.0.recv().await.unwrap_or(Err(CanIoError::Disconnected))
+        }
+
+        fn try_recv(&mut self) -> Result<Option<CanFrame>, CanIoError> {
+            match self.0.try_recv() {
+                Ok(frame) => frame.map(Some),
+                Err(mpsc::error::TryRecvError::Empty) => Ok(None),
+                Err(mpsc::error::TryRecvError::Disconnected) => Err(CanIoError::Disconnected),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl CanBus for TestBus {
+        async fn send(&self, _: CanFrame) -> Result<(), CanIoError> {
+            self.sends.fetch_add(1, Ordering::Relaxed);
+            if self.disconnect_send.load(Ordering::Relaxed) {
+                Err(CanIoError::Disconnected)
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn subscribe(&self, _: CanFilter) -> Result<Box<dyn CanRx>, CanIoError> {
+            let (tx, rx) = mpsc::unbounded_channel();
+            self.subscribers.lock().unwrap().push(tx);
+            Ok(Box::new(TestRx(rx)))
+        }
+
+        fn capabilities(&self) -> CanCapabilities {
+            CanCapabilities {
+                fd: true,
+                max_dlen: 64,
+            }
+        }
+
+        async fn bus_state(&self) -> Result<Option<can_transport::CanBusState>, CanIoError> {
+            match self.health.load(Ordering::Relaxed) {
+                0 => Ok(None),
+                1 => Ok(Some(can_transport::CanBusState {
+                    state: Some(can_transport::CanControllerState::BusOff),
+                    ..Default::default()
+                })),
+                2 => Err(CanIoError::Disconnected),
+                _ => Err(CanIoError::backend(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "health query timed out",
+                ))),
+            }
+        }
+    }
+
+    fn test_frame() -> CanFrame {
+        CanFrame::new_data(CanId::Standard(0x701), &[0x7f]).unwrap()
+    }
+
+    #[test]
+    fn usb_disconnect_errors_are_terminal_but_transient_usb_faults_are_not() {
+        use nusb::transfer::TransferError;
+        assert!(is_disconnected(&CanIoError::backend(
+            TransferError::Disconnected
+        )));
+        for error in [
+            TransferError::Cancelled,
+            TransferError::Stall,
+            TransferError::Fault,
+            TransferError::InvalidArgument,
+            TransferError::Unknown(1),
+        ] {
+            assert!(!is_disconnected(&CanIoError::backend(error)), "{error}");
+        }
+        assert!(!is_disconnected(&CanIoError::Lagged { dropped: 1 }));
+        assert!(!is_disconnected(&CanIoError::InvalidId));
+    }
+
+    #[tokio::test]
+    async fn rx_counter_excludes_manual_and_sdo_tx_mirrors_and_clear_resets_both() {
+        let bus = Arc::new(TestBus::default());
+        let analyzer = CanAnalyzer::from_bus(bus.clone(), false, None)
+            .await
+            .unwrap();
+        let (sdo_bus, _) = analyzer.sdo_handles();
+        sdo_bus.send(test_frame()).await.unwrap();
+        analyzer
+            .send(SendSpec {
+                id: 0x601,
+                extended: false,
+                fd: false,
+                brs: false,
+                rtr: false,
+                dlc: 0,
+                data: vec![0x40, 0x18, 0x10, 0, 0, 0, 0, 0],
+            })
+            .await
+            .unwrap();
+        assert_eq!(analyzer.get_status().total, 2);
+        assert_eq!(analyzer.get_status().rx_total, 0);
+
+        bus.subscribers.lock().unwrap()[0]
+            .send(Ok(test_frame()))
+            .unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(analyzer.get_status().total, 3);
+        assert_eq!(analyzer.get_status().rx_total, 1);
+        let cursor = analyzer.clear();
+        let cleared = analyzer.get_status();
+        assert_eq!(cursor, 3);
+        assert_eq!(cleared.total, 0);
+        assert_eq!(cleared.rx_total, 0);
+        assert!(cleared.capturing && cleared.fd);
+        assert_eq!(cleared.max_dlen, 64);
+        analyzer.stop().await;
+    }
+
+    #[tokio::test]
+    async fn quiet_bus_lag_and_unsupported_or_bus_off_health_do_not_mean_disconnected() {
+        let bus = Arc::new(TestBus::default());
+        let analyzer = CanAnalyzer::from_bus(bus.clone(), false, None)
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        assert!(analyzer.get_status().capturing);
+        assert!(analyzer.bus_handle().bus_state().await.unwrap().is_none());
+        bus.health.store(1, Ordering::Relaxed);
+        assert_eq!(
+            analyzer
+                .bus_handle()
+                .bus_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            Some(can_transport::CanControllerState::BusOff),
+        );
+        bus.health.store(3, Ordering::Relaxed);
+        assert!(analyzer.bus_handle().bus_state().await.is_err());
+        bus.subscribers.lock().unwrap()[0]
+            .send(Err(CanIoError::Lagged { dropped: 5 }))
+            .unwrap();
+        tokio::task::yield_now().await;
+        let status = analyzer.get_status();
+        assert!(status.capturing);
+        assert!(status.connection_error.is_none());
+        assert_eq!(status.our_dropped, 5);
+        analyzer.stop().await;
+    }
+
+    #[tokio::test]
+    async fn receive_disconnect_keeps_trace_but_stops_future_sends() {
+        for error in [
+            CanIoError::Disconnected,
+            CanIoError::backend(nusb::transfer::TransferError::Disconnected),
+        ] {
+            let bus = Arc::new(TestBus::default());
+            let analyzer = CanAnalyzer::from_bus(bus.clone(), false, None)
+                .await
+                .unwrap();
+            {
+                let subscribers = bus.subscribers.lock().unwrap();
+                subscribers[0].send(Ok(test_frame())).unwrap();
+                subscribers[0].send(Err(error)).unwrap();
+            }
+            tokio::task::yield_now().await;
+            let status = analyzer.get_status();
+            assert!(!status.capturing);
+            assert!(status.connection_error.is_some());
+            assert_eq!(status.ring_len, 1);
+            assert!(analyzer.sdo_handles().0.send(test_frame()).await.is_err());
+            assert_eq!(bus.sends.load(Ordering::Relaxed), 0);
+            analyzer.clear();
+            assert!(
+                !analyzer.get_status().capturing,
+                "clear must not revive a failed session"
+            );
+            analyzer.stop().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn health_disconnect_sticks_even_if_a_later_probe_could_succeed() {
+        let bus = Arc::new(TestBus::default());
+        let analyzer = CanAnalyzer::from_bus(bus.clone(), false, None)
+            .await
+            .unwrap();
+        bus.health.store(2, Ordering::Relaxed);
+        assert!(analyzer.bus_handle().bus_state().await.is_err());
+        assert!(!analyzer.get_status().capturing);
+        bus.health.store(0, Ordering::Relaxed);
+        assert!(analyzer.bus_handle().bus_state().await.is_err());
+        assert!(!analyzer.get_status().capturing);
+        analyzer.stop().await;
+    }
+
+    #[tokio::test]
+    async fn sdo_send_disconnect_is_not_mirrored_or_counted_as_a_frame() {
+        let bus = Arc::new(TestBus::default());
+        let analyzer = CanAnalyzer::from_bus(bus.clone(), false, None)
+            .await
+            .unwrap();
+        bus.disconnect_send.store(true, Ordering::Relaxed);
+        assert!(analyzer.sdo_handles().0.send(test_frame()).await.is_err());
+        let status = analyzer.get_status();
+        assert!(!status.capturing);
+        assert_eq!(status.total, 0);
+        assert_eq!(status.rx_total, 0);
+        analyzer.stop().await;
+    }
+
+    #[tokio::test]
+    async fn unexpected_receive_task_exit_is_reported_in_status() {
+        let bus = Arc::new(TestBus::default());
+        let analyzer = CanAnalyzer::from_bus(bus, false, None).await.unwrap();
+        analyzer.ext_task.abort();
+        tokio::task::yield_now().await;
+        let status = analyzer.get_status();
+        assert!(!status.capturing);
+        assert!(status
+            .connection_error
+            .unwrap()
+            .contains("receive task stopped"));
+        analyzer.stop().await;
     }
 }

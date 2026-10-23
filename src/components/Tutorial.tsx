@@ -404,6 +404,13 @@ export const TUTORIALS: Record<string, Slide[]> = {
         zh: "使能前确认遥测持续刷新，并从保守目标开始。需要整条总线停止时使用“全部失能”。卸载、断开连接、切换工具与关闭窗口都会先安全失能所有已挂载电机，再释放适配器。",
       },
     },
+    {
+      title: { en: "4 · Change the motor ID", zh: "4 · 修改电机 ID" },
+      body: {
+        en: "After attaching, enter the new decimal or hexadecimal ID in Motor ID and click Disable & change ID. The app checks conflicts, disables the motor, verifies the new address, then updates the selected motor. Save to Flash is on by default and stores all current parameters; turn it off for a temporary change. The feedback Master ID keeps its current value. If verification fails, reconnect and check both the previous and requested IDs.",
+        zh: "挂载后，在“电机 ID”中输入新的十进制或十六进制 ID，点击“失能并修改 ID”。应用会检查冲突、失能电机、校验新地址，并自动切换选中的电机。“保存到 Flash”默认开启，会保存当前全部参数；临时修改可关闭此选项。反馈 Master ID 保持当前值。若校验失败，请重新连接并检查原 ID 和目标 ID。",
+      },
+    },
   ],
   rollercanControl: [
     {

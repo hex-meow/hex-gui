@@ -30,12 +30,12 @@ export function DamiaoLiveChart({
   const option = useMemo(() => {
     const labels: Record<SignalKey, string> = zh
       ? {
-          position: "位置 (rad)",
+          position: "控制累计位置 (rad)",
           velocity: "速度 (rad/s)",
           torque: "转矩 (Nm)",
         }
       : {
-          position: "Position (rad)",
+          position: "Control cumulative position (rad)",
           velocity: "Velocity (rad/s)",
           torque: "Torque (Nm)",
         };
@@ -73,13 +73,34 @@ export function DamiaoLiveChart({
       };
     });
 
+    const outputLabel = zh ? "输出轴累计位置 (rad)" : "Output-shaft cumulative position (rad)";
+    const outputData: [number, number | null][] = [];
+    for (const sample of buffer) {
+      if (sample.t < cutoff) continue;
+      const value = sample.outputPosition;
+      outputData.push([(sample.t - lastT) / 1000, value]);
+      if (value != null && Number.isFinite(value)) {
+        const range = ranges[0];
+        ranges[0] = range
+          ? { min: Math.min(range.min, value), max: Math.max(range.max, value) }
+          : { min: value, max: value };
+      }
+    }
+    series.push({
+      ...series[0],
+      name: outputLabel,
+      lineStyle: { width: 1.5, color: "#4dd0e1" },
+      itemStyle: { color: "#4dd0e1" },
+      data: outputData,
+    });
+
     const axisLine = { lineStyle: { color: "#3a414d" } };
     const splitLine = { lineStyle: { color: "#222831" } };
     const grids = SIGNALS.map((_, index) => ({
       left: 64,
       right: 22,
-      top: `${6 + index * 32}%`,
-      height: "24%",
+      top: index === 0 ? "10%" : `${6 + index * 32}%`,
+      height: index === 0 ? "20%" : "24%",
     }));
     const xAxis = SIGNALS.map((_, index) => ({
       type: "value" as const,
@@ -112,11 +133,14 @@ export function DamiaoLiveChart({
         max,
         axisLine,
         splitLine,
-        axisLabel: { color: "#8a93a3" },
+        axisLabel: {
+          color: "#8a93a3",
+          formatter: (value: number) => Number(value.toFixed(3)).toString(),
+        },
       };
     });
     const title = SIGNALS.map((signal, index) => ({
-      text: labels[signal.key],
+      text: index === 0 ? (zh ? "位置 (rad)" : "Position (rad)") : labels[signal.key],
       right: 24,
       top: `${4 + index * 32}%`,
       textAlign: "right" as const,
@@ -125,11 +149,18 @@ export function DamiaoLiveChart({
         fontSize: 12,
         fontWeight: "normal" as const,
       },
-    }));
+    })).filter((_, index) => index > 0);
 
     return {
       animation: false,
       textStyle: { color: "#c9d1d9" },
+      legend: {
+        data: [labels.position, outputLabel],
+        left: 64,
+        top: 0,
+        textStyle: { color: "#c9d1d9", fontSize: 11 },
+        itemWidth: 14,
+      },
       title,
       grid: grids,
       xAxis,

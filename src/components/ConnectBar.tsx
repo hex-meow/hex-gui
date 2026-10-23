@@ -29,18 +29,21 @@ export function ConnectBar({
   broadcastHeartbeat,
   devices,
   disconnectDisabled = false,
+  damiao = false,
 }: {
   connected: boolean;
   onChange: (connected: boolean) => void;
   broadcastHeartbeat: boolean;
   devices: MotorInfo[];
   disconnectDisabled?: boolean;
+  damiao?: boolean;
 }) {
   const { message } = App.useApp();
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [iface, setIface] = useState(defaultIface);
   const [ourNid, setOurNid] = useState(DEFAULT_HOST_NID);
   const [dataBitrate, setDataBitrate] = useState(5_000_000);
+  const [damiaoBitrate, setDamiaoBitrate] = useState(1_000_000);
   const [connectionInfo, setConnectionInfo] = useState<ConnectionInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const gsUsb = isGsUsbSpec(iface);
@@ -50,15 +53,15 @@ export function ConnectBar({
   }, [connected]);
 
   const hostIssues = useMemo(
-    () => (connectionInfo ? validateHostProfile(connectionInfo) : []),
-    [connectionInfo],
+    () => (connectionInfo && !damiao ? validateHostProfile(connectionInfo) : []),
+    [connectionInfo, damiao],
   );
   const deviceIssues = useMemo(
     () =>
-      connectionInfo
+      connectionInfo && !damiao
         ? validateDeviceProfiles(connectionInfo, devices)
         : [],
-    [connectionInfo, devices],
+    [connectionInfo, devices, damiao],
   );
 
   const connect = async () => {
@@ -70,6 +73,7 @@ export function ConnectBar({
         dataBitrate,
         nid,
         broadcastHeartbeat,
+        damiao ? damiaoBitrate : undefined,
       );
       setConnectionInfo(info);
       onChange(true);
@@ -102,11 +106,11 @@ export function ConnectBar({
         <Input
           style={{ width: 140 }}
           value={iface}
-          disabled={connected}
+          disabled={connected || (damiao && busy)}
           onChange={(e) => setIface(e.target.value)}
           placeholder={defaultIface()}
         />
-        {gsUsb && (
+        {gsUsb && !damiao && (
           <>
             <span className="connect-bar__label">{t("dataRate")}</span>
             <Select
@@ -123,14 +127,29 @@ export function ConnectBar({
             />
           </>
         )}
-        <span className="connect-bar__label">{t("ourNid")}</span>
+        {gsUsb && damiao && (
+          <>
+            <span className="connect-bar__label">{lang === "zh" ? "电机速率" : "Motor bitrate"}</span>
+            <Select
+              style={{ width: 180 }}
+              value={damiaoBitrate}
+              disabled={connected || busy}
+              onChange={setDamiaoBitrate}
+              options={[125_000, 200_000, 250_000, 500_000, 1_000_000, 2_000_000, 2_500_000, 3_200_000, 4_000_000, 5_000_000].map((value) => ({
+                value,
+                label: `${formatBitrate(value)}bit/s · ${value > 1_000_000 ? "CAN FD" : "CAN 2.0"}`,
+              }))}
+            />
+          </>
+        )}
+        {!damiao && <><span className="connect-bar__label">{t("ourNid")}</span>
         <Input
           style={{ width: 80 }}
           value={ourNid}
           disabled={connected}
           onChange={(e) => setOurNid(e.target.value)}
           placeholder={DEFAULT_HOST_NID}
-        />
+        /></>}
         {connected ? (
           <Button
             danger
@@ -150,6 +169,14 @@ export function ConnectBar({
         </Tag>
         {connectionInfo && <LinkProfileTags info={connectionInfo} />}
       </Space>
+
+      {damiao && !gsUsb && (
+        <Typography.Paragraph type="secondary" style={{ margin: "8px 0 0" }}>
+          {lang === "zh"
+            ? "SocketCAN 使用系统配置的速率。更改电机速率后，请同步调整接口配置，再断开并重新连接。"
+            : "SocketCAN uses system-configured timing. After changing the motor bitrate, update the interface timing, then disconnect and reconnect."}
+        </Typography.Paragraph>
+      )}
 
       {hostIssues.length > 0 && (
         <Alert

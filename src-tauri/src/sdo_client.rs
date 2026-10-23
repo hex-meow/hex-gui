@@ -182,9 +182,33 @@ pub fn encode(ty: DataType, s: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Format raw little-endian bytes from an SDO read using the given type.
-pub fn format(ty: DataType, radix: Radix, raw: &[u8]) -> String {
+/// Fixed-width types must match the received length exactly.
+pub fn format(ty: DataType, radix: Radix, raw: &[u8]) -> Result<String, String> {
     use DataType::*;
-    match ty {
+    let fixed_width = match ty {
+        Bool => Some((1, "bool")),
+        U8 => Some((1, "u8")),
+        U16 => Some((2, "u16")),
+        U32 => Some((4, "u32")),
+        U64 => Some((8, "u64")),
+        I8 => Some((1, "i8")),
+        I16 => Some((2, "i16")),
+        I32 => Some((4, "i32")),
+        I64 => Some((8, "i64")),
+        F32 => Some((4, "f32")),
+        F64 => Some((8, "f64")),
+        VisibleString | HexBytes => None,
+    };
+    if let Some((expected, name)) = fixed_width {
+        if raw.len() != expected {
+            return Err(format!(
+                "SDO datatype length mismatch for {name}: expected {expected} bytes, got {}; raw: {} (select raw or hex to read without a fixed type)",
+                raw.len(),
+                format_raw(raw),
+            ));
+        }
+    }
+    Ok(match ty {
         Bool => {
             if le_u(raw) != 0 {
                 "true (1)".into()
@@ -199,7 +223,7 @@ pub fn format(ty: DataType, radix: Radix, raw: &[u8]) -> String {
                 Radix::Dec => v.to_string(),
             }
         }
-        I8 => (raw.first().copied().unwrap_or(0) as i8).to_string(),
+        I8 => (raw[0] as i8).to_string(),
         I16 => i16::from_le_bytes(fixed::<2>(raw)).to_string(),
         I32 => i32::from_le_bytes(fixed::<4>(raw)).to_string(),
         I64 => i64::from_le_bytes(fixed::<8>(raw)).to_string(),
@@ -207,7 +231,7 @@ pub fn format(ty: DataType, radix: Radix, raw: &[u8]) -> String {
         F64 => f64::from_le_bytes(fixed::<8>(raw)).to_string(),
         VisibleString => String::from_utf8_lossy(raw).trim_end_matches('\0').to_string(),
         HexBytes => hex_join(raw),
-    }
+    })
 }
 
 /// Format read bytes when no datatype was given: raw hex plus a small-int hint.
@@ -232,10 +256,7 @@ fn le_u(raw: &[u8]) -> u64 {
 }
 
 fn fixed<const N: usize>(raw: &[u8]) -> [u8; N] {
-    let mut b = [0u8; N];
-    let n = raw.len().min(N);
-    b[..n].copy_from_slice(&raw[..n]);
-    b
+    raw.try_into().expect("fixed datatype length checked before conversion")
 }
 
 fn hex_join(raw: &[u8]) -> String {
@@ -312,7 +333,8 @@ pub async fn read(
         .await
         .map_err(err_string)?;
     let rendered = match ty {
-        Some((dt, radix)) => format(dt, radix, &bytes),
+        Some((dt, radix)) => format(dt, radix, &bytes)
+            .map_err(|e| format!("0x{index:04X}:{sub:02X}: {e}"))?,
         None => format_raw(&bytes),
     };
     Ok(format!("0x{index:04X}:{sub:02X} = {rendered}"))
@@ -345,8 +367,8 @@ mod tests {
     fn round_trip_u16() {
         let bytes = encode(DataType::U16, "1000").unwrap();
         assert_eq!(bytes, vec![0xE8, 0x03]);
-        assert_eq!(format(DataType::U16, Radix::Dec, &bytes), "1000");
-        assert_eq!(format(DataType::U16, Radix::Hex, &bytes), "0x3E8");
+        assert_eq!(format(DataType::U16, Radix::Dec, &bytes).unwrap(), "1000");
+        assert_eq!(format(DataType::U16, Radix::Hex, &bytes).unwrap(), "0x3E8");
     }
 
     #[test]
@@ -374,6 +396,67 @@ mod tests {
     fn visible_string_not_nul_terminated() {
         let bytes = encode(DataType::VisibleString, "save").unwrap();
         assert_eq!(bytes, b"save");
-        assert_eq!(format(DataType::VisibleString, Radix::Dec, &bytes), "save");
+        assert_eq!(format(DataType::VisibleString, Radix::Dec, &bytes).unwrap(), "save");
+    }
+
+    #[test]
+    fn fixed_width_reads_reject_short_and_long_payloads() {
+        for (ty, width) in [
+            (DataType::Bool, 1),
+            (DataType::U8, 1),
+            (DataType::U16, 2),
+            (DataType::U32, 4),
+            (DataType::U64, 8),
+            (DataType::I8, 1),
+            (DataType::I16, 2),
+            (DataType::I32, 4),
+            (DataType::I64, 8),
+            (DataType::F32, 4),
+            (DataType::F64, 8),
+        ] {
+            assert!(format(ty, Radix::Dec, &vec![0; width]).is_ok(), "{ty:?}");
+            for actual in [0, width - 1, width + 1] {
+                let err = format(ty, Radix::Dec, &vec![0; actual]).unwrap_err();
+                assert!(err.contains(&format!("expected {width} bytes, got {actual}")), "{err}");
+                assert!(err.contains("raw:"), "{err}");
+            }
+        }
+        // This formerly displayed u8=256 or i8=0 after truncating the value.
+        for ty in [DataType::U8, DataType::I8] {
+            let err = format(ty, Radix::Dec, &[0, 1]).unwrap_err();
+            assert!(err.contains("expected 1 bytes, got 2"), "{err}");
+            assert!(err.contains("00 01"), "{err}");
+        }
+    }
+
+    #[test]
+    fn correctly_sized_signed_float_and_boolean_reads_are_preserved() {
+        for (ty, input, expected) in [
+            (DataType::Bool, "1", "true (1)"),
+            (DataType::Bool, "0", "false (0)"),
+            (DataType::I8, "-1", "-1"),
+            (DataType::I16, "-32768", "-32768"),
+            (DataType::I32, "-2147483648", "-2147483648"),
+            (DataType::I64, "-9223372036854775808", "-9223372036854775808"),
+            (DataType::U64, "18446744073709551615", "18446744073709551615"),
+            (DataType::F32, "1.5", "1.5"),
+            (DataType::F64, "-2.25", "-2.25"),
+        ] {
+            let bytes = encode(ty, input).unwrap();
+            assert_eq!(format(ty, Radix::Dec, &bytes).unwrap(), expected, "{ty:?}");
+        }
+    }
+
+    #[test]
+    fn raw_and_string_reads_remain_variable_length() {
+        for raw in [&b""[..], &b"a"[..], &b"hello, world"[..]] {
+            assert_eq!(format(DataType::HexBytes, Radix::Dec, raw).unwrap(), hex_join(raw));
+            assert_eq!(
+                format(DataType::VisibleString, Radix::Dec, raw).unwrap(),
+                String::from_utf8_lossy(raw),
+            );
+        }
+        assert_eq!(format_raw(&[]), "<empty>");
+        assert_eq!(format_raw(&[0, 1]), "2 bytes: 00 01  (u16=0x100, 256)");
     }
 }
