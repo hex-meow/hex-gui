@@ -15,7 +15,7 @@ export function hpmCanCaptureOptions(fields: HpmCanCaptureFields) {
   const node = (value: string, assign: boolean) => {
     if (!/^\d+$/.test(value.trim())) throw new Error("Node-ID must be 1..127");
     const n = Number(value);
-    if (n < 1 || n > 127 || (assign && [100, 101].includes(n))) {
+    if (n < 1 || n > 127 || [100, 101].includes(n)) {
       throw new Error("Choose a free Node-ID 1..127; 100/101 are reserved for assignment");
     }
     return n;

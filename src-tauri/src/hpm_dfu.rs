@@ -364,6 +364,8 @@ pub async fn hpm_dfu_probe(
 #[tauri::command]
 pub async fn hpm_dfu_capture_can(
     state: State<'_, DfuState>,
+    recovery: State<'_, crate::can_recovery::RecoveryState>,
+    recovery_token: Option<String>,
     mutation_gate: State<'_, DfuMutationGate>,
     can_gate: State<'_, CanTransportGate>,
     spec: String,
@@ -373,6 +375,10 @@ pub async fn hpm_dfu_capture_can(
     product: u32,
     uid: Option<String>,
 ) -> CmdResult<DeviceDto> {
+    crate::can_recovery::require_hpm(&recovery, recovery_token.as_deref(), vendor, product)?;
+    for node in [node_id, assign_node_id].into_iter().flatten() {
+        crate::can_node_policy::check(node)?;
+    }
     let _lock = state.session_lock.lock().await;
     let _active = activate(&state)?;
     let _permit = mutation_gate
@@ -398,6 +404,39 @@ pub async fn hpm_dfu_capture_can(
         product,
         uid,
         state.cancel_requested.clone(),
+        None,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(retain(&state, session))
+}
+#[tauri::command]
+pub async fn hpm_dfu_capture_selected_can(
+    state: State<'_, DfuState>,
+    can_state: State<'_, crate::stm32_can_dfu::CanDfuState>,
+    mutation_gate: State<'_, DfuMutationGate>,
+    can_gate: State<'_, CanTransportGate>,
+) -> CmdResult<DeviceDto> {
+    let (spec, node, identity) = crate::stm32_can_dfu::selected_hpm_context(&can_state)?;
+    let _lock = state.session_lock.lock().await;
+    let _active = activate(&state)?;
+    let _permit = mutation_gate
+        .try_acquire(DfuBackend::HpmCan)
+        .map_err(str::to_owned)?;
+    clear(&state).await?;
+    let lease = can_gate.try_acquire(CanOwner::DfuUpdate)?;
+    let bus = crate::backend::open_classic_1m_bus(&spec, lease)
+        .await
+        .map_err(|e| e.to_string())?;
+    let session = crate::hpm_v3_can::capture(
+        bus,
+        Some(node),
+        None,
+        0,
+        0,
+        None,
+        state.cancel_requested.clone(),
+        Some(identity),
     )
     .await
     .map_err(|e| e.to_string())?;

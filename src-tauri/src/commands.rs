@@ -598,6 +598,7 @@ pub async fn friction_calibration_start(
     state: State<'_, AppState>,
     request: FrictionCalibrationRequest,
 ) -> CmdResult<FrictionCalibrationView> {
+    crate::can_node_policy::check(request.node_id)?;
     let _start = state.calibration_start_gate.lock().await;
     let torque = state.torque_calibration.view().await;
     if torque.running || torque.acceptance_active {
@@ -637,6 +638,7 @@ pub async fn torque_calibration_start(
     state: State<'_, AppState>,
     request: TorqueCalibrationRequest,
 ) -> CmdResult<TorqueCalibrationView> {
+    crate::can_node_policy::check(request.node_id)?;
     let _start = state.calibration_start_gate.lock().await;
     if state.friction_calibration.view().await.running {
         return Err("friction calibration already owns the motor bus".into());
@@ -714,6 +716,7 @@ pub async fn identify(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
 
 #[tauri::command]
 pub async fn initialize(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
+    crate::can_node_policy::check(nid)?;
     let mgr = manager(&state).await?;
     mgr.initialize(nid).await.map_err(err)
 }
@@ -733,6 +736,10 @@ pub async fn initialize_all(state: State<'_, AppState>) -> CmdResult<Vec<(u8, Op
         .collect::<Vec<_>>();
     let mut results = Vec::with_capacity(motor_nodes.len());
     for (nid, kind) in motor_nodes {
+        if let Err(error) = crate::can_node_policy::check(nid) {
+            results.push((nid, Err(error)));
+            continue;
+        }
         let result = match kind {
             crate::device_registry::DeviceKind::Cia402Motor => mgr.initialize(nid).await,
             crate::device_registry::DeviceKind::MeowMotor => match meow_mgr.identify(nid).await {
@@ -741,7 +748,7 @@ pub async fn initialize_all(state: State<'_, AppState>) -> CmdResult<Vec<(u8, Op
             },
             _ => unreachable!("initialize_all filters non-motor device kinds"),
         };
-        results.push((nid, result));
+        results.push((nid, result.map_err(err)));
     }
     Ok(results
         .into_iter()
@@ -762,6 +769,7 @@ fn motor_initialization_kind(
 
 #[tauri::command]
 pub async fn set_mode(state: State<'_, AppState>, nid: u8, mode: MotorModeDto) -> CmdResult<()> {
+    crate::can_node_policy::check(nid)?;
     let mgr = manager(&state).await?;
     let mode: MotorMode = mode.into();
     mgr.set_mode(nid, mode).await.map_err(err)
@@ -773,24 +781,28 @@ pub async fn set_target(
     nid: u8,
     target: MotorTargetDto,
 ) -> CmdResult<()> {
+    crate::can_node_policy::check(nid)?;
     let mgr = manager(&state).await?;
     mgr.set_target(nid, target.into()).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn set_max_torque(state: State<'_, AppState>, nid: u8, permille: u16) -> CmdResult<()> {
+    crate::can_node_policy::check(nid)?;
     let mgr = manager(&state).await?;
     mgr.set_max_torque(nid, permille).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn disable(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
+    crate::can_node_policy::check(nid)?;
     let mgr = manager(&state).await?;
     mgr.disable(nid).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn clear_error(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
+    crate::can_node_policy::check(nid)?;
     let mgr = manager(&state).await?;
     mgr.clear_error(nid).await.map_err(err)
 }
@@ -861,6 +873,7 @@ pub async fn meow_initialize(
     nid: u8,
     event_timer_ms: u16,
 ) -> CmdResult<MeowMotorSnapshotDto> {
+    crate::can_node_policy::check(nid)?;
     // Reject malformed IPC input before identification performs any SDO I/O
     // or changes the cached lifecycle state.
     let profile = meow_pdo_profile(event_timer_ms)?;
@@ -885,6 +898,7 @@ pub async fn meow_activate_target(
     nid: u8,
     target: MeowMotorTargetDto,
 ) -> CmdResult<()> {
+    crate::can_node_policy::check(nid)?;
     let manager = meow_manager(&state).await?;
     let torque_factor = meow_calibration::factor_for(&state, &manager, nid).await?;
     // `set_mode_sdo` is deliberately ordered: every target object is written
@@ -1150,6 +1164,7 @@ pub async fn meow_set_target(
     nid: u8,
     target: MeowMotorTargetDto,
 ) -> CmdResult<()> {
+    crate::can_node_policy::check(nid)?;
     let manager = meow_manager(&state).await?;
     let torque_factor = meow_calibration::factor_for(&state, &manager, nid).await?;
     manager
@@ -1164,6 +1179,7 @@ pub async fn meow_set_max_torque(
     nid: u8,
     permille: u16,
 ) -> CmdResult<()> {
+    crate::can_node_policy::check(nid)?;
     let manager = meow_manager(&state).await?;
     manager.set_max_torque(nid, permille).await.map_err(err)
 }
@@ -1174,6 +1190,7 @@ pub async fn meow_set_profile_limits(
     nid: u8,
     limits: MeowProfileLimitsDto,
 ) -> CmdResult<()> {
+    crate::can_node_policy::check(nid)?;
     let manager = meow_manager(&state).await?;
     manager
         .set_profile_limits(
@@ -1190,12 +1207,14 @@ pub async fn meow_set_profile_limits(
 
 #[tauri::command]
 pub async fn meow_disable(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
+    crate::can_node_policy::check(nid)?;
     let manager = meow_manager(&state).await?;
     manager.disable(nid).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn meow_clear_error(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
+    crate::can_node_policy::check(nid)?;
     let manager = meow_manager(&state).await?;
     manager.clear_error(nid).await.map_err(err)
 }
@@ -1221,6 +1240,7 @@ pub async fn meow_apply_can_settings(
     nid: u8,
     request: MeowCanSettingsRequestDto,
 ) -> CmdResult<bool> {
+    crate::can_node_policy::check(request.node_id)?;
     let _operation = state.device_settings_operation.acquire().await;
     let manager = meow_manager(&state).await?;
     manager.identify(nid).await.map_err(err)?;
@@ -1250,6 +1270,7 @@ pub async fn apply_device_settings(
     state: State<'_, AppState>,
     request: DeviceSettingsRequestDto,
 ) -> CmdResult<DeviceSettingsResultDto> {
+    crate::can_node_policy::check(request.new_node_id)?;
     let _operation = state.device_settings_operation.acquire().await;
     let kind =
         crate::device_registry::classify(request.expected_vendor_id, request.expected_product_code);
@@ -1299,6 +1320,7 @@ pub async fn set_position_preset(
     expected_product_code: u32,
     pos: f32,
 ) -> CmdResult<()> {
+    crate::can_node_policy::check(nid)?;
     let _operation = state.device_settings_operation.acquire().await;
     if !crate::device_registry::classify(expected_vendor_id, expected_product_code)
         .supports_position_preset()
@@ -2058,6 +2080,7 @@ pub async fn hopea3_set_limits(
 /// keeps running. The other motors are unaffected.
 #[tauri::command]
 pub async fn hopea3_reinit_motor(state: State<'_, AppState>, nid: u8) -> CmdResult<()> {
+    crate::can_node_policy::check(nid)?;
     let guard = state.hopea3.lock().await;
     match guard.as_ref() {
         Some(app) => app.reinit_motor(nid).await.map_err(err),
@@ -2271,6 +2294,9 @@ pub async fn smartknob_start(
     state: State<'_, AppState>,
     request: SmartKnobStartRequest,
 ) -> CmdResult<()> {
+    if request.target.kind == SmartKnobKind::Canopen {
+        crate::can_node_policy::check(request.target.node_id)?;
+    }
     // Publish the active-session marker before a concurrent disconnect may
     // tear down the manager/monitor. Without this lifecycle lock, dropping a
     // just-started CANopen session can detach its 1 kHz task instead of asking

@@ -129,3 +129,10 @@
     width: auto;
   }
 }
+
+.dfu-recovery-choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.dfu-recovery-choice { display: flex; flex-direction: column; gap: 10px; padding: 14px; text-align: left; background: var(--ant-color-bg-container, #fff); border: 2px solid #dce4ec; border-radius: 12px; cursor: pointer; color: inherit; }
+.dfu-recovery-choice--selected { border-color: #1677ff; box-shadow: 0 0 0 2px #1677ff20; }
+.dfu-recovery-choice img { width: 100%; height: 145px; object-fit: contain; background: #f5f7fa; border-radius: 6px; }
+.dfu-recovery-choice span { font-size: 12px; line-height: 1.6; }
+@media (max-width: 650px) { .dfu-recovery-choices { grid-template-columns: 1fr; } }

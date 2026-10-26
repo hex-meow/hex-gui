@@ -22,7 +22,7 @@ test("CAN DFU prepared contract exposes token-bound manual risk and factory back
   );
 });
 
-test("every enabled CAN backend tries its identity-bound online release first", async () => {
+test("STM32 and Motor backends keep identity-bound online releases while HPM uses its signed local package", async () => {
   const ui = await source("src/components/CanDfuFlow.tsx");
   const selection = ui.slice(
     ui.indexOf("const selectDevice"),
@@ -30,7 +30,7 @@ test("every enabled CAN backend tries its identity-bound online release first", 
   );
 
   assert.match(selection, /await canDfuApi\.select\(device\.node_id\)/);
-  assert.match(selection, /setSelected\(device\);\s*await loadLatest\(\)/);
+  assert.match(selection, /setSelected\(device\);\s*if \(device\.backend !== "hpm_can_v3"\) await loadLatest\(\)/);
   assert.doesNotMatch(selection, /device\.backend\s*===\s*["']stm32_canopen/);
   assert.match(ui, /\{onlineError && \(/);
   assert.match(ui, /copy\.chooseCompatibleFileAdvanced/);

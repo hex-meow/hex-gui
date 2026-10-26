@@ -88,6 +88,10 @@ struct DiscoveredTarget {
 enum SelectedTarget {
     Stm32(AuthorizedTarget),
     CobsIap(hexmeow_motor_iap::AuthorizedTarget),
+    Hpm {
+        node_id: u8,
+        identity: IdentitySnapshot,
+    },
 }
 
 impl SelectedTarget {
@@ -95,6 +99,7 @@ impl SelectedTarget {
         match self {
             Self::Stm32(target) => target.node_id(),
             Self::CobsIap(target) => target.identity().node_id(),
+            Self::Hpm { node_id, .. } => *node_id,
         }
     }
 }
@@ -323,6 +328,10 @@ pub async fn stm32_can_dfu_discover(
     let mut issues = Vec::new();
     let mut discovered = HashMap::new();
     for node_id in nodes {
+        if node_id == 0 {
+            issues.push(DiscoveryIssueDto{node_id:0,node_id_hex:"0x700".into(),reason:"Unknown, unconfigured device announcement: no 0x1018/SDO address. Choose a known device model in Recovery; normal operations are unavailable.".into()});
+            continue;
+        }
         let identity = match observe_identity(&sdo, node_id, IDENTITY_TIMEOUT).await {
             Ok(identity) => identity,
             Err(error) => {
@@ -350,6 +359,7 @@ pub async fn stm32_can_dfu_discover(
 
 #[tauri::command]
 pub async fn stm32_can_dfu_select(state: State<'_, CanDfuState>, node_id: u8) -> CmdResult<()> {
+    crate::can_node_policy::check(node_id)?;
     let _session = state.session_lock.lock().await;
     if state.is_active() {
         return Err("an upgrade is already running".into());
@@ -643,6 +653,21 @@ async fn prepare_latest_motor_img(
     Ok((staged, dto))
 }
 
+pub(crate) fn selected_hpm_context(
+    state: &CanDfuState,
+) -> CmdResult<(String, u8, IdentitySnapshot)> {
+    let i = state.inner.lock().unwrap();
+    let Some(SelectedTarget::Hpm { node_id, identity }) = i.selected.as_ref() else {
+        return Err("select a known HPM from heartbeat/1018 discovery first".into());
+    };
+    crate::can_node_policy::check(*node_id)?;
+    Ok((
+        i.spec.clone().ok_or("CAN discovery expired")?,
+        *node_id,
+        *identity,
+    ))
+}
+
 fn selected_context(state: &CanDfuState) -> CmdResult<(SelectedTarget, DeviceDto)> {
     let mut inner = state.inner.lock().unwrap();
     inner.staged = None;
@@ -673,6 +698,9 @@ fn prepare_artifact_bytes(
     let source_size = bytes.len();
     let source_sha256 = sha256_hex(&bytes);
     let (staged, dto) = match target {
+        SelectedTarget::Hpm { .. } => {
+            return Err("HPM V3 uses the captured HPM session and signed .hpmota/3 parser".into())
+        }
         SelectedTarget::Stm32(target) => {
             let current_revision = device.software_revision;
             let package = read_package_bytes(
@@ -1528,6 +1556,50 @@ async fn classify_target(
     registry: &TargetRegistry,
     cobs_registry: &CobsTargetRegistry,
 ) -> DiscoveredTarget {
+    if let Err(reason) = crate::can_node_policy::check(node_id) {
+        return DiscoveredTarget {
+            dto: device_dto(
+                node_id,
+                identity,
+                None,
+                "unsupported",
+                None,
+                None,
+                None,
+                reason,
+            ),
+            authorized: None,
+        };
+    }
+    if crate::hpm_can_profiles::known(identity.vendor_id(), identity.product_code()) {
+        let valid = [
+            identity.vendor_id(),
+            identity.product_code(),
+            identity.revision_number(),
+            identity.serial_number(),
+        ]
+        .iter()
+        .all(|v| *v != u32::MAX);
+        let dto = device_dto(
+            node_id,
+            identity,
+            None,
+            if valid { "enabled" } else { "unsupported" },
+            Some("hpm_can_v3"),
+            Some(crate::hpm_can_profiles::EVK_PROFILE.to_owned()),
+            Some("HPM5300EVK / V3"),
+            if valid {
+                "Known HPM V3 target; select it to capture before choosing a signed package"
+            } else {
+                "Incomplete HPM identity"
+            }
+            .into(),
+        );
+        return DiscoveredTarget {
+            dto,
+            authorized: valid.then_some(SelectedTarget::Hpm { node_id, identity }),
+        };
+    }
     match registry.classify(&identity) {
         TargetClassification::Enabled(target) => {
             match authorize(sdo, node_id, registry, IDENTITY_TIMEOUT).await {
@@ -1768,6 +1840,12 @@ async fn observe_heartbeat_nodes(bus: &dyn CanBus, window: Duration) -> Result<V
         }
         match tokio::time::timeout(deadline - now, rx.recv()).await {
             Ok(Ok(frame)) => {
+                if frame.id() == CanId::Standard(0x700)
+                    && frame.kind() == can_transport::FrameKind::Data
+                    && frame.data() == [0]
+                {
+                    nodes.insert(0);
+                }
                 if let Some(node_id) = heartbeat_node_id(&frame) {
                     nodes.insert(node_id);
                     if nodes.len() > MAX_DISCOVERY_NODES {

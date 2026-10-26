@@ -1,3 +1,4 @@
+import { isReservedCanNode } from "../canNodePolicy";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
@@ -349,6 +350,7 @@ export function MeowMotorPanel({
           apply={() => {
             if (settings) {
               void run(t("apply"), async () => {
+                if (isReservedCanNode(settings.node_id)) throw new Error(t("settingsReservedNodeId"));
                 const changed = await api.meowApplyCanSettings(info.node_id, settings);
                 message.info(changed ? t("meowSettingsSaved") : t("meowSettingsResaved"));
               });
@@ -943,6 +945,7 @@ function CanSettingsCard({
               value={settings.node_id}
               min={1}
               max={127}
+              status={isReservedCanNode(settings.node_id) ? "error" : undefined}
               onChange={(value) => setSettings({ ...settings, node_id: value ?? 1 })}
             />
           </Field>
@@ -976,13 +979,14 @@ function CanSettingsCard({
               }
             />
           </Field>
-          <Button type="primary" loading={busy} disabled={!canConfigure} onClick={apply}>
+          <Button type="primary" loading={busy} disabled={!canConfigure || (settings != null && isReservedCanNode(settings.node_id))} onClick={apply}>
             {t("meowSaveAndPowerCycle")}
           </Button>
         </Space>
       ) : (
         <Typography.Text type="secondary">{t("meowWaitingSettings")}</Typography.Text>
       )}
+      {settings && isReservedCanNode(settings.node_id) && <Alert type="error" showIcon message={t("settingsReservedNodeId")} />}
       {!canConfigure && settings && (
         <Alert type="info" showIcon message={t("meowSettingsPreopOnly")} style={{ marginTop: 12 }} />
       )}

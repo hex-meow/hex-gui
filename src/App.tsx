@@ -1,3 +1,5 @@
+import { recoveryApi } from "./recoveryApi";
+import { isReservedCanNode, reservedCanNodeMessage } from "./canNodePolicy";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Alert, App as AntdApp, Button, Collapse, Empty, Layout, Tooltip, Typography } from "antd";
 import { listen } from "@tauri-apps/api/event";
@@ -54,7 +56,7 @@ const DEVICE_POLL_MS = 700;
 
 export default function App() {
   const { message } = AntdApp.useApp();
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   // null = landing page (pick a tool before anything else).
   const [tool, setTool] = useState<Tool | null>(null);
   const [connected, setConnected] = useState(false);
@@ -163,7 +165,7 @@ export default function App() {
     }
     try {
       if (tool === "dfu") {
-        await Promise.all([hpmDfuApi.leave(), canDfuApi.leave()]);
+        await Promise.all([hpmDfuApi.leave(), canDfuApi.leave(), recoveryApi.leave()]);
       } else {
         await api.disconnect();
       }
@@ -333,6 +335,7 @@ export default function App() {
           </Layout.Sider>
         )}
         <Layout.Content className="app-content">
+          {tool === "control" && devices.filter(d => d.online && ["cia402_motor", "meow_motor"].includes(d.device_type) && isReservedCanNode(d.node_id)).map(d => <Alert key={`reserved-${d.node_id}`} type="error" showIcon message={reservedCanNodeMessage(lang, d.node_id)} style={{ marginBottom: 12 }} />)}
           {tool === "console" ? (
             <RobotConsole />
           ) : tool === "hopea3" ? (
@@ -394,6 +397,8 @@ export default function App() {
             <div style={{ padding: 24 }}>
               <Alert type="warning" showIcon message={t("canUnknownDevice")} />
             </div>
+          ) : selected && ["cia402_motor", "meow_motor"].includes(selected.device_type) && isReservedCanNode(selected.node_id) ? (
+            <Alert type="error" showIcon message={reservedCanNodeMessage(lang, selected.node_id)} />
           ) : selected && selected.device_type === "meow_motor" ? (
             <MeowMotorPanel
               key={selected.node_id}

@@ -96,7 +96,7 @@ export interface CanDfuDevice {
   hardware_version: number | null;
   hardware_version_hex: string | null;
   authorization: CanDfuAuthorization;
-  backend: "stm32_canopen" | "cobs_can_iap_v1" | null;
+  backend: "stm32_canopen" | "cobs_can_iap_v1" | "hpm_can_v3" | null;
   profile_id: string | null;
   display_name: string | null;
   reason: string;
@@ -197,8 +197,9 @@ export interface CanDfuOutcome {
 
 export const hpmDfuApi = {
   probe: () => invoke<HpmDfuDevice>("hpm_dfu_probe"),
+  captureSelectedCan: () => invoke<HpmDfuDevice>("hpm_dfu_capture_selected_can"),
   captureCan: (options: { spec: string; nodeId: number | null; assignNodeId: number | null;
-    vendor: number; product: number; uid: string | null }) =>
+    vendor: number; product: number; uid: string | null; recoveryToken?: string }) =>
     invoke<HpmDfuDevice>("hpm_dfu_capture_can", options),
 
   // A Uint8Array becomes Tauri's raw InvokeBody. It is not expanded into a

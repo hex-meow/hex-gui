@@ -1,12 +1,12 @@
 # HPM V3 USB / Classic CAN 升级
 
-GUI 的 USB 页面同时支持旧 gs_can USB v2 和 HPM OTA/3。`HPM V3 CAN` 页面通过 CANopen LSS／SDO 访问相同 V3 更新引擎；`其他 CAN` 保留原有 STM32／Motor 升级路径。
+GUI 的 USB 页面同时支持旧 gs_can USB v2 和 HPM OTA/3。CAN 已合并为[统一入口](can-update-entry.md)：默认监听心跳并核对完整 1018，选择已知 HPM 后捕获；LSS 只在显式选择型号后的故障恢复模式开放。STM32／Motor 保留各自原生后端。
 
 ## 捕获与等待
 
 先点击等待，再给下位机上电／复位。USB 最长等待 30 秒，只接受唯一匹配的 vendor bulk 设备；连接多台 USB 目标时明确报错。CAN 等目标 `700+Node-ID` 心跳后才发只读探测，不会在无人 ACK 时预先灌入升级帧。适配器须保持正常 ACK，不能设 silent。
 
-已有 NVS 地址时填写目标 Node-ID。未配置时勾选 LSS，填写已知 Vendor/Product 和确认空闲的分配 ID（1..127，排除 100/101）；默认 EVK3 Product 为 `0x45564B33`，产品板应填写自己的值。可填写完整 UID 进一步约束目标。LSS 仅匹配已知 vendor/product/revision，逐位扫描 serial，Configure／Store 后等新地址 boot-up，再进行 SDO INFO／CLAIM。目前一次捕获一个目标；不承诺多节点批量升级。
+正常入口从发现列表选择已有地址的 HPM。故障恢复模式确认 HPM 型号后，填写已有 Node-ID；未配置时勾选 LSS，填写已知 Vendor/Product 和确认空闲的分配 ID（1..127，排除 100/101）；默认 EVK3 Product 为 `0x45564B33`，产品板应填写自己的值。可填写完整 UID 进一步约束目标。LSS 仅匹配已知 vendor/product/revision，逐位扫描 serial，Configure／Store 后等新地址 boot-up，再进行 SDO INFO／CLAIM。目前一次捕获一个目标；不承诺多节点批量升级。
 
 成功 CLAIM 后设备在 RAM 锁存等待，**不发送周期保活，不会因工具暂停、关闭、断线或长期无报文自动启动 APP**。RELEASE 只释放接口 owner，仍保持 WAITING。工具崩溃且 owner 未释放时可以重新上电；上电重新校验 APP／journal，APP 有效且未再次捕获时正常启动。UPDATING／无效 APP 仍留在恢复入口。
 

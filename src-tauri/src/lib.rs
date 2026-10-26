@@ -9,6 +9,8 @@ mod backend;
 mod calibration_transport;
 mod calibration_update;
 mod can_lease;
+mod can_node_policy;
+mod can_recovery;
 mod cobs_can_iap_profiles;
 mod commands;
 mod damiao;
@@ -21,6 +23,7 @@ mod friction_calibration;
 mod hopea3;
 mod hpm_dfu;
 mod hpm_v3_can;
+mod hpm_can_profiles;
 mod imu;
 mod lift;
 mod lift_commission;
@@ -221,6 +224,7 @@ pub fn run() {
         .manage(can_lease::CanTransportGate::default())
         .manage(dfu_gate::DfuMutationGate::default())
         .manage(hpm_dfu::DfuState::default())
+        .manage(can_recovery::RecoveryState::default())
         .manage(stm32_can_dfu::CanDfuState::default())
         .on_window_event(move |window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -465,8 +469,17 @@ pub fn run() {
             commands::config_validate,
             commands::config_set,
             commands::config_restart,
+            can_recovery::can_recovery_profiles,
+            can_recovery::can_recovery_begin,
+            can_recovery::can_recovery_scan,
+            can_recovery::can_recovery_select,
+            can_recovery::can_recovery_prepare,
+            can_recovery::can_recovery_start,
+            can_recovery::can_recovery_cancel,
+            can_recovery::can_recovery_leave,
             hpm_dfu::hpm_dfu_probe,
             hpm_dfu::hpm_dfu_capture_can,
+            hpm_dfu::hpm_dfu_capture_selected_can,
             hpm_dfu::hpm_dfu_prepare,
             hpm_dfu::hpm_dfu_prepare_latest,
             hpm_dfu::hpm_dfu_start,

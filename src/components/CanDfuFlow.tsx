@@ -1,3 +1,9 @@
+import { isReservedCanNode } from "../canNodePolicy";
+import { CanRecoveryChooser } from "./CanRecoveryChooser";
+import { HpmDfuFlow } from "./HpmDfuFlow";
+import { MotorIapRecoveryFlow } from "./MotorIapRecoveryFlow";
+import { recoveryApi, type RecoverySelection } from "../recoveryApi";
+import { hpmDfuApi } from "../dfuApi";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -38,6 +44,9 @@ export function CanDfuFlow({
   const copy = useMemo(() => textFor(lang), [lang]);
   const inputRef = useRef<HTMLInputElement>(null);
   const [spec, setSpec] = useState(DEFAULT_IFACE);
+  const [recoveryChooser, setRecoveryChooser] = useState(false);
+  const [recovery, setRecovery] = useState<RecoverySelection | null>(null);
+  const [hpmBusy, setHpmBusy] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState(false);
   const [devices, setDevices] = useState<CanDfuDevice[]>([]);
@@ -56,9 +65,9 @@ export function CanDfuFlow({
   const [onlineError, setOnlineError] = useState<string | null>(null);
 
   useEffect(() => {
-    onBusyChange(busy || discovering || selecting || preparing || fetchingLatest);
+    onBusyChange(busy || discovering || selecting || preparing || fetchingLatest || hpmBusy);
     return () => onBusyChange(false);
-  }, [busy, discovering, fetchingLatest, onBusyChange, preparing, selecting]);
+  }, [busy, discovering, fetchingLatest, onBusyChange, preparing, selecting, hpmBusy]);
 
   useEffect(() => {
     return () => {
@@ -79,6 +88,7 @@ export function CanDfuFlow({
     if (
       discovering ||
       busy ||
+      hpmBusy ||
       selecting ||
       preparing ||
       fetchingLatest
@@ -96,8 +106,11 @@ export function CanDfuFlow({
     setError(null);
     resetArtifact();
     try {
+      await hpmDfuApi.leave();
       const found = await canDfuApi.discover(trimmed);
-      setDevices(found.devices);
+      const visible = found.devices.map(d => recovery?.profile.family === "stm32" && d.profile_id !== recovery.profile.id
+        ? { ...d, authorization: "unsupported" as const, reason: lang === "zh" ? "与所选恢复型号不匹配" : "Does not match the selected recovery model" } : d);
+      setDevices(visible);
       setIssues(found.issues);
       setDiscovered(true);
       if (found.devices.length === 0 && found.issues.length === 0) {
@@ -135,6 +148,7 @@ export function CanDfuFlow({
     if (
       device.authorization !== "enabled" ||
       busy ||
+      hpmBusy ||
       selecting ||
       preparing ||
       fetchingLatest
@@ -143,9 +157,10 @@ export function CanDfuFlow({
     setError(null);
     resetArtifact();
     try {
+      await hpmDfuApi.leave();
       await canDfuApi.select(device.node_id);
       setSelected(device);
-      await loadLatest();
+      if (device.backend !== "hpm_can_v3") await loadLatest();
     } catch (caught) {
       setSelected(null);
       setError(dfuError(caught));
@@ -354,9 +369,29 @@ export function CanDfuFlow({
   );
   const compatibleSelected = selected?.backend === "cobs_can_iap_v1";
 
-  return (
+  const operationBusy = busy || discovering || selecting || preparing || fetchingLatest || hpmBusy;
+  const leaveRecovery = async () => {
+    if (operationBusy) return;
+    try { await hpmDfuApi.leave(); await recoveryApi.leave(); await canDfuApi.leave(); setRecovery(null); setSelected(null); setDevices([]); setDiscovered(false); resetArtifact(); }
+    catch (e) { setError(dfuError(e)); }
+  };
+  if (recovery && recovery.profile.family !== "stm32") return <Space direction="vertical" className="dfu-stack">
+    <Space><Typography.Text strong>{lang === "zh" ? "故障恢复" : "Recovery"} · {recovery.profile.name}</Typography.Text>
+      <Button disabled={operationBusy} onClick={() => void leaveRecovery()}>{lang === "zh" ? "返回普通 CAN 升级" : "Return to normal CAN update"}</Button></Space>
+    {recovery.profile.family === "hpm"
+      ? <HpmDfuFlow mode="recovery-can" recoveryToken={recovery.token} recoverySpec={spec} onBusyChange={setHpmBusy} />
+      : <MotorIapRecoveryFlow scope={recovery} spec={spec} onBusyChange={setHpmBusy} />}
+    {error && <Alert type="error" message={error} />}
+  </Space>;
+  return (<>
+    <CanRecoveryChooser open={recoveryChooser} onCancel={() => setRecoveryChooser(false)}
+      onBeforeEnter={async () => { await hpmDfuApi.leave(); await canDfuApi.leave(); }}
+      onSelected={scope => { setRecovery(scope); setRecoveryChooser(false); setSelected(null); setDevices([]); setDiscovered(false); resetArtifact(); }} />
+    {recovery && <Alert type="info" showIcon message={`${lang === "zh" ? "STM32 故障恢复" : "STM32 recovery"} · ${recovery.profile.name}`}
+      description={lang === "zh" ? "先开始发现，再复位目标。Bootloader 仍提供心跳和 0x1018；仅允许所选型号。" : "Start discovery, then reset the target. Its bootloader still provides heartbeats and 0x1018; only the selected model is allowed."}
+      action={<Button disabled={operationBusy} onClick={() => void leaveRecovery()}>{lang === "zh" ? "退出恢复" : "Leave recovery"}</Button>} />}
     <div className="dfu-panel__grid">
-      <Card className="dfu-card" title={copy.deviceStep}>
+      <Card className="dfu-card" title={copy.deviceStep} extra={!recovery && <Button disabled={operationBusy} onClick={() => setRecoveryChooser(true)}>{lang === "zh" ? "故障恢复" : "Recovery"}</Button>}>
         <Space direction="vertical" size="middle" className="dfu-stack">
           <Alert
             type="warning"
@@ -374,7 +409,7 @@ export function CanDfuFlow({
             <Input
               value={spec}
               disabled={
-                discovering || busy || selecting || preparing || fetchingLatest
+                operationBusy
               }
               placeholder="can0 / gs_usb0"
               onChange={(event) => setSpec(event.currentTarget.value)}
@@ -383,7 +418,7 @@ export function CanDfuFlow({
             <Button
               type="primary"
               loading={discovering}
-              disabled={busy || selecting || preparing || fetchingLatest}
+              disabled={operationBusy}
               onClick={() => void discover()}
             >
               {discovering ? copy.discovering : copy.discover}
@@ -406,20 +441,16 @@ export function CanDfuFlow({
               key={device.node_id}
               device={device}
               selected={selected?.node_id === device.node_id}
+              disabled={operationBusy}
               copy={copy}
               onSelect={() => void selectDevice(device)}
             />
           ))}
-          <Alert
-            type="warning"
-            showIcon
-            message={copy.hpmCanDisabled}
-            description={copy.hpmCanDisabledDetail}
-          />
         </Space>
       </Card>
 
-      {hasEnabledTarget && (
+      {selected?.backend === "hpm_can_v3" && <div className="dfu-card--run"><HpmDfuFlow key={selected.node_id} mode="selected-can" selectedNode={selected.node_id} onBusyChange={setHpmBusy} /></div>}
+      {hasEnabledTarget && selected?.backend !== "hpm_can_v3" && (
         <>
           <Card
             className="dfu-card"
@@ -583,17 +614,19 @@ export function CanDfuFlow({
         />
       )}
     </div>
-  );
+  </>);
 }
 
 function DeviceCard({
   device,
   selected,
+  disabled,
   copy,
   onSelect,
 }: {
   device: CanDfuDevice;
   selected: boolean;
+  disabled: boolean;
   copy: Copy;
   onSelect: () => void;
 }) {
@@ -620,7 +653,7 @@ function DeviceCard({
           </Tag>
           {device.backend && (
             <Tag color={device.backend === "cobs_can_iap_v1" ? "blue" : "cyan"}>
-              {device.backend === "cobs_can_iap_v1"
+              {device.backend === "hpm_can_v3" ? "HPM V3" : device.backend === "cobs_can_iap_v1"
                 ? copy.compatibleBackend
                 : copy.standardBackend}
             </Tag>
@@ -641,10 +674,10 @@ function DeviceCard({
             {device.hardware_version_hex ?? copy.notRead}
           </Descriptions.Item>
         </Descriptions>
-        <Typography.Text type="secondary">{device.reason}</Typography.Text>
+        {isReservedCanNode(device.node_id) ? <Alert type="error" showIcon message={device.reason} /> : <Typography.Text type="secondary">{device.reason}</Typography.Text>}
         <Button
           type={selected ? "default" : "primary"}
-          disabled={!enabled || selected}
+          disabled={disabled || !enabled || selected}
           onClick={onSelect}
         >
           {selected ? copy.selected : copy.select}
@@ -898,14 +931,11 @@ function textFor(lang: Lang) {
         "只被动收集心跳节点，再严格读取完整 0x1018。未知产品不会读取升级私有对象，也不会收到任何 SDO 写入。",
       profileStatus: "CAN 后端按完整设备身份自动选择",
       profileStatusDetail:
-        "只有身份矩阵中精确匹配完整 0x1018 的设备才会启用对应后端；自有设备只接受 .meowpkg，合作厂商设备只接受 IMG，未知或不精确匹配始终锁定。",
+        "完整 0x1018 与本地已知产品匹配后自动选择 HPM V3、STM32 或 Motor IAP 后端；分别使用 .hpmota/3、.meowpkg 或 IMG。未知设备不支持操作，Node-ID 100/101 禁止升级。",
       discover: "发现设备",
       discovering: "监听心跳…",
       noHeartbeat: "监听窗口内没有发现 CANopen 心跳节点。",
       identityRejected: "0x1018 身份读取被拒绝",
-      hpmCanDisabled: "HPM CAN 仍未启用",
-      hpmCanDisabledDetail:
-        "HPM 当前只有 USB 升级经过真机验证；CAN 设计不会从任何已启用后端推断或复用。",
       artifactStep: "2 · 校验 .meowpkg",
       compatibleArtifactStep: "2 · 获取并核对合作厂商 IMG",
       onlineSource: "线上 stable 发布",
@@ -1046,14 +1076,11 @@ function textFor(lang: Lang) {
       "The updater passively collects heartbeat nodes, then reads the complete 0x1018 identity strictly. An unknown product receives no proprietary-update reads and no SDO write.",
     profileStatus: "The complete device identity selects the CAN backend",
     profileStatusDetail:
-      "Only a complete 0x1018 identity exactly present in the identity matrix enables a backend. First-party devices accept only .meowpkg; partner devices accept only IMG. Unknown and inexact identities remain locked.",
+      "A complete 0x1018 matched to a known local product selects HPM V3 (.hpmota/3), STM32 (.meowpkg) or Motor IAP (IMG). Unknown devices remain locked; Node-IDs 100/101 cannot be updated.",
     discover: "Discover devices",
     discovering: "Listening for heartbeats…",
     noHeartbeat: "No CANopen heartbeat node appeared during the discovery window.",
     identityRejected: "0x1018 identity rejected",
-    hpmCanDisabled: "HPM over CAN remains disabled",
-    hpmCanDisabledDetail:
-      "Only HPM USB has hardware evidence. No enabled backend infers or reuses the untested HPM CAN design.",
     artifactStep: "2 · Validate .meowpkg",
     compatibleArtifactStep: "2 · Fetch and review partner IMG",
     onlineSource: "Online stable release",

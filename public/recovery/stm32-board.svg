@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="320" viewBox="0 0 600 320" role="img" aria-label="STM32 controller board illustration">
+<rect width="600" height="320" rx="20" fill="#e9f1f8"/><rect x="90" y="45" width="420" height="230" rx="16" fill="#235e65"/>
+<g fill="#c3d5b7"><circle cx="112" cy="67" r="9"/><circle cx="488" cy="67" r="9"/><circle cx="112" cy="253" r="9"/><circle cx="488" cy="253" r="9"/></g>
+<g stroke="#a6d3ba" stroke-width="8"><path d="M180 100h50m-50 30h50m-50 30h50m-50 30h50m140-90h50m-50 30h50m-50 30h50m-50 30h50"/></g>
+<rect x="230" y="85" width="140" height="130" rx="8" fill="#142638"/><text x="300" y="157" text-anchor="middle" fill="white" font-size="23" font-family="sans-serif">STM32</text>
+<rect x="120" y="95" width="48" height="100" fill="#d9dee3"/><rect x="420" y="100" width="60" height="90" fill="#61a67f"/><text x="300" y="248" text-anchor="middle" fill="white" font-size="15" font-family="sans-serif">CANopen DFU · controller illustration</text></svg>

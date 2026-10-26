@@ -10,6 +10,8 @@ Backend: **pure Rust** (Tauri commands over `hex-motor`).
 
 HPM signed V3 updates over USB / Classic CAN and the preserved legacy gs_can
 USB profile are documented in [HPM V3 updater](docs/hpm-v3-update.md).
+The [unified CAN entry](docs/can-update-entry.md) covers passive identity discovery,
+explicit model selection for recovery, and prohibited Node-IDs 100/101.
 
 ## Layout
 
@@ -95,8 +97,8 @@ Three options, selected by the **interface** string in the Connect bar:
 
 ### 4. HPM USB Bootloader access (Firmware Update tool)
 
-The Firmware Update app currently enables the hardware-tested HPM USB v2
-transport for the exact legacy `gs_can` Bootloader profile. On Linux, install
+The USB updater preserves the exact legacy `0x0100` gs_can profile and supports
+signed HPM V3 packages through explicit V3 capability and product checks. On Linux, install
 a udev rule for `34b7:beef` so the GUI can claim interface 0 without root:
 
 ```bash
@@ -314,21 +316,17 @@ bus with the right settings:
   unavailable, never as an invalid/counterfeit proof. Selected new devices are
   re-read and registered as one atomic mixed-device batch after the server's
   three-second cooldown.
-- **Firmware Update** — an independent DFU workspace with a CAN/USB selector.
-  The current USB path recognizes only exact Bootloader version `0x0100`,
-  mapped locally to product code `0x6763616E` (ASCII `gcan`). Protected devices
-  automatically fetch the fixed-path R2 release and accept only strict
-  `.hpmota` v2; development devices make no online request and accept only a
-  locally selected structural plaintext APP0 `.bin`. Online and local bytes
-  pass the same native validation. HPM CAN is visible but disabled until
-  hardware validation exists. A matching JUMP ACK
-  means transfer completion, not confirmed application health; check the
-  device's actual function after upgrading. CAN discovery strictly reads and
-  classifies complete `0x1018` identities; only exact locally enabled profiles
-  can fetch their fixed-path R2 release or stage a local file. Both sources use
-  the same backend-native validation and the device identity is re-read on the
-  mutation transport before writing. Unknown, incomplete and disabled
-  identities never receive an update write.
+- **Firmware Update** — a CAN/USB workspace. CAN defaults to passive heartbeat
+  discovery and exact complete `0x1018` identity routing for HPM V3, STM32 and
+  Motor IAP; unknown, incomplete, disabled and reserved-ID targets remain
+  unavailable. A separate Recovery button requires an explicit pictured device
+  family and exact model selection before LSS or active IAP probing. Native
+  checks reject Node-IDs 100/101 in control, settings assignments and upgrades.
+  HPM V3 uses local signed `.hpmota/3`; STM32 and Motor paths retain their
+  identity-bound online/native package policies and required calibration backups.
+  USB keeps exact `0x0100 → gcan` legacy `.hpmota/2` / development `.bin`
+  compatibility alongside V3. An upgrade ACK does not prove application health.
+  See [CAN entry and recovery limits](docs/can-update-entry.md).
 - **Lift (Raw CAN)** — direct CANopen commissioning for one `lift-driver`
   node (default `0x14`) on the already-open bus. Attach is observation-only:
   it reads identity, nameplate/CRC, effective limits, heartbeat, TPDOs and SDO

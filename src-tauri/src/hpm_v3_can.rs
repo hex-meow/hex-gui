@@ -273,8 +273,9 @@ pub async fn capture(
     product: u32,
     uid: Option<[u8; 16]>,
     cancel: Arc<AtomicBool>,
+    expected_identity: Option<hexmeow_stm32_can_dfu::IdentitySnapshot>,
 ) -> hpm_usb_dfu::Result<v3::Session> {
-    if node.is_some_and(|v| !(1..=127).contains(&v)) {
+    if node.is_some_and(|v| crate::can_node_policy::check(v).is_err()) {
         return Err(failure("invalid Node-ID"));
     }
     let end = Instant::now() + Duration::from_secs(30);
@@ -311,6 +312,9 @@ pub async fn capture(
             continue;
         }
         let nid = (cob & 127) as u8;
+        if crate::can_node_policy::RESERVED.contains(&nid) {
+            return Err(failure(crate::can_node_policy::check(nid).unwrap_err()));
+        }
         if node.is_some_and(|n| n != nid) {
             continue;
         }
@@ -343,6 +347,25 @@ pub async fn capture(
         }
         break nid;
     };
+    use hexmeow_stm32_can_dfu::{observe_identity, CanBusSdo};
+    crate::can_node_policy::check(chosen).map_err(failure)?;
+    let identity = observe_identity(
+        &CanBusSdo::new(bus.as_ref()),
+        chosen,
+        Duration::from_millis(750),
+    )
+    .await
+    .map_err(|e| failure(e.to_string()))?;
+    if !crate::hpm_can_profiles::known(identity.vendor_id(), identity.product_code()) {
+        return Err(failure(
+            "unknown 0x1018 identity; no HPM mailbox or CLAIM was sent",
+        ));
+    }
+    if expected_identity.is_some_and(|expected| expected != identity) {
+        return Err(failure(
+            "complete 0x1018 changed after discovery; no CLAIM was sent",
+        ));
+    }
     let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
         let mut mailbox = Mailbox {
@@ -351,6 +374,12 @@ pub async fn capture(
             runtime,
         };
         let info = v3::parse_info(&v3::query(&mut mailbox, 1, 1, &[], end)?)?;
+        if info.product != identity.product_code()
+            || u32::from_le_bytes(Sha256::digest(info.uid)[..4].try_into().unwrap())
+                != identity.serial_number()
+        {
+            return Err(failure("V3 INFO disagrees with 0x1018 identity"));
+        }
         if info.capabilities & v3::CAP_CAN == 0 {
             return Err(failure("device does not advertise CAN V3"));
         }
@@ -382,6 +411,9 @@ mod tests {
         subscribers: Vec<UnboundedSender<CanFrame>>,
         domain: Vec<u8>,
         expected: usize,
+        identity_vendor: Option<u32>,
+        identity_serial: u32,
+        heartbeat_node: Option<u8>,
     }
     #[derive(Default)]
     struct Bus(Mutex<Server>);
@@ -406,7 +438,31 @@ mod tests {
             s.sent.push(f);
             let d = f.data();
             let mut reply = [0; 8];
-            if d[0] == 0x21 {
+            if let Some(vendor) = s.identity_vendor {
+                assert_eq!(
+                    d[0], 0x40,
+                    "unknown/unrevalidated identity received an SDO download"
+                );
+                assert_eq!(
+                    &d[1..3],
+                    &[0x18, 0x10],
+                    "identity probe touched a proprietary object"
+                );
+                reply[..4].copy_from_slice(&[
+                    if d[3] == 0 { 0x4f } else { 0x43 },
+                    0x18,
+                    0x10,
+                    d[3],
+                ]);
+                let value = match d[3] {
+                    0 => 4,
+                    1 => vendor,
+                    2 => crate::hpm_can_profiles::EVK_PRODUCT,
+                    3 => 0x0200,
+                    _ => s.identity_serial,
+                };
+                reply[4..8].copy_from_slice(&value.to_le_bytes());
+            } else if d[0] == 0x21 {
                 s.domain.clear();
                 s.expected = u32::from_le_bytes(d[4..8].try_into().unwrap()) as usize;
                 reply[..4].copy_from_slice(&[0x60, d[1], d[2], d[3]]);
@@ -428,8 +484,16 @@ mod tests {
             s.subscribers.retain(|tx| tx.send(frame).is_ok());
             Ok(())
         }
-        async fn subscribe(&self, _: CanFilter) -> Result<Box<dyn CanRx>, CanIoError> {
+        async fn subscribe(&self, filter: CanFilter) -> Result<Box<dyn CanRx>, CanIoError> {
             let (tx, rx) = unbounded_channel();
+            let hb = CanFrame::new_data(
+                0x700u16 + u16::from(self.0.lock().unwrap().heartbeat_node.unwrap_or(31)),
+                &[0x7f],
+            )
+            .unwrap();
+            if filter.matches(&hb) {
+                tx.send(hb).unwrap();
+            }
             self.0.lock().unwrap().subscribers.push(tx);
             Ok(Box::new(Rx(rx)))
         }
@@ -439,6 +503,97 @@ mod tests {
                 max_dlen: 64,
             }
         }
+    }
+    #[tokio::test]
+    async fn unknown_identity_receives_only_five_standard_identity_reads() {
+        let bus = Arc::new(Bus::default());
+        bus.0.lock().unwrap().identity_vendor = Some(0x12345678);
+        let result = capture(
+            bus.clone(),
+            Some(31),
+            None,
+            0,
+            0,
+            None,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .await;
+        assert!(result.is_err());
+        let s = bus.0.lock().unwrap();
+        assert_eq!(s.sent.len(), 5);
+        assert!(s
+            .sent
+            .iter()
+            .all(|f| f.data()[0] == 0x40 && f.data()[1..3] == [0x18, 0x10]));
+    }
+    #[tokio::test]
+    async fn discovery_identity_change_prevents_mailbox_and_claim() {
+        use hexmeow_stm32_can_dfu::{observe_identity, CanBusSdo};
+        let bus = Arc::new(Bus::default());
+        {
+            let mut s = bus.0.lock().unwrap();
+            s.identity_vendor = Some(crate::hpm_can_profiles::VENDOR);
+            s.identity_serial = 123;
+        }
+        let expected = observe_identity(&CanBusSdo::new(bus.as_ref()), 31, Duration::from_secs(1))
+            .await
+            .unwrap();
+        {
+            let mut s = bus.0.lock().unwrap();
+            s.sent.clear();
+            s.identity_serial = 456;
+        }
+        let result = capture(
+            bus.clone(),
+            Some(31),
+            None,
+            0,
+            0,
+            None,
+            Arc::new(AtomicBool::new(false)),
+            Some(expected),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(bus.0.lock().unwrap().sent.len(), 5);
+    }
+    #[tokio::test]
+    async fn reserved_current_node_is_rejected_before_any_bus_traffic() {
+        for node in [100, 101] {
+            let bus = Arc::new(Bus::default());
+            assert!(capture(
+                bus.clone(),
+                Some(node),
+                None,
+                0,
+                0,
+                None,
+                Arc::new(AtomicBool::new(false)),
+                None
+            )
+            .await
+            .is_err());
+            assert!(bus.0.lock().unwrap().sent.is_empty());
+        }
+    }
+    #[tokio::test]
+    async fn observed_reserved_heartbeat_blocks_capture_without_transmission() {
+        let bus = Arc::new(Bus::default());
+        bus.0.lock().unwrap().heartbeat_node = Some(100);
+        assert!(capture(
+            bus.clone(),
+            Some(31),
+            None,
+            0,
+            0,
+            None,
+            Arc::new(AtomicBool::new(false)),
+            None
+        )
+        .await
+        .is_err());
+        assert!(bus.0.lock().unwrap().sent.is_empty());
     }
     #[tokio::test]
     async fn opaque_128_and_full_308_byte_prepare_use_only_classic_sdo_segments() {
@@ -527,6 +682,7 @@ mod tests {
             0x45564b33,
             None,
             Arc::new(AtomicBool::new(false)),
+            None,
         )
         .await
         .unwrap();
