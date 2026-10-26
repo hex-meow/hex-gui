@@ -1,10 +1,11 @@
-//! Public, secret-free host runtime for the current HPM USB bootloader.
+//! Public host runtime for legacy gs_can USB and signed HPM V3 updates.
 //!
-//! This crate deliberately supports one legacy product profile only:
+//! The legacy API deliberately supports one legacy product profile:
 //! USB `34b7:beef` with an exact `GET_INFO.bl_version == 0x0100`.
 //! That legacy profile is assigned the host-side synthetic product code
 //! `0x6763616e` (ASCII `gcan`). A future bootloader version is not inferred to
-//! be compatible: it must get an explicit profile before this crate can erase.
+//! be legacy-compatible. The separate `v3` module checks explicit V3 capabilities,
+//! product identity, signed manifests and a nonexpiring captured session.
 //!
 //! The current protected-device artifact is `.hpmota` v2. The format does not
 //! authenticate an `encrypted` flag to the public host, so the crate calls it
@@ -15,6 +16,7 @@
 mod artifact;
 mod protocol;
 mod usb;
+pub mod v3;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

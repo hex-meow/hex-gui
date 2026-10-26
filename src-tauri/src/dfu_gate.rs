@@ -10,6 +10,7 @@ pub enum DfuBackend {
     HpmUsb = 1,
     Stm32Can = 2,
     CobsCanIap = 3,
+    HpmCan = 4,
 }
 
 #[derive(Default)]

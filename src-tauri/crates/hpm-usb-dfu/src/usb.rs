@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nusb::{
     transfer::{Buffer, Bulk, In, Out},
@@ -24,10 +24,16 @@ pub(crate) struct UsbBootloader {
     ep_in: Endpoint<Bulk, In>,
     read_len: usize,
     seq: u8,
+    legacy_hint: bool,
 }
 
 impl UsbBootloader {
     pub(crate) fn open_unique() -> Result<Self> {
+        let mut this = Self::open_raw_unique()?;
+        this.warmup();
+        Ok(this)
+    }
+    pub(crate) fn open_raw_unique() -> Result<Self> {
         let devices = nusb::list_devices()
             .wait()
             .map_err(|error| DfuError::Usb(format!("enumeration failed: {error}")))?
@@ -48,18 +54,50 @@ impl UsbBootloader {
             .open()
             .wait()
             .map_err(|error| DfuError::Usb(format!("open failed: {error}")))?;
+        let cfg = device
+            .active_configuration()
+            .map_err(|e| DfuError::Usb(format!("active configuration: {e}")))?;
+        let candidates = cfg
+            .interface_alt_settings()
+            .filter(|i| i.class() == 0xff && i.alternate_setting() == 0)
+            .filter_map(|i| {
+                let bulk = i
+                    .endpoints()
+                    .filter(|e| e.transfer_type() == nusb::descriptors::TransferType::Bulk)
+                    .collect::<Vec<_>>();
+                let incoming = bulk
+                    .iter()
+                    .filter(|e| e.address() & 0x80 != 0)
+                    .collect::<Vec<_>>();
+                let outgoing = bulk
+                    .iter()
+                    .filter(|e| e.address() & 0x80 == 0)
+                    .collect::<Vec<_>>();
+                (incoming.len() == 1 && outgoing.len() == 1).then(|| {
+                    (
+                        i.interface_number(),
+                        incoming[0].address(),
+                        outgoing[0].address(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        if candidates.len() != 1 {
+            return Err(DfuError::Usb("expected one vendor bulk interface".into()));
+        }
+        let (number, in_addr, out_addr) = candidates[0];
         let interface = device
-            .detach_and_claim_interface(0)
+            .detach_and_claim_interface(number)
             .wait()
             .map_err(|error| {
                 DfuError::Usb(format!(
                     "claim interface 0 failed: {error}; on Linux install the 34b7:beef udev rule"
                 ))
             })?;
-        let ep_out = interface.endpoint::<Bulk, Out>(0x01).map_err(|error| {
+        let ep_out = interface.endpoint::<Bulk, Out>(out_addr).map_err(|error| {
             DfuError::Usb(format!("open bulk OUT endpoint 0x01 failed: {error}"))
         })?;
-        let ep_in = interface.endpoint::<Bulk, In>(0x81).map_err(|error| {
+        let ep_in = interface.endpoint::<Bulk, In>(in_addr).map_err(|error| {
             DfuError::Usb(format!("open bulk IN endpoint 0x81 failed: {error}"))
         })?;
         let max_packet_size = ep_in.max_packet_size();
@@ -69,15 +107,59 @@ impl UsbBootloader {
             ));
         }
         let read_len = MAX_PACKET.div_ceil(max_packet_size) * max_packet_size;
-        let mut this = Self {
+        let this = Self {
             _interface: interface,
             ep_out,
             ep_in,
             read_len,
             seq: 0,
+            legacy_hint: devices[0].device_version() == crate::LEGACY_BL_VERSION,
         };
-        this.warmup();
         Ok(this)
+    }
+
+    pub(crate) fn discovery_info(&mut self, deadline: Instant) -> Result<Vec<u8>> {
+        if !self.legacy_hint {
+            return crate::v3::query(self, CMD_GET_INFO, 1, &[], deadline);
+        }
+        // bcdDevice is only an I/O warmup hint. GET_INFO still decides the
+        // exact legacy product mapping; no version is inferred from USB IDs.
+        for _ in 0..3 {
+            let seq = self.next_seq();
+            self.write_packet(
+                encode_request(CMD_PING, seq, &[])?,
+                remaining(deadline)?.min(WARMUP_TIMEOUT),
+            )?;
+            if self
+                .read_response(CMD_PING, seq, remaining(deadline)?.min(WARMUP_TIMEOUT))
+                .is_ok()
+            {
+                break;
+            }
+            for _ in 0..4 {
+                let done = self.ep_in.transfer_blocking(
+                    Buffer::new(self.read_len),
+                    remaining(deadline)?.min(DRAIN_TIMEOUT),
+                );
+                if done.status.is_err() {
+                    break;
+                }
+            }
+        }
+        let seq = self.next_seq();
+        self.write_packet(
+            encode_request(CMD_GET_INFO, seq, &[])?,
+            remaining(deadline)?,
+        )?;
+        let (status, body) = self.read_response(CMD_GET_INFO, seq, remaining(deadline)?)?;
+        if status != 0 {
+            return Err(DfuError::DeviceStatus {
+                cmd: CMD_GET_INFO,
+                status,
+                name: status_name(status),
+            });
+        }
+        Ok(body)
     }
 
     fn next_seq(&mut self) -> u8 {
@@ -156,6 +238,69 @@ impl UsbBootloader {
             });
         }
         Ok(body)
+    }
+}
+
+fn remaining(end: Instant) -> Result<Duration> {
+    end.checked_duration_since(Instant::now())
+        .filter(|d| !d.is_zero())
+        .ok_or_else(|| DfuError::Usb("USB deadline expired".into()))
+}
+impl UsbBootloader {
+    fn v3_read(&mut self, end: Instant) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        loop {
+            let done = self
+                .ep_in
+                .transfer_blocking(Buffer::new(self.read_len), remaining(end)?);
+            done.status
+                .map_err(|e| DfuError::Usb(format!("V3 bulk IN: {e}")))?;
+            if done.actual_len > done.buffer.len() {
+                return Err(DfuError::Protocol("USB completion exceeds buffer".into()));
+            }
+            bytes.extend_from_slice(&done.buffer[..done.actual_len]);
+            if bytes.len() >= 8 {
+                let n = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+                if n > 128 {
+                    return Err(DfuError::Protocol("oversized V3 reply".into()));
+                }
+                if bytes.len() >= 8 + n {
+                    if bytes.len() != 8 + n {
+                        return Err(DfuError::Protocol("extra V3 reply bytes".into()));
+                    }
+                    return Ok(bytes);
+                }
+            }
+        }
+    }
+}
+impl crate::v3::Transport for UsbBootloader {
+    fn exchange(&mut self, packet: &[u8], end: Instant) -> Result<Vec<u8>> {
+        self.write_packet(packet.to_vec(), remaining(end)?)?;
+        let first_end = Instant::now() + remaining(end)?.mul_f32(0.75);
+        match self.v3_read(first_end) {
+            Ok(b) => Ok(b),
+            Err(DfuError::Usb(_)) => {
+                use nusb::transfer::{ControlOut, ControlType, Recipient};
+                self._interface
+                    .control_out(
+                        ControlOut {
+                            control_type: ControlType::Vendor,
+                            recipient: Recipient::Interface,
+                            request: 0x18,
+                            value: 0x3356,
+                            index: self._interface.interface_number() as u16,
+                            data: &[],
+                        },
+                        remaining(end)?,
+                    )
+                    .wait()
+                    .map_err(|e| DfuError::Usb(format!("V3 mailbox reset: {e}")))?;
+                self.write_packet(packet.to_vec(), remaining(end)?)?;
+                self.v3_read(end)
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 

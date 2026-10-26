@@ -20,6 +20,7 @@ mod dto;
 mod friction_calibration;
 mod hopea3;
 mod hpm_dfu;
+mod hpm_v3_can;
 mod imu;
 mod lift;
 mod lift_commission;
@@ -465,6 +466,7 @@ pub fn run() {
             commands::config_set,
             commands::config_restart,
             hpm_dfu::hpm_dfu_probe,
+            hpm_dfu::hpm_dfu_capture_can,
             hpm_dfu::hpm_dfu_prepare,
             hpm_dfu::hpm_dfu_prepare_latest,
             hpm_dfu::hpm_dfu_start,

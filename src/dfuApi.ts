@@ -1,6 +1,10 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 
 export interface HpmDfuDevice {
+  protocol_version: 2 | 3;
+  transport: "usb" | "can";
+  node_id: number | null;
+  capabilities: number;
   uid: string;
   chip_family_id: number;
   chip_family_id_hex: string;
@@ -17,24 +21,24 @@ export interface HpmDfuDevice {
   page_size: number;
   key_fingerprint_hex: string;
   pubkey_fingerprint_hex: string;
-  security_mode: "development" | "production_confidential";
+  security_mode: "development" | "production_confidential" | "signed_plaintext" | "v3_encrypted_unsupported";
   otp_app_arv_floor: number;
   otp_app_arv_floor_state:
     | "informational_not_enforced"
-    | "corrupt_informational";
+    | "corrupt_informational" | "enforced" | "corrupt_enforced";
 }
 
 export interface HpmDfuPrepared {
   token: string;
   device: HpmDfuDevice;
-  artifact_kind: "development_raw" | "legacy_hpmota_v2";
+  artifact_kind: "development_raw" | "legacy_hpmota_v2" | "signed_hpmota_v3";
   source_sha256: string;
   wire_image_sha256: string;
   source_size: number;
   wire_image_size: number;
   erase_size: number;
   app_arv: number | null;
-  app_arv_state: "metadata_only_not_enforced" | "not_present";
+  app_arv_state: "metadata_only_not_enforced" | "not_present" | "signature_verified_enforced";
   pack_tool_version: string | null;
   artifact_source: "local" | "r2";
   // HPM v2 cannot bind this label to a host-visible native firmware version.
@@ -42,6 +46,9 @@ export interface HpmDfuPrepared {
 }
 
 export type HpmDfuStage =
+  | "capturing"
+  | "preparing"
+  | "committing"
   | "connecting"
   | "revalidating"
   | "erasing"
@@ -190,6 +197,9 @@ export interface CanDfuOutcome {
 
 export const hpmDfuApi = {
   probe: () => invoke<HpmDfuDevice>("hpm_dfu_probe"),
+  captureCan: (options: { spec: string; nodeId: number | null; assignNodeId: number | null;
+    vendor: number; product: number; uid: string | null }) =>
+    invoke<HpmDfuDevice>("hpm_dfu_capture_can", options),
 
   // A Uint8Array becomes Tauri's raw InvokeBody. It is not expanded into a
   // large JSON number array and does not disclose a host filesystem path.

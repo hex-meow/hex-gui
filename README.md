@@ -8,6 +8,9 @@ diagnostics, and device-authenticity checks.
 Frontend: **Vite + React + TypeScript + Ant Design + ECharts**.
 Backend: **pure Rust** (Tauri commands over `hex-motor`).
 
+HPM signed V3 updates over USB / Classic CAN and the preserved legacy gs_can
+USB profile are documented in [HPM V3 updater](docs/hpm-v3-update.md).
+
 ## Layout
 
 ```
