@@ -30,6 +30,7 @@ mod lift_commission;
 mod logging;
 mod meow_calibration;
 mod motor_factory_backup;
+mod raw_arm;
 mod rollercan;
 mod rollercan_control;
 mod sdo_client;
@@ -222,6 +223,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
         .manage(can_lease::CanTransportGate::default())
+        .manage(raw_arm::RawArm::default())
         .manage(dfu_gate::DfuMutationGate::default())
         .manage(hpm_dfu::DfuState::default())
         .manage(can_recovery::RecoveryState::default())
@@ -232,6 +234,10 @@ pub fn run() {
                     return;
                 }
                 api.prevent_close();
+                if window.app_handle().state::<raw_arm::RawArm>().driving() {
+                    let _ = window.emit("raw-arm-close-active", ());
+                    return;
+                }
                 if window
                     .app_handle()
                     .state::<AppState>()
@@ -244,6 +250,20 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            raw_arm::raw_arm_model,
+            raw_arm::raw_arm_connect,
+            raw_arm::raw_arm_session,
+            raw_arm::raw_arm_disconnect,
+            raw_arm::raw_arm_status,
+            raw_arm::raw_arm_preview,
+            raw_arm::raw_arm_control,
+            raw_arm::raw_arm_set_gravity_scale,
+            raw_arm::raw_arm_execute,
+            raw_arm::raw_arm_move_gripper,
+            raw_arm::raw_arm_disable_gripper,
+            raw_arm::raw_arm_offsets,
+            raw_arm::raw_arm_stop,
+            raw_arm::raw_arm_release,
             commands::connect,
             commands::disconnect,
             commands::is_connected,

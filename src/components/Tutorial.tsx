@@ -375,6 +375,24 @@ export const TUTORIALS: Record<string, Slide[]> = {
   smartknob: SMARTKNOB_SLIDES,
   zenoh: placeholderSlides("zenoh"),
   arm: placeholderSlides("arm"),
+  rawArm: [
+    { title: { zh: "初始化与实测姿态", en: "Initialization and feedback" }, body: {
+      zh: "选择裸臂、GP80 或 GR80 后连接 CAN FD。实体模型按编码器反馈刷新。安装标定中可分别设置 GP80 单指位移（mm/rev）和 GR80 单爪转角（rad/rev）及其零偏。",
+      en: "Select the bare arm, GP80 or GR80 and initialize CAN FD. The solid model follows the encoders. Installation settings store GP80 finger travel (mm/rev) and GR80 jaw rotation (rad/rev) with separate offsets.",
+    } },
+    { title: { zh: "预览并执行轨迹", en: "Preview and execute a move" }, body: {
+      zh: "移动关节滑块或输入基座系下的 TCP 坐标。绿色虚影和曲线显示规划过程，可重播或拖动时间轴。点击执行后，驱动从最新实测状态前往预览终点。",
+      en: "Move a joint slider or enter a TCP target in the base frame. The green ghost and curve show the trajectory. Replay it or scrub the timeline. Execute starts from the latest measured state and uses the previewed endpoint.",
+    } },
+    { title: { zh: "重力补偿与手动拖动", en: "Gravity compensation and hand-guiding" }, body: {
+      zh: "展开下方的重力前馈补偿系数，按关节调整后点击「应用系数」。位置保持、轨迹运动、减速停止和手动拖动共用这六个值。拖动时位置刚度为零，阻尼可调。托住机械臂后，可将主臂和已安装的夹爪一起失能，再断开连接。",
+      en: "Expand the gravity feedforward settings below, adjust the joint multipliers and select Apply scales. Holding, moving, braking and hand-guiding share these six values. Hand-guiding uses zero position stiffness and adjustable damping. Support the arm before releasing the drives and disconnecting.",
+    } },
+    { title: { zh: "夹爪开合", en: "Gripper control" }, body: {
+      zh: "选择全开、全闭或输入目标，绿色虚影显示目标开度。GP80 使用两指全宽（mm），GR80 使用单爪角（rad）。进入位置保持或拖动模式后，点击「执行夹爪目标」下发指令。夹爪可单独失能。",
+      en: "Choose Open, Closed or enter a target to preview it on the ghost. GP80 uses full width in mm and GR80 uses one jaw’s angle in rad. Enter hold or hand-guiding, then select Execute gripper target. Disable gripper releases the tool independently.",
+    } },
+  ],
   config: placeholderSlides("config"),
   canalyzer: CANALYZER_SLIDES,
   dfu: DFU_SLIDES,

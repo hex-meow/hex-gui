@@ -43,6 +43,16 @@ The `hex-motor` 0.3.2 driver, including 3525 support and position presets,
 is downloaded from crates.io. `src-tauri/Cargo.lock` pins the resolved version
 and package checksum for local and CI builds.
 
+The **Hex-arm(Raw CAN)** application builds against the local `hex-arm` driver
+and its optimized `hex-motor` dependency. Place `hex-gui`, `hex-arm` and
+`hex-motor` in the same parent directory on the build machine. The installed
+application includes the Firefly Y6, GP80 and GR80 URDFs and visual meshes.
+Select the bare arm or mount either gripper. GP80 targets use full opening
+in millimetres. GR80 targets use the angle of one jaw in radians. The bundled
+GR80 model spans 0 to 0.6 rad and provides the nominal encoder scale of
+2.4 rad/rev. Set the signed scale and zero offset for the installed gripper
+under installation calibration.
+
 ### 1. System libraries (Linux)
 
 Tauri 2.x on Linux links WebKit2GTK + libsoup-3. On Debian/Ubuntu:

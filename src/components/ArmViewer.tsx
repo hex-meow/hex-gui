@@ -14,6 +14,11 @@ import {
   type UrdfLoadJob,
 } from "../urdfModelLoader";
 
+type CreateArmViewOverlay = (renderer: THREE.WebGLRenderer, camera: THREE.PerspectiveCamera) => {
+  render(): void;
+  dispose(): void;
+};
+
 interface Props {
   q: number[];
   gravity: [number, number, number];
@@ -21,6 +26,11 @@ interface Props {
   previewQ?: number[] | null; // 悬浮预设时的目标位姿(幽灵臂)
   armQuat?: [number, number, number, number] | null; // 整臂朝向(x,y,z,w);给了就直接用它转臂(四元数模式),否则从重力方向反推
   urdfXml?: string | null; // 机器人级 URDF(整机 arm+EE 或臂-only);给了就渲它,否则退到捆的 firefly
+  tcpPath?: readonly (readonly number[])[];
+  showActual?: boolean;
+  measuredJoints?: boolean;
+  createOverlay?: CreateArmViewOverlay;
+  onModelReady?: (ready: boolean) => void;
 }
 
 function createArmPlaceholder(): THREE.Group {
@@ -93,7 +103,7 @@ function loadErrorMessage(error: unknown): string {
   try { return JSON.stringify(error); } catch { return String(error); }
 }
 
-export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }: Props) {
+export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml, tcpPath, showActual = true, measuredJoints = false, createOverlay, onModelReady }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const robotRef = useRef<URDFRobot | null>(null);
   const ghostRef = useRef<URDFRobot | null>(null);
@@ -106,6 +116,8 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }
   const latestQRef = useRef(q);
   const latestJointNamesRef = useRef(jointNames);
   const latestPreviewQRef = useRef(previewQ);
+  const actualVisible = useRef(showActual);
+  const readyListener = useRef(onModelReady);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [retryGeneration, setRetryGeneration] = useState(0);
@@ -113,6 +125,8 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }
   latestQRef.current = q;
   latestJointNamesRef.current = jointNames;
   latestPreviewQRef.current = previewQ;
+  actualVisible.current = showActual;
+  readyListener.current = onModelReady;
 
   useEffect(() => {
     const mount = mountRef.current!;
@@ -121,14 +135,14 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x1a1d23);
     const camera = new THREE.PerspectiveCamera(50, W / H, 0.01, 100);
-    camera.position.set(0.7, -0.9, 0.7);
+    camera.position.set(0.7, -0.9, measuredJoints ? 0.92 : 0.7);
     camera.up.set(0, 0, 1); // URDF 是 Z-up
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(W, H);
     renderer.setPixelRatio(window.devicePixelRatio);
     mount.appendChild(renderer.domElement);
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, 0, 0); // 始终绕零点(基座原点)旋转/缩放
+    controls.target.set(0, 0, measuredJoints ? 0.32 : 0);
     controls.enablePan = false;   // 禁止平移 → 只能绕零点 orbit + zoom
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.75));
@@ -156,8 +170,14 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }
     armRoot.add(placeholder);
     placeholderRef.current = placeholder;
 
+    const overlay = createOverlay?.(renderer, camera);
     let raf = 0;
-    const animate = () => { controls.update(); renderer.render(scene, camera); raf = requestAnimationFrame(animate); };
+    const animate = () => {
+      controls.update();
+      renderer.render(scene, camera);
+      overlay?.render();
+      raf = requestAnimationFrame(animate);
+    };
     animate();
     const onResize = () => {
       const w = mount.clientWidth || 600;
@@ -171,6 +191,7 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", onResize);
       controls.dispose();
+      overlay?.dispose();
       disposeArmModels(robotRef.current, ghostRef.current);
       robotRef.current = null;
       ghostRef.current = null;
@@ -192,6 +213,7 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }
     if (!armRoot) return;
     let active = true;
     const generation = ++loadGenerationRef.current;
+    readyListener.current?.(false);
     setLoading(true);
     setLoadError(null);
 
@@ -207,6 +229,10 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }
       let automaticNames: string[];
       try {
         ghost = makeGhost(robot);
+        robot.visible = actualVisible.current;
+        if (measuredJoints) {
+          for (const joint of Object.values(robot.joints)) joint.ignoreLimits = true;
+        }
         automaticNames = automaticJointNames(robot);
         applyJointValues(robot, latestQRef.current, latestJointNamesRef.current, automaticNames);
         const target = latestPreviewQRef.current;
@@ -252,6 +278,7 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }
       disposeArmModels(oldRobot, oldGhost);
       setLoadError(null);
       setLoading(false);
+      readyListener.current?.(true);
     }).catch((error: unknown) => {
       if (!active || generation !== loadGenerationRef.current || isUrdfAbort(error)) return;
       console.error("URDF load failed", error);
@@ -266,14 +293,26 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml }
       job.cancel();
       if (loadJobRef.current === job) loadJobRef.current = null;
     };
-  }, [urdfXml, retryGeneration]);
+  }, [urdfXml, retryGeneration, measuredJoints]);
 
   // 实时关节角
   useEffect(() => {
     const robot = robotRef.current;
     if (!robot) return;
+    robot.visible = showActual;
     applyJointValues(robot, q, jointNames, autoJointsRef.current);
-  }, [q, jointNames]);
+  }, [q, jointNames, showActual]);
+
+  useEffect(() => {
+    const root = armRootRef.current;
+    if (!root || !tcpPath?.length) return;
+    const geometry = new THREE.BufferGeometry().setFromPoints(tcpPath.map(([x, y, z]) => new THREE.Vector3(x, y, z)));
+    const material = new THREE.LineBasicMaterial({ color: 0x52df98, transparent: true, opacity: 0.85, depthTest: false });
+    const line = new THREE.Line(geometry, material);
+    line.renderOrder = 2;
+    root.add(line);
+    return () => { root.remove(line); geometry.dispose(); material.dispose(); };
+  }, [tcpPath]);
 
   // 幽灵臂:预设悬浮预览
   useEffect(() => {
