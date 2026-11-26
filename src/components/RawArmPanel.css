@@ -57,6 +57,7 @@
 .raw-arm__joint .ant-input-number-input { padding-inline-end: 32px; }
 .raw-arm__actions { margin: 12px 0 2px; }
 .raw-arm__table-scroll { overflow-x: auto; }
+.raw-arm__factory-reading { display: flex; flex-wrap: wrap; align-items: center; justify-content: end; gap: 5px 8px; overflow-wrap: anywhere; }
 .raw-arm__settings table .ant-input-number { width: 100%; min-width: 66px; max-width: 140px; }
 .raw-arm__settings p + button { margin-top: 8px; }
 @media (max-width: 950px) { .raw-arm__workspace { grid-template-columns: minmax(0, 1fr); } }

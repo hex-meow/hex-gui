@@ -1,29 +1,34 @@
 import { Button, InputNumber, Slider, Space } from "antd";
-import { useState } from "react";
 import { useI18n } from "../i18n";
 import { formatMeowModeDisplay } from "../meowMotorUi";
 import { gripperUnits, type GripperMotion, type MountedTool, type ToolFeedback } from "../rawArm";
+
+export interface GripperSettings {
+  speed: number | null;
+  acceleration: number | null;
+  torque: number | null;
+}
 
 interface Props {
   tool: MountedTool;
   feedback: ToolFeedback | null;
   target: number | null;
   setTarget: (position: number | null) => void;
+  settings: GripperSettings;
+  setSettings: (settings: GripperSettings) => void;
   canMove: boolean;
   canDisable: boolean;
   move: (motion: GripperMotion) => void;
   disable: () => void;
 }
 
-export function RawArmGripper({ tool, feedback, target, setTarget, canMove, canDisable, move, disable }: Props) {
+export function RawArmGripper({ tool, feedback, target, setTarget, settings, setSettings, canMove, canDisable, move, disable }: Props) {
   const { lang } = useI18n();
   const zh = lang === "zh";
   const rotary = tool.kind === "gr80";
   const { displayPerJoint, siPerDisplay, unit, step } = gripperUnits[tool.kind];
   const { lower, upper } = tool.joint;
-  const [speed, setSpeed] = useState<number | null>(rotary ? 0.3 : 10);
-  const [acceleration, setAcceleration] = useState<number | null>(rotary ? 0.6 : 20);
-  const [torque, setTorque] = useState<number | null>(120);
+  const { speed, acceleration, torque } = settings;
   const label = rotary ? (zh ? "单爪角" : "jaw angle") : (zh ? "开口全宽" : "full opening");
   const valid = target !== null && target >= lower && target <= upper
     && speed !== null && Number.isFinite(speed) && speed > 0
@@ -62,11 +67,11 @@ export function RawArmGripper({ tool, feedback, target, setTarget, canMove, canD
       value={(target ?? feedback?.position ?? lower) * displayPerJoint} onChange={v => setTarget(v / displayPerJoint)} />
     <div className="raw-arm__fields">
       <label>{zh ? "速度" : "Speed"} · {unit}/s
-        <InputNumber value={speed} step={step} min={0} onChange={setSpeed} /></label>
+        <InputNumber value={speed} step={step} min={0} onChange={v => setSettings({ ...settings, speed: v })} /></label>
       <label>{zh ? "加速度" : "Acceleration"} · {unit}/s²
-        <InputNumber value={acceleration} step={step} min={0} onChange={setAcceleration} /></label>
+        <InputNumber value={acceleration} step={step} min={0} onChange={v => setSettings({ ...settings, acceleration: v })} /></label>
       <label>{zh ? "电机转矩上限" : "Motor torque limit"} · ‰
-        <InputNumber value={torque} step={1} precision={0} min={0} max={1000} onChange={setTorque} /></label>
+        <InputNumber value={torque} step={1} precision={0} min={0} max={1000} onChange={v => setSettings({ ...settings, torque: v })} /></label>
     </div>
     <Space wrap>
       <Button type="primary" disabled={!canMove || !valid} onClick={execute}>

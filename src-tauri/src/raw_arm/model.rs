@@ -105,11 +105,12 @@ pub(crate) struct ModelInfo {
 }
 
 pub(super) fn home(model: &ArmModel) -> Q {
-    let nominal = [0., 0., std::f64::consts::FRAC_PI_2, 0., 0., 0.];
+    let nominal: Q = [0., -1.57, 1.57, 0., 0., 0.];
     std::array::from_fn(|i| nominal[i].clamp(model.joints()[i].lower, model.joints()[i].upper))
 }
 
 #[derive(Clone, Serialize)]
+#[cfg_attr(test, derive(Default))]
 pub(crate) struct Pose {
     xyz: [f64; 3],
     rpy: [f64; 3],
@@ -169,7 +170,7 @@ pub(super) fn feedback_poses(
     Ok((measured_tcp, seed))
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 pub(crate) struct Limits {
     velocity: f64,
     acceleration: f64,
@@ -403,7 +404,7 @@ mod tests {
         assert!(plan(&model, start, Target::Joints { q: measured }, limits(), 3).is_err());
 
         let mut outside = measured;
-        outside[1] = -1.5721;
+        outside[1] = boundary[1] - 0.004;
         let (actual, blocked) = feedback_poses(&model, &outside).unwrap();
         assert_eq!(actual.xyz, pose(&model, &outside).unwrap().xyz);
         assert!(blocked.start(&rest, &rest).unwrap_err().contains("joint_2"));
@@ -411,8 +412,9 @@ mod tests {
 
     #[test]
     fn initial_stationary_preview_has_a_visible_endpoint() {
-        let (model, _) = load(&product("firefly_y6"), Some(&product("gp80"))).unwrap();
-        let q = home(&model);
+        let (model, info) = load(&product("firefly_y6"), Some(&product("gp80"))).unwrap();
+        let q = info.home;
+        assert_eq!(q, [0., -1.57, 1.57, 0., 0., 0.]);
         let stationary = plan(
             &model,
             JointState::at_rest(&q),

@@ -63,9 +63,11 @@ function automaticJointNames(robot: URDFRobot): string[] {
 
 function applyJointValues(robot: URDFRobot, values: readonly number[], jointNames: readonly string[], automaticNames: readonly string[]) {
   const names = jointNames.length ? jointNames : automaticNames;
+  let changed = false;
   names.forEach((name, index) => {
-    if (robot.joints[name]) robot.setJointValue(name, values[index] ?? 0);
+    if (robot.setJointValue(name, values[index] ?? 0)) changed = true;
   });
+  return changed;
 }
 
 function makeGhost(robot: URDFRobot): URDFRobot {
@@ -105,6 +107,7 @@ function loadErrorMessage(error: unknown): string {
 
 export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml, tcpPath, showActual = true, measuredJoints = false, createOverlay, onModelReady }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
+  const requestRender = useRef<(() => void) | null>(null);
   const robotRef = useRef<URDFRobot | null>(null);
   const ghostRef = useRef<URDFRobot | null>(null);
   const placeholderRef = useRef<THREE.Group | null>(null);
@@ -171,25 +174,41 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml, 
     placeholderRef.current = placeholder;
 
     const overlay = createOverlay?.(renderer, camera);
-    let raf = 0;
-    const animate = () => {
-      controls.update();
-      renderer.render(scene, camera);
-      overlay?.render();
-      raf = requestAnimationFrame(animate);
+    let raf: number | null = null;
+    const invalidate = () => {
+      if (raf !== null) return;
+      raf = requestAnimationFrame(() => {
+        raf = null;
+        renderer.render(scene, camera);
+        overlay?.render();
+      });
     };
-    animate();
+    requestRender.current = invalidate;
+    controls.addEventListener("change", invalidate);
+    controls.update();
+    renderer.domElement.addEventListener("webglcontextrestored", invalidate);
+    invalidate();
+    let width = W;
     const onResize = () => {
       const w = mount.clientWidth || 600;
+      if (w === width) return;
+      width = w;
       camera.aspect = w / H; camera.updateProjectionMatrix(); renderer.setSize(w, H);
+      invalidate();
     };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(onResize);
+    observer?.observe(mount);
     window.addEventListener("resize", onResize);
     return () => {
       loadGenerationRef.current += 1;
       loadJobRef.current?.cancel();
       loadJobRef.current = null;
-      cancelAnimationFrame(raf);
+      requestRender.current = null;
+      if (raf !== null) cancelAnimationFrame(raf);
+      observer?.disconnect();
       window.removeEventListener("resize", onResize);
+      controls.removeEventListener("change", invalidate);
+      renderer.domElement.removeEventListener("webglcontextrestored", invalidate);
       controls.dispose();
       overlay?.dispose();
       disposeArmModels(robotRef.current, ghostRef.current);
@@ -276,6 +295,7 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml, 
         placeholderRef.current = null;
       }
       disposeArmModels(oldRobot, oldGhost);
+      requestRender.current?.();
       setLoadError(null);
       setLoading(false);
       readyListener.current?.(true);
@@ -299,8 +319,10 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml, 
   useEffect(() => {
     const robot = robotRef.current;
     if (!robot) return;
+    const visibilityChanged = robot.visible !== showActual;
     robot.visible = showActual;
-    applyJointValues(robot, q, jointNames, autoJointsRef.current);
+    const moved = applyJointValues(robot, q, jointNames, autoJointsRef.current);
+    if (visibilityChanged || (showActual && moved)) requestRender.current?.();
   }, [q, jointNames, showActual]);
 
   useEffect(() => {
@@ -311,7 +333,13 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml, 
     const line = new THREE.Line(geometry, material);
     line.renderOrder = 2;
     root.add(line);
-    return () => { root.remove(line); geometry.dispose(); material.dispose(); };
+    requestRender.current?.();
+    return () => {
+      root.remove(line);
+      geometry.dispose();
+      material.dispose();
+      requestRender.current?.();
+    };
   }, [tcpPath]);
 
   // 幽灵臂:预设悬浮预览
@@ -319,17 +347,22 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml, 
     const ghost = ghostRef.current;
     if (!ghost) return;
     if (previewQ && previewQ.length) {
-      applyJointValues(ghost, previewQ, jointNames, autoJointsRef.current);
+      const moved = applyJointValues(ghost, previewQ, jointNames, autoJointsRef.current);
+      if (!ghost.visible || moved) requestRender.current?.();
       ghost.visible = true;
-    } else {
+    } else if (ghost.visible) {
       ghost.visible = false;
+      requestRender.current?.();
     }
   }, [previewQ, jointNames]);
 
   // 重力可视化:箭头**始终朝下**(world -Z);**旋转整臂**让人看到机械臂在真实空间里的样子。
   // armQuat 给了(四元数模式)→ 直接用它当整臂朝向(无歧义);否则从重力方向反推最小旋转(XYZ 模式)。
+  const [gx, gy, gz] = gravity;
+  const [qx, qy, qz, qw] = armQuat ?? [0, 0, 0, 1];
+  const useQuaternion = !!armQuat;
   useEffect(() => {
-    const g = new THREE.Vector3(gravity[0], gravity[1], gravity[2]);
+    const g = new THREE.Vector3(gx, gy, gz);
     const len = g.length();
     const arrow = arrowRef.current;
     if (arrow && len > 1e-6) {
@@ -338,13 +371,14 @@ export function ArmViewer({ q, gravity, jointNames, previewQ, armQuat, urdfXml, 
     }
     const armRoot = armRootRef.current;
     if (armRoot) {
-      if (armQuat) {
-        armRoot.quaternion.set(armQuat[0], armQuat[1], armQuat[2], armQuat[3]).normalize();
+      if (useQuaternion) {
+        armRoot.quaternion.set(qx, qy, qz, qw).normalize();
       } else if (len > 1e-6) {
         armRoot.quaternion.setFromUnitVectors(g.clone().normalize(), new THREE.Vector3(0, 0, -1));
       }
     }
-  }, [gravity, armQuat]);
+    requestRender.current?.();
+  }, [gx, gy, gz, qx, qy, qz, qw, useQuaternion]);
 
   return (
     <div style={{ position: "relative", width: "100%", height: 440, borderRadius: 8, overflow: "hidden" }}>

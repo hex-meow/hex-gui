@@ -377,12 +377,12 @@ export const TUTORIALS: Record<string, Slide[]> = {
   arm: placeholderSlides("arm"),
   rawArm: [
     { title: { zh: "初始化与实测姿态", en: "Initialization and feedback" }, body: {
-      zh: "选择裸臂、GP80 或 GR80 后连接 CAN FD。实体模型按编码器反馈刷新。安装标定中可分别设置 GP80 单指位移（mm/rev）和 GR80 单爪转角（rad/rev）及其零偏。",
-      en: "Select the bare arm, GP80 or GR80 and initialize CAN FD. The solid model follows the encoders. Installation settings store GP80 finger travel (mm/rev) and GR80 jaw rotation (rad/rev) with separate offsets.",
+      zh: "选择裸臂、GP80 或 GR80 后连接 CAN FD。每次打开工具都使用内置默认参数。本次可调整 GP80 单指位移（mm/rev）、GR80 单爪转角（rad/rev）及其零偏。监视模式下可在「关节增益与安装标定」中逐轴重读出厂力矩系数。",
+      en: "Select the bare arm, GP80 or GR80 and initialize CAN FD. Each new run starts with the built-in defaults. Adjust GP80 single-finger travel (mm/rev), GR80 single-jaw rotation (rad/rev) and their offsets for this run. In monitor mode, open Joint gains and installation calibration to reread an individual motor’s factory torque factor.",
     } },
     { title: { zh: "预览并执行轨迹", en: "Preview and execute a move" }, body: {
-      zh: "移动关节滑块或输入基座系下的 TCP 坐标。绿色虚影和曲线显示规划过程，可重播或拖动时间轴。点击执行后，驱动从最新实测状态前往预览终点。",
-      en: "Move a joint slider or enter a TCP target in the base frame. The green ghost and curve show the trajectory. Replay it or scrub the timeline. Execute starts from the latest measured state and uses the previewed endpoint.",
+      zh: "移动关节滑块或输入基座系下的 TCP 坐标。实体模型跟随编码器反馈，绿色虚影和曲线显示从实测姿态到目标的轨迹，可重播或拖动时间轴。点击「从当前位置移至目标」后，驱动从最新实测姿态前往预览终点。",
+      en: "Move a joint slider or enter a TCP target in the base frame. The solid model follows the encoders. The green ghost and curve show the path to the target. Replay it or scrub the timeline. Select Move to target from current pose to drive from the latest measured pose to the previewed endpoint.",
     } },
     { title: { zh: "重力补偿与手动拖动", en: "Gravity compensation and hand-guiding" }, body: {
       zh: "展开下方的重力前馈补偿系数，按关节调整后点击「应用系数」。位置保持、轨迹运动、减速停止和手动拖动共用这六个值。拖动时位置刚度为零，阻尼可调。托住机械臂后，可将主臂和已安装的夹爪一起失能，再断开连接。",

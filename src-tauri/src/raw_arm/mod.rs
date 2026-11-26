@@ -1,5 +1,6 @@
 //! Hex-arm(Raw CAN) workspace. Planning never sends CAN frames. The session owns the
 //! only drive command channel and lives independently of the WebView frame rate.
+mod commands;
 mod gripper;
 mod model;
 mod runtime;
@@ -8,25 +9,24 @@ use crate::{
     backend,
     can_lease::{CanOwner, CanTransportGate},
 };
+use commands::{Command, Sender};
 use gripper::GripperMotion;
-use hex_arm::{
-    hardware::{ArmBus, AxisControl},
-    ArmModel, JointState,
-};
+use hex_arm::{hardware::ArmBus, ArmModel, JointState};
 use model::{Limits, ModelInfo, Preview, Target};
-use runtime::{Command, Control, Gains, GravityScale, Installation, Reply, Status};
+use runtime::{
+    ArrivalTolerance, Control, FactoryReading, Gains, GravityScale, Installation, Status,
+};
 use serde::Serialize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 use tauri::State;
-use tokio::sync::{mpsc, oneshot, watch, Mutex};
+use tokio::sync::{watch, Mutex};
 
 struct Session {
-    tx: mpsc::Sender<Command>,
+    tx: Sender,
     status: watch::Receiver<Status>,
-    axes: Vec<AxisControl>,
     task: tokio::task::JoinHandle<()>,
     connection: Connection,
 }
@@ -36,33 +36,14 @@ pub(crate) struct Connection {
     iface: String,
     data_bitrate: u32,
     installation: Installation,
-    factory: Vec<Option<f64>>,
+    goal_tolerance: ArrivalTolerance,
+    gravity_scale: GravityScale,
+    factory: Vec<FactoryReading>,
+    gains: Option<Gains>,
+    limits: Option<Limits>,
     arm_xml: String,
     tool_xml: Option<String>,
     model: ModelInfo,
-}
-
-impl Session {
-    async fn activate(&self, control: Control, gains: Gains) -> Result<(), String> {
-        let axes = gains
-            .apply(&self.axes, control)
-            .map_err(|e| e.to_string())?;
-        self.request(|reply| Command::Activate {
-            control,
-            axes,
-            reply,
-        })
-        .await
-    }
-
-    async fn request(&self, make: impl FnOnce(Reply) -> Command) -> Result<(), String> {
-        let (tx, rx) = oneshot::channel();
-        self.tx
-            .send(make(tx))
-            .await
-            .map_err(|_| "Arm session ended")?;
-        rx.await.map_err(|_| "Arm session ended")?
-    }
 }
 
 #[derive(Default)]
@@ -96,6 +77,26 @@ impl RawArm {
     pub(crate) fn driving(&self) -> bool {
         self.active.load(Ordering::Acquire)
     }
+
+    async fn change_motion(
+        &self,
+        make: impl FnOnce(commands::Reply) -> Command,
+    ) -> Result<(), String> {
+        let (tx, reply) = {
+            let mut w = self.inner.lock().await;
+            let tx = w.session()?.tx.clone();
+            w.invalidate();
+            let reply = tx.request(make);
+            (tx, reply)
+        };
+        let result = reply.await;
+        // A concurrent planner may have used the feedback from before this command.
+        let mut w = self.inner.lock().await;
+        if w.session.as_ref().is_some_and(|s| s.tx.same_session(&tx)) {
+            w.invalidate();
+        }
+        result
+    }
 }
 
 #[tauri::command]
@@ -122,7 +123,11 @@ pub(crate) async fn raw_arm_connect(
     iface: String,
     data_bitrate: u32,
     installation: Installation,
-) -> Result<Vec<Option<f64>>, String> {
+    goal_tolerance: Option<ArrivalTolerance>,
+    gains: Option<Gains>,
+    limits: Option<Limits>,
+    gravity_scale: Option<GravityScale>,
+) -> Result<Vec<FactoryReading>, String> {
     let mut w = state.inner.lock().await;
     if w.session.is_some() {
         return Err("Arm session already open".into());
@@ -130,22 +135,36 @@ pub(crate) async fn raw_arm_connect(
     let (model, model_info) = w.model.clone().ok_or("Open the arm URDF first")?;
     let kind = model_info.tool.as_ref().map(|t| t.kind);
     let config = installation.bus_config(kind).map_err(|e| e.to_string())?;
+    let torque_limits = installation
+        .torque_limits_by_node()
+        .map_err(|e| e.to_string())?;
     let tool = kind.zip(config.tool.and_then(|t| t.encoder));
     let lease = gate.try_acquire(CanOwner::RawArm)?;
     let (bus, _) = backend::open_bus(&iface, data_bitrate, false, lease)
         .await
         .map_err(|e| format!("{e:#}"))?;
-    let mut arm = ArmBus::new(bus, config).map_err(|e| e.to_string())?;
+    let mut arm = ArmBus::new_with_arm_torque_limits(bus, config, &torque_limits)
+        .map_err(|e| e.to_string())?;
     // The driver's batch initializer preflights every joint and the independent
     // tool before PDO setup and confirms Disabled feedback for the whole group.
     arm.initialize().await.map_err(|e| e.to_string())?;
     let (axes, factory) = installation.axes(&arm, &model).await;
-    let (tx, rx) = mpsc::channel(8);
-    let (publisher, status) = watch::channel(Status::default());
+    let (tx, rx) = commands::channel();
+    let goal_tolerance = goal_tolerance.unwrap_or_default();
+    let gravity_scale = gravity_scale.unwrap_or_default();
+    let (publisher, status) = watch::channel(Status::new(
+        goal_tolerance,
+        gravity_scale,
+        installation.offset,
+        factory.clone(),
+        gains,
+        limits,
+    ));
     let task = tokio::spawn(runtime::run(
         arm,
         model,
-        axes.clone(),
+        axes,
+        installation.factor,
         tool,
         rx,
         publisher,
@@ -155,6 +174,10 @@ pub(crate) async fn raw_arm_connect(
         iface,
         data_bitrate,
         installation,
+        goal_tolerance,
+        gravity_scale,
+        gains,
+        limits,
         factory: factory.clone(),
         arm_xml: w.xml.0.clone(),
         tool_xml: w.xml.1.clone(),
@@ -163,7 +186,6 @@ pub(crate) async fn raw_arm_connect(
     w.session = Some(Session {
         tx,
         status,
-        axes,
         task,
         connection,
     });
@@ -176,13 +198,17 @@ pub(crate) async fn raw_arm_connect(
 pub(crate) async fn raw_arm_session(
     state: State<'_, RawArm>,
 ) -> Result<Option<Connection>, String> {
-    Ok(state
-        .inner
-        .lock()
-        .await
-        .session
-        .as_ref()
-        .map(|s| s.connection.clone()))
+    Ok(state.inner.lock().await.session.as_ref().map(|s| {
+        let status = s.status.borrow();
+        let mut conn = s.connection.clone();
+        conn.installation.offset = status.offsets;
+        conn.goal_tolerance = status.goal_tolerance;
+        conn.gravity_scale = status.gravity_scale;
+        conn.gains = status.gains;
+        conn.limits = status.limits;
+        conn.factory.clone_from(&status.factory);
+        conn
+    }))
 }
 
 #[tauri::command]
@@ -241,9 +267,24 @@ pub(crate) async fn raw_arm_control(
     mode: Control,
     gains: Gains,
 ) -> Result<(), String> {
-    let mut w = state.inner.lock().await;
-    w.invalidate();
-    w.session()?.activate(mode, gains).await
+    state
+        .change_motion(|r| Command::Activate(mode, gains, r))
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn raw_arm_set_goal_tolerance(
+    state: State<'_, RawArm>,
+    tolerance: ArrivalTolerance,
+) -> Result<(), String> {
+    let reply = state
+        .inner
+        .lock()
+        .await
+        .session()?
+        .tx
+        .request(move |r| Command::SetGoalTolerance(tolerance, r));
+    reply.await
 }
 
 #[tauri::command]
@@ -251,10 +292,14 @@ pub(crate) async fn raw_arm_set_gravity_scale(
     state: State<'_, RawArm>,
     scale: GravityScale,
 ) -> Result<(), String> {
-    let w = state.inner.lock().await;
-    w.session()?
-        .request(|r| Command::SetGravityScale(scale, r))
+    let reply = state
+        .inner
+        .lock()
         .await
+        .session()?
+        .tx
+        .request(move |r| Command::SetGravityScale(scale, r));
+    reply.await
 }
 
 #[tauri::command]
@@ -263,21 +308,28 @@ pub(crate) async fn raw_arm_execute(
     id: u64,
     gains: Gains,
 ) -> Result<(), String> {
-    let w = state.inner.lock().await;
-    let (goal, limits) = w
-        .preview
-        .as_ref()
-        .filter(|_| w.revision == id)
-        .ok_or("Preview the current target first")?;
-    let session = w.session()?;
-    let mode = session.status.borrow().mode;
-    if mode == runtime::Mode::Monitor {
-        session.activate(Control::Hold, gains).await?;
+    let (tx, epoch, goal, limits, activate) = {
+        let w = state.inner.lock().await;
+        let (goal, limits) = w
+            .preview
+            .as_ref()
+            .filter(|_| w.revision == id)
+            .ok_or("Preview the current target first")?;
+        let session = w.session()?;
+        let epoch = session.tx.epoch();
+        let activate = (session.status.borrow().mode == runtime::Mode::Monitor).then(|| {
+            session
+                .tx
+                .request_at(epoch, move |r| Command::Activate(Control::Hold, gains, r))
+        });
+        (session.tx.clone(), epoch, goal.clone(), *limits, activate)
+    };
+    if let Some(reply) = activate {
+        reply.await?;
     }
     // Keep precisely the IK branch shown in the viewer. The drive replans to
     // that endpoint from the newest measured position/velocity at execution.
-    session
-        .request(|r| Command::Move(goal.clone(), *limits, r))
+    tx.request_at(epoch, move |r| Command::Move(goal, limits, r))
         .await
 }
 
@@ -289,24 +341,27 @@ pub(crate) async fn raw_arm_offsets(
     if !offsets.iter().all(|v| v.is_finite()) {
         return Err("Invalid joint offsets".into());
     }
-    let mut w = state.inner.lock().await;
-    let session = w
-        .session
-        .as_mut()
-        .ok_or("Initialize the CAN interface first")?;
-    session.request(|r| Command::Offsets(offsets, r)).await?;
-    for (axis, value) in session.axes.iter_mut().zip(offsets) {
-        axis.zero_offset_rad = value;
-    }
-    session.connection.installation.offset = offsets;
-    w.invalidate();
-    Ok(())
+    state.change_motion(|r| Command::Offsets(offsets, r)).await
+}
+
+#[tauri::command]
+pub(crate) async fn raw_arm_reread_factory_calibration(
+    state: State<'_, RawArm>,
+    node_id: u8,
+) -> Result<FactoryReading, String> {
+    let reply = state
+        .inner
+        .lock()
+        .await
+        .session()?
+        .tx
+        .request(move |r| Command::ReadFactory(node_id, r));
+    reply.await
 }
 
 #[tauri::command]
 pub(crate) async fn raw_arm_stop(state: State<'_, RawArm>, limits: Limits) -> Result<(), String> {
-    let w = state.inner.lock().await;
-    w.session()?.request(|r| Command::Stop(limits, r)).await
+    state.change_motion(|r| Command::Stop(limits, r)).await
 }
 
 #[tauri::command]
@@ -314,35 +369,45 @@ pub(crate) async fn raw_arm_move_gripper(
     state: State<'_, RawArm>,
     motion: GripperMotion,
 ) -> Result<(), String> {
-    let mut w = state.inner.lock().await;
-    w.invalidate();
-    w.session()?
-        .request(|r| Command::MoveGripper(motion, r))
+    state
+        .change_motion(|r| Command::MoveGripper(motion, r))
         .await
 }
 
 #[tauri::command]
 pub(crate) async fn raw_arm_disable_gripper(state: State<'_, RawArm>) -> Result<(), String> {
-    let w = state.inner.lock().await;
-    w.session()?.request(Command::DisableGripper).await
+    let reply = state
+        .inner
+        .lock()
+        .await
+        .session()?
+        .tx
+        .request(Command::DisableGripper);
+    reply.await
 }
 
 #[tauri::command]
 pub(crate) async fn raw_arm_release(state: State<'_, RawArm>) -> Result<(), String> {
-    let mut w = state.inner.lock().await;
-    w.invalidate();
-    w.session()?.request(Command::Release).await
+    state.change_motion(Command::Release).await
 }
 
 #[tauri::command]
 pub(crate) async fn raw_arm_disconnect(state: State<'_, RawArm>) -> Result<(), String> {
-    let mut w = state.inner.lock().await;
-    if let Some(session) = &w.session {
-        session.request(Command::Close).await?;
-        if let Some(session) = w.session.take() {
-            let _ = session.task.await;
+    let (tx, reply) = {
+        let w = state.inner.lock().await;
+        let Some(session) = w.session.as_ref() else {
+            return Ok(());
+        };
+        if state.driving() {
+            return Err("Support the arm and release the drives before disconnecting".into());
         }
+        (session.tx.clone(), session.tx.request(Command::Close))
+    };
+    reply.await?;
+    let mut w = state.inner.lock().await;
+    if let Some(session) = w.session.take_if(|s| s.tx.same_session(&tx)) {
+        let _ = session.task.await;
+        w.invalidate();
     }
-    w.invalidate();
     Ok(())
 }

@@ -60,8 +60,8 @@ const DEVICE_POLL_MS = 700;
 export default function App() {
   const { message } = AntdApp.useApp();
   const { t, lang } = useI18n();
-  // null = landing page (pick a tool before anything else).
   const [tool, setTool] = useState<Tool | null>(null);
+  const userPickedTool = useRef(false);
   const [connected, setConnected] = useState(false);
   const [devices, setDevices] = useState<MotorInfo[]>([]);
   const [selectedNid, setSelectedNid] = useState<number | null>(null);
@@ -79,6 +79,16 @@ export default function App() {
   const [damiaoBusy, setDamiaoBusy] = useState(false);
   const [calibrationBusy, setCalibrationBusy] = useState(false);
   const [calibrationUpdateBusy, setCalibrationUpdateBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    void rawArm.session().then(session => {
+      if (live && session && !userPickedTool.current) setTool("rawArm");
+    }).catch(() => {
+      // The tool picker is also used in a browser without the native backend.
+    });
+    return () => { live = false; };
+  }, []);
 
   useEffect(() => {
     const subscription = listen("raw-arm-close-active", () => {
@@ -220,7 +230,10 @@ export default function App() {
     [message, t]
   );
 
-  if (tool == null) return <ToolPicker onPick={setTool} />;
+  if (tool == null) return <ToolPicker onPick={picked => {
+    userPickedTool.current = true;
+    setTool(picked);
+  }} />;
 
   const selected = devices.find((d) => d.node_id === selectedNid) ?? null;
   const toolMeta = {
