@@ -234,10 +234,10 @@ async fn reread_one_axis_then_brake_and_release_during_delayed_gripper_readback(
         drives.fail_next_j3_read = true;
     }
     let feedback_task = tokio::spawn(can.clone().feedback());
-    let (model, _) = model::load(&product("firefly_y6"), Some(&product("gp80"))).unwrap();
+    let (model, info) = model::load(&product("firefly_y6"), Some(&product("gp80"))).unwrap();
     let installation = Installation {
         direction: [1; AXES],
-        offset: model::home(&model),
+        offset: info.home,
         factor: [None; AXES],
         max_torque_permille: [None; AXES],
         finger_m_per_rev: 0.04,

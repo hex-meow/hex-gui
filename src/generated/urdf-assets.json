@@ -5,9 +5,9 @@
       "kind": "arm",
       "version": "1.1.0",
       "package": "xpkg_urdf_firefly_y6",
-      "contentSha256": "7a14c706b9ad102dd27f2b3cd9319aea33d2d74728caabaed6ff84b835a329b9",
-      "packageRoot": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d",
-      "urdfUrl": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/urdf/xpkg_urdf_firefly_y6.urdf",
+      "contentSha256": "72cfe4598bc0b82820759bf260085053644761abfa9e0766bc2338adee718ec2",
+      "packageRoot": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828",
+      "urdfUrl": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828/urdf/xpkg_urdf_firefly_y6.urdf",
       "files": [
         {
           "path": "meshes/visual/base_link.STL",
@@ -46,8 +46,8 @@
         },
         {
           "path": "urdf/xpkg_urdf_firefly_y6.urdf",
-          "bytes": 7720,
-          "sha256": "f923d1f790ffc3bd7561cf9bdf43d749515a6e157961ea7cb013bd186f550291"
+          "bytes": 7727,
+          "sha256": "29ceb21ebea17c308b05ed87e503f6ff75966c341593f9abfbc429df16caf1c2"
         }
       ]
     },
@@ -90,9 +90,9 @@
       "kind": "ee",
       "version": "0.0.1",
       "package": "hex_gr80_description",
-      "contentSha256": "44718ccc3740b6302355316a49b959d1ba7748adf02dd74bc3935bbb69a4396f",
-      "packageRoot": "/urdf/packages/hex_gr80_description/0.0.1/44718ccc3740b630",
-      "urdfUrl": "/urdf/packages/hex_gr80_description/0.0.1/44718ccc3740b630/urdf/gr80.urdf",
+      "contentSha256": "853325dac63714f8c88eb53e27d8a007eb29b68739f2feb155d7579264bf9736",
+      "packageRoot": "/urdf/packages/hex_gr80_description/0.0.1/853325dac63714f8",
+      "urdfUrl": "/urdf/packages/hex_gr80_description/0.0.1/853325dac63714f8/urdf/gr80.urdf",
       "files": [
         {
           "path": "meshes/visual/Link_1.stl",
@@ -117,7 +117,7 @@
         {
           "path": "urdf/gr80.urdf",
           "bytes": 6791,
-          "sha256": "f74b3e76b14175c788c5ef70dd0c1941958d229a8461da6f20e17543e4ba1114"
+          "sha256": "dd2291b8db1d4b6443f2d05d300bbffecb0fd792ca25015f385e571b4cc56ebe"
         }
       ]
     },
@@ -153,20 +153,20 @@
     }
   },
   "packageRoots": {
-    "xpkg_urdf_firefly_y6": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d",
+    "xpkg_urdf_firefly_y6": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828",
     "hex_gp80_description": "/urdf/packages/hex_gp80_description/0.2.0/2f7948bfb2e0dd37",
-    "hex_gr80_description": "/urdf/packages/hex_gr80_description/0.0.1/44718ccc3740b630",
+    "hex_gr80_description": "/urdf/packages/hex_gr80_description/0.0.1/853325dac63714f8",
     "hex_lifta70_description": "/urdf/packages/hex_lifta70_description/0.0.1/812556460ddd7b6e"
   },
   "legacyMeshAliases": {
     "/urdf/packages/hex_gp80_description/0.2.0/2f7948bfb2e0dd37/meshes/visual/base_link.STL": "/urdf/packages/hex_gp80_description/0.2.0/2f7948bfb2e0dd37/meshes/visual/base_link.stl",
-    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/base_link.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/visual/base_link.STL",
-    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/link_1.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/visual/link_1.STL",
-    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/link_2.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/visual/link_2.STL",
-    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/link_3.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/visual/link_3.STL",
-    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/link_4.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/visual/link_4.STL",
-    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/link_5.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/visual/link_5.STL",
-    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/link_6.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/7a14c706b9ad102d/meshes/visual/link_6.STL"
+    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828/meshes/base_link.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828/meshes/visual/base_link.STL",
+    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828/meshes/link_1.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828/meshes/visual/link_1.STL",
+    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828/meshes/link_2.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828/meshes/visual/link_2.STL",
+    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828/meshes/link_3.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828/meshes/visual/link_3.STL",
+    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828/meshes/link_4.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828/meshes/visual/link_4.STL",
+    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828/meshes/link_5.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828/meshes/visual/link_5.STL",
+    "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828/meshes/link_6.STL": "/urdf/packages/xpkg_urdf_firefly_y6/1.1.0/72cfe4598bc0b828/meshes/visual/link_6.STL"
   },
-  "assetSetSha256": "32696c79664cdfffd01a6cd9ed0f6bd46c83d7a11da50af1de3be0754444ec05"
+  "assetSetSha256": "eb3adc2967e8616c84023b8f4f21773226321bc2a7c27403ada7a32be286ba39"
 }

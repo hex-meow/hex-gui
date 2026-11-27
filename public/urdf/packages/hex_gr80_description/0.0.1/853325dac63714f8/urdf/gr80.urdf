@@ -30,7 +30,7 @@
     <!-- 占位惯量(trial):质量/质心未实测——正式值随结构重导出 + 铭牌单台标定(11 §7) -->
     <inertial>
       <origin xyz="0 0 0.04" rpy="0 0 0"/>
-      <mass value="0.30"/>
+      <mass value="0.48"/>
       <inertia ixx="2.0e-4" ixy="0" ixz="0" iyy="2.0e-4" iyz="0" izz="2.0e-4"/>
     </inertial>
     <visual>

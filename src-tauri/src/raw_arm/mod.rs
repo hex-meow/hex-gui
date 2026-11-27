@@ -228,7 +228,7 @@ pub(crate) async fn raw_arm_preview(
     let (model, start, id) = {
         let mut w = state.inner.lock().await;
         w.invalidate();
-        let (model, _) = w.model.as_ref().ok_or("Open the arm URDF first")?;
+        let (model, info) = w.model.as_ref().ok_or("Open the arm URDF first")?;
         let mut model = model.clone();
         let start = if let Some(session) = &w.session {
             let status = session.status.borrow();
@@ -242,7 +242,7 @@ pub(crate) async fn raw_arm_preview(
             }
             feedback.start()?
         } else {
-            JointState::at_rest(&model::home(&model))
+            JointState::at_rest(&info.home)
         };
         (model, start, w.revision)
     };

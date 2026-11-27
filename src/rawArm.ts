@@ -5,7 +5,7 @@ export type ToolKind = "gp80" | "gr80";
 export type Product = "firefly_y6" | ToolKind;
 interface ModelJoint { name: string; lower: number; upper: number }
 export interface MountedTool { kind: ToolKind; joint: ModelJoint }
-export interface RawModel { joints: ModelJoint[]; home: number[]; tcp: Pose; tool: MountedTool | null }
+export interface RawModel { joints: ModelJoint[]; home: number[]; folded: number[]; tcp: Pose; tool: MountedTool | null }
 export interface MotionLimits { velocity: number; acceleration: number; jerk: number }
 export interface GoalTolerance { position_rad: number; velocity_rad_s: number }
 export interface ArmGains { kp: number[]; kd: number[]; damping: number }
@@ -81,7 +81,6 @@ export const rawArm = {
 };
 
 const TAU = 2 * Math.PI;
-export const foldedQ = [0, -1.57, 3.14, 0, 0, 0];
 export const defaultGravityScale: number[] = Array(6).fill(1);
 export const defaultGoalTolerance: GoalTolerance = { position_rad: 0.005, velocity_rad_s: 0.02 };
 

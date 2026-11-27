@@ -69,10 +69,12 @@ pub(super) fn load(arm_xml: &str, tool_xml: Option<&str>) -> anyhow::Result<(Arm
     } else {
         None
     };
-    let home = home(&model);
+    let arm = urdf_rs::read_from_string(arm_xml)?;
+    let (home, folded) = preset_poses(&model, &arm);
     let info = ModelInfo {
         joints: model.joints().iter().map(JointInfo::from).collect(),
         home,
+        folded,
         tcp: pose(&model, &home)?,
         tool,
     };
@@ -99,14 +101,37 @@ impl From<&JointSpec> for JointInfo {
 #[derive(Clone, Serialize)]
 pub(crate) struct ModelInfo {
     joints: Vec<JointInfo>,
-    home: Q,
+    pub(super) home: Q,
+    folded: Q,
     tcp: Pose,
     pub(super) tool: Option<ToolInfo>,
 }
 
-pub(super) fn home(model: &ArmModel) -> Q {
+fn preset_poses(model: &ArmModel, arm: &urdf_rs::Robot) -> (Q, Q) {
     let nominal: Q = [0., -1.57, 1.57, 0., 0., 0.];
-    std::array::from_fn(|i| nominal[i].clamp(model.joints()[i].lower, model.joints()[i].upper))
+    let home =
+        std::array::from_fn(|i| nominal[i].clamp(model.joints()[i].lower, model.joints()[i].upper));
+
+    // Firefly's physical elbow angle is the J3 origin pitch plus the joint reading.
+    // Account for that pitch when computing the folded calibration pose.
+    let pitch = arm
+        .joints
+        .iter()
+        .find(|j| j.name == "joint_3")
+        .and_then(|j| {
+            let [roll, pitch, yaw] = j.origin.rpy.0;
+            let [x, y, z] = j.axis.xyz.0;
+            (j.joint_type == urdf_rs::JointType::Revolute
+                && x == 0.
+                && y > 0.
+                && z == 0.
+                && roll == 0.
+                && yaw == 0.)
+                .then_some(pitch)
+        })
+        .unwrap_or(0.);
+    let folded = [0., -1.57, 3.14 - pitch, 0., 0., 0.];
+    (home, folded)
 }
 
 #[derive(Clone, Serialize)]
@@ -298,7 +323,7 @@ mod tests {
         assert_eq!(jaw.kind, ToolKind::Gr80);
         assert_eq!(jaw.joint.name, "jaw_joint1");
         assert_eq!((jaw.joint.lower, jaw.joint.upper), (0., 0.6));
-        let q = [0.2, -0.35, 1.45, 0.1, -0.25, 0.2];
+        let q = [0.2, -0.35, -0.12, 0.1, -0.25, 0.2];
         for m in [&mounted, &rotary] {
             let tool_delta = bare.flange_pose(&q).unwrap().inverse() * m.tcp_pose(&q).unwrap();
             assert!((tool_delta.translation.vector.z - 0.13).abs() < 1e-6);
@@ -363,8 +388,8 @@ mod tests {
     #[test]
     fn parked_feedback_seeds_joint_and_tcp_previews_within_the_limits() {
         let (model, _) = load(&product("firefly_y6"), Some(&product("gp80"))).unwrap();
-        let measured = [0., -1.5719, 3.1404, 0., 0., 0.];
-        let boundary = [0., -1.57, 3.14, 0., 0., 0.];
+        let measured = [0., -1.5719, 1.5704, 0., 0., 0.];
+        let boundary = [0., -1.57, 1.57, 0., 0., 0.];
         let (actual, seed) = feedback_poses(&model, &measured).unwrap();
         let PreviewSeed::Ready { q, tcp } = &seed else {
             panic!("expected a valid parked pose")
@@ -411,10 +436,61 @@ mod tests {
     }
 
     #[test]
+    fn firefly_models_share_home_joint_angles_and_the_physical_folded_pose() {
+        let xml = product("firefly_y6");
+        let (arm, info) = load(&xml, None).unwrap();
+        let j3 = &info.joints[2];
+        assert_eq!((j3.lower, j3.upper), (-1.57, 1.57));
+        assert_eq!(info.home, [0., -1.57, 1.57, 0., 0., 0.]);
+        assert_eq!(info.folded, [0., -1.57, 1.57, 0., 0., 0.]);
+
+        let mut robot = urdf_rs::read_from_string(&xml).unwrap();
+        let j3 = robot
+            .joints
+            .iter_mut()
+            .find(|j| j.name == "joint_3")
+            .unwrap();
+        j3.origin.rpy.0[1] = 0.;
+        j3.limit.lower = 0.;
+        j3.limit.upper = 3.14;
+        let (old_arm, old) = load(&urdf_rs::write_to_string(&robot).unwrap(), None).unwrap();
+        assert_eq!(old.home, info.home);
+        assert_eq!(old.folded, [0., -1.57, 3.14, 0., 0., 0.]);
+
+        let tcp = arm.tcp_pose(&info.folded).unwrap();
+        let old_tcp = old_arm.tcp_pose(&old.folded).unwrap();
+        let distance = (tcp.translation.vector - old_tcp.translation.vector).norm();
+        let angle = tcp.rotation.angle_to(&old_tcp.rotation);
+        // The serial FK solver computes link transforms in single precision.
+        assert!(distance < 1e-6, "TCP positions differ by {distance} m");
+        assert!(angle < 1e-6, "TCP rotations differ by {angle} rad");
+    }
+
+    #[test]
+    fn other_imported_joint_axes_and_origins_keep_the_original_presets() {
+        let xml = product("firefly_y6");
+        let mut robot = urdf_rs::read_from_string(&xml).unwrap();
+        for (axis, origin) in [
+            ([0., -1., 0.], [0., 1.57, 0.]),
+            ([0., 1., 0.], [0.1, 1.57, 0.]),
+        ] {
+            let j3 = robot
+                .joints
+                .iter_mut()
+                .find(|j| j.name == "joint_3")
+                .unwrap();
+            j3.axis.xyz.0 = axis;
+            j3.origin.rpy.0 = origin;
+            let (_, info) = load(&urdf_rs::write_to_string(&robot).unwrap(), None).unwrap();
+            assert_eq!(info.home[2], 1.57);
+            assert_eq!(info.folded[2], 3.14);
+        }
+    }
+
+    #[test]
     fn initial_stationary_preview_has_a_visible_endpoint() {
         let (model, info) = load(&product("firefly_y6"), Some(&product("gp80"))).unwrap();
         let q = info.home;
-        assert_eq!(q, [0., -1.57, 1.57, 0., 0., 0.]);
         let stationary = plan(
             &model,
             JointState::at_rest(&q),

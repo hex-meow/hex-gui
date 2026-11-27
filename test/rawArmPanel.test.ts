@@ -62,7 +62,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function panel(t: TestContext) {
+function panel(t: TestContext, lang = "en") {
   let node: any;
   t.after(() => { if (node) act(() => node.unmount()); });
   function installGlobal(key: string, value: unknown) {
@@ -96,7 +96,7 @@ function panel(t: TestContext) {
   const defaults: RawArmPreferences = api.defaultRawArmPreferences();
   const pose = { xyz: [0, 0, 0.2], rpy: [0, 0, 0] };
   const q = Array(6).fill(0);
-  const model = { joints: q.map((_, i) => ({ name: `joint_${i + 1}`, lower: -3, upper: 3 })), home: q, tcp: pose,
+  const model = { joints: q.map((_, i) => ({ name: `joint_${i + 1}`, lower: -3, upper: 3 })), home: q, folded: [0, -1.57, 1.57, 0, 0, 0], tcp: pose,
     tool: { kind: "gp80", joint: { name: "finger_joint1", lower: 0, upper: 0.04 } } };
   const factory: FactoryReading[] = q.map(() => ({ state: "valid", factor: 1 }));
   const session = { iface: "can0", data_bitrate: 5000000, arm_xml: "<robot />", tool_xml: "<tool />", model, factory, gravity_scale: q.map(() => 1),
@@ -111,7 +111,7 @@ function panel(t: TestContext) {
     .map(k => [k, k]));
   hosts.App = { useApp: () => ({ message: { success() {} } }) };
   hosts.Collapse = ({ items }: any) => items.map((item: any) => React.createElement("section", { key: item.key }, item.children));
-  const mocks = { antd: hosts, "../i18n": { useI18n: () => ({ lang: "en" }) }, "../rawArm": { ...api, assembledUrdf: () => "assembled" } };
+  const mocks = { antd: hosts, "../i18n": { useI18n: () => ({ lang }) }, "../rawArm": { ...api, assembledUrdf: () => "assembled" } };
   const settings = load("../src/components/RawArmSettings.tsx", mocks);
   const { RawArmPanel } = load("../src/components/RawArmPanel.tsx", {
     ...mocks, "../api": { errMsg: String }, "../canProfile": { isGsUsbSpec: () => false },
@@ -130,8 +130,39 @@ function panel(t: TestContext) {
     input: (label: string) => node.root.findAllByType("InputNumber").find((item: any) => item.props["aria-label"] === label),
     get settings() { return node.root.findByType(settings.RawArmSettings).props; },
     get gripper() { return node.root.findByType("Gripper").props; },
+    get paragraphs() { return node.root.findAllByType("p").map((item: any) => item.props.children); },
     get alerts() { return node.root.findAllByType("Alert").map((item: any) => item.props.message); },
   };
+}
+
+for (const { version, foldedJ3, lang } of [
+  { version: "current", foldedJ3: 1.57, lang: "zh" },
+  { version: "legacy", foldedJ3: 3.14, lang: "en" },
+]) {
+  test(`folded calibration displays the ${version} model pose and sends its offsets`, async t => {
+    const p = panel(t, lang);
+    p.session.model.joints[2] = { name: "joint_3", lower: version === "legacy" ? 0 : -1.57, upper: foldedJ3 };
+    p.session.model.folded[2] = foldedJ3;
+    p.status.feedback.q = [0.125, 0, 0.5, 0, 0, 0];
+    const offset = [0.25, 0, 0.25, 0, 0, 0];
+    p.ipc.raw_arm_offsets = () => undefined;
+    if (version === "legacy") {
+      p.session.installation.offset = offset;
+      p.ipc.raw_arm_session = () => p.session;
+      await p.open();
+    } else {
+      await p.open();
+      act(() => p.settings.change({ ...p.defaults, installation: { ...p.defaults.installation, offset } }));
+      await act(async () => { p.button("连接并初始化").props.onClick(); });
+    }
+    const target = `[0, -1.57, ${foldedJ3}, 0, 0, 0] rad`;
+    assert.ok(p.paragraphs.some((text: unknown) => typeof text === "string" && text.includes(target)));
+    const button = p.button(lang === "zh" ? "以当前折叠姿态计算六轴零偏" : "Set joint offsets from the current folded pose");
+    assert.equal(button.props.disabled, false);
+    await act(async () => { button.props.onClick(); });
+    assert.deepEqual(p.calls.filter(c => c.command === "raw_arm_offsets").map(c => c.args),
+      [{ offsets: [0.125, -1.57, foldedJ3 - 0.25, 0, 0, 0] }]);
+  });
 }
 
 test("opening starts with source defaults, reconnect keeps edits, and a live session restores its effective settings", async t => {

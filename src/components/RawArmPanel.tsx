@@ -3,7 +3,7 @@ import { Alert, App, Button, Card, Checkbox, Input, InputNumber, Segmented, Sele
 import { errMsg } from "../api";
 import { isGsUsbSpec, STANDARD_DATA_BITRATES } from "../canProfile";
 import { useI18n } from "../i18n";
-import { assembledUrdf, defaultGoalTolerance, defaultGravityScale, defaultRawArmPreferences, foldedQ, importProductUrdf, rawArm, type ArmFeedback, type ArmStatus, type ArmTarget, type FactoryReading, type GoalTolerance, type Pose, type Product, type RawModel, type ToolKind } from "../rawArm";
+import { assembledUrdf, defaultGoalTolerance, defaultGravityScale, defaultRawArmPreferences, importProductUrdf, rawArm, type ArmFeedback, type ArmStatus, type ArmTarget, type FactoryReading, type GoalTolerance, type Pose, type Product, type RawModel, type ToolKind } from "../rawArm";
 import { useRawArmPreview } from "../useRawArmPreview";
 import { URDF_ASSET_PRODUCTS } from "../urdfModelLoader";
 import { RawArmPreview } from "./RawArmPreview";
@@ -79,6 +79,7 @@ export function RawArmPanel() {
   const [revision, setRevision] = useState(0);
   const seedFromBus = useRef(false);
   const feedback = status?.feedback ?? null;
+  const folded = model?.info.folded;
   const liveSeed = feedback?.preview_seed;
   const measuredTarget = liveSeed && "q" in liveSeed ? liveSeed : null;
   const feedbackError = liveSeed && "error" in liveSeed ? liveSeed.error : null;
@@ -233,6 +234,11 @@ export function RawArmPanel() {
     seedFromBus.current = true; setRevision(n => n + 1);
     message.success(zh ? "已更新上位机关节零偏" : "Host joint offsets updated");
   }
+  async function alignFoldedPose() {
+    if (!folded || !feedback) return;
+    const offsets = folded.map((target, i) => prefs.installation.offset[i] + target - feedback.q[i]);
+    await applyOffsets(offsets);
+  }
   async function applyGravityScale() {
     if (!validScale) throw new Error(zh ? "请输入六个非负的补偿系数。" : "Enter six nonnegative gravity scales.");
     await rawArm.setGravityScale(validScale);
@@ -354,9 +360,9 @@ export function RawArmPanel() {
       canReread={connected && status?.mode === "monitor" && !busy} readingNode={readingNode}
       reread={nodeId => void action(() => rereadFactory(nodeId))}
       canEditGoalTolerance={initializedView && !busy} applyGoalTolerance={v => void action(() => applyGoalTolerance(v))}
-      canAlign={!!feedback && mode === "monitor" && !busy}
+      canAlign={!!feedback && mode === "monitor" && !busy} folded={folded}
       applyOffsets={offsets => void action(() => applyOffsets(offsets))}
-      align={() => { if (feedback) void action(() => applyOffsets(prefs.installation.offset.map((o, i) => o + foldedQ[i] - feedback.q[i]))); }}
+      align={() => void action(alignFoldedPose)}
       gravityControls={<>
         <div className="raw-arm__fields raw-arm__gravity-scales">
           {gravityScale.map((value, i) => <label key={i}>J{i + 1}

@@ -55,10 +55,10 @@ function factoryValue(reading: FactoryReading | undefined, zh: boolean) {
   </>;
 }
 
-export function RawArmSettings({ prefs, change, connected, toolKind, factory, canReread, readingNode, reread, canAlign, align, applyOffsets, gravityControls, canEditGoalTolerance, applyGoalTolerance }: {
+export function RawArmSettings({ prefs, change, connected, toolKind, factory, canReread, readingNode, reread, canAlign, folded, align, applyOffsets, gravityControls, canEditGoalTolerance, applyGoalTolerance }: {
   prefs: RawArmPreferences; change: (p: RawArmPreferences) => void; connected: boolean; toolKind: ToolKind | null;
   factory: FactoryReading[]; canReread: boolean; readingNode: number | null; reread: (nodeId: number) => void;
-  canAlign: boolean; align: () => void; applyOffsets: (offset: number[]) => void;
+  canAlign: boolean; folded?: number[]; align: () => void; applyOffsets: (offset: number[]) => void;
   gravityControls: ReactNode; canEditGoalTolerance: boolean; applyGoalTolerance: (value: GoalTolerance) => void;
 }) {
   const { lang } = useI18n();
@@ -134,13 +134,13 @@ export function RawArmSettings({ prefs, change, connected, toolKind, factory, ca
         </tr>)}</tbody></table></div>
         <p>{zh ? "启用位置保持或拖动时应用增益。未填写覆盖值的轴使用出厂力矩系数，电机确认缺少标定时使用 1.0。零偏按本机安装标定。" :
           "Gains take effect when entering hold or hand-guiding. An axis with no override uses its factory torque factor, or 1.0 if the motor reports missing calibration. Offsets are installation-specific."}</p>
-        <div className="raw-arm__actions"><Button size="small" disabled={!canAlign} onClick={align}>{zh ? "以当前折叠姿态计算六轴零偏" : "Set joint offsets from the current folded pose"}</Button>
+        <div className="raw-arm__actions"><Button size="small" disabled={!canAlign || !folded} onClick={align}>{zh ? "以当前折叠姿态计算六轴零偏" : "Set joint offsets from the current folded pose"}</Button>
           {connected && offsets.some((v, i) => v !== installation.offset[i]) && <Button size="small" disabled={!canAlign} onClick={() => applyOffsets(offsets)}>
             {zh ? "应用编辑的零偏" : "Apply edited offsets"}
           </Button>}
         </div>
-        <p>{zh ? "仅在实际姿态为 [0, −1.57, 3.14, 0, 0, 0] rad 时使用。此操作只更新上位机坐标。" :
-          "Use at the physical pose [0, −1.57, 3.14, 0, 0, 0] rad. This updates the host coordinates."}</p>
+        {folded && <p>{zh ? `仅在实际姿态为 [${folded.join(", ")}] rad 时使用。此操作只更新上位机坐标。` :
+          `Use at the physical pose [${folded.join(", ")}] rad. This updates the host coordinates.`}</p>}
         {toolKind === "gp80" && <div className="raw-arm__fields">
           <label>{zh ? "GP80 单指位移" : "GP80 single-finger travel"} · mm/rev
             <InputNumber disabled={connected} value={installation.finger_m_per_rev * 1000} step={0.1}
