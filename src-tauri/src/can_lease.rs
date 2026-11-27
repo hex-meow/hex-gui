@@ -16,6 +16,7 @@ use can_transport::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CanOwner {
     Manager,
+    RawArm,
     Analyzer,
     DfuDiscovery,
     DfuUpdate,
@@ -25,6 +26,7 @@ impl fmt::Display for CanOwner {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Manager => "the normal CAN session",
+            Self::RawArm => "Hex-arm(Raw CAN)",
             Self::Analyzer => "CAN Analyzer",
             Self::DfuDiscovery => "CAN firmware discovery",
             Self::DfuUpdate => "CAN firmware update",

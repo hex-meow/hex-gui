@@ -48,6 +48,9 @@ getrandom = "0.3"
 chrono = "0.4"
 # Published driver with 3525 support and protocol-aware position presets.
 hex-motor = "0.3.2"
+# The Raw CAN arm uses the unified batch initializer in hex-arm's sibling hex-motor.
+hex-arm = { path = "../../hex-arm" }
+urdf-rs = "0.10"
 
 # Public, secret-free runtime for the current HPM USB Bootloader. It owns the
 # strict legacy profile/package parser and flash state machine; the Tauri

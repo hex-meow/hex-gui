@@ -519,6 +519,11 @@ const STRINGS = {
     zh: "通过 Zenoh 连接 hex-controller：自动发现底盘、取得控制权、移动——产品化的 robot_api 路径。",
   },
   toolArmZenoh: { en: "Arm (Zenoh)", zh: "Arm (Zenoh)" },
+  toolRawArm: { en: "Hex-arm(Raw CAN)", zh: "Hex-arm(Raw CAN)" },
+  toolRawArmDesc: {
+    en: "Preview joint and TCP trajectories, control GP80 or GR80 grippers, and use gravity-compensated hand-guiding over CAN FD.",
+    zh: "通过 CAN FD 预览关节或末端轨迹，控制 GP80 或 GR80 夹爪，并使用重力补偿拖动机械臂。",
+  },
   toolArmZenohDesc: {
     en: "Digital twin, gravity compensation, gravity setup and preset postures.",
     zh: "机械臂数字孪生、重力补偿、设置重力与预设位姿。",

@@ -39,9 +39,21 @@ tauri-test/
 
 ## Prerequisites
 
-The `hex-motor` 0.3.2 driver, including 3525 support and position presets,
-is downloaded from crates.io. `src-tauri/Cargo.lock` pins the resolved version
-and package checksum for local and CI builds.
+The GUI's direct `hex-motor` dependency comes from crates.io. Version 0.3.2
+includes 3525 support and position presets. `src-tauri/Cargo.lock` pins the
+registry version and checksum.
+
+To build **Hex-arm(Raw CAN)**, place the `hex-arm` and `hex-motor` checkouts
+alongside `hex-gui`. Use the `hex-arm` checkout whose `ArmBus::initialize` calls
+`MeowMotorManager::initialize` with per-node options. It configures the six
+arm joints and the optional gripper in one batch. The installed
+application includes the Firefly Y6, GP80 and GR80 URDFs and visual meshes.
+Select the bare arm or mount either gripper. GP80 targets use full opening
+in millimetres. GR80 targets use the angle of one jaw in radians. The bundled
+GR80 model spans 0 to 0.6 rad and provides the nominal encoder scale of
+2.4 rad/rev. Set the signed scale and zero offset for the installed gripper
+under installation calibration. Each new run of this tool starts with
+the built-in settings. Reconnecting within the open panel keeps the edits for that run.
 
 ### 1. System libraries (Linux)
 
@@ -261,7 +273,8 @@ a maintainer may explicitly delete and recreate both.
 > env vars.
 >
 > **Fresh-checkout inputs** (see the header comment in the workflow):
-> The motor driver resolves from crates.io using `src-tauri/Cargo.lock`.
+> The direct motor driver resolves from crates.io. The Raw CAN arm uses the
+> sibling `hex-arm` and `hex-motor` checkouts described above.
 > CI checks out the verified `hex-meow/hex-robot-proto` contract at commit
 > `6848962` via `ROBOT_PROTO_DIR`.
 

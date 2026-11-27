@@ -1,0 +1,68 @@
+.raw-arm { display: grid; gap: 16px; padding: 16px; align-content: start; }
+.raw-arm__connection, .raw-arm__settings { padding: 14px 18px; border: 1px solid #343944; border-radius: 8px; }
+.raw-arm__connection, .raw-arm__fields { display: flex; align-items: end; flex-wrap: wrap; gap: 10px 16px; }
+.raw-arm__connection label, .raw-arm__fields label { display: grid; gap: 5px; font-size: 12px; }
+.raw-arm__connection .ant-input { width: 132px; }
+.raw-arm__connection .ant-tag { align-self: end; line-height: 28px; }
+.raw-arm__workspace { display: grid; grid-template-columns: minmax(320px, 1.35fr) minmax(360px, 1fr); gap: 16px; }
+.raw-arm .ant-card-body { padding: 16px; }
+.raw-arm h3 { font-size: 14px; margin: 18px 0 10px; }
+.raw-arm__settings > h3 { margin-top: 0; }
+.raw-arm__legend { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.raw-arm__legend i { width: 10px; height: 10px; background: #dae1e8; border-radius: 2px; }
+.raw-arm__legend i:nth-of-type(2) { margin-left: 8px; background: #44dd8860; border: 1px solid #44dd88; }
+.raw-arm__empty { height: 440px; display: grid; place-items: center; }
+.raw-arm__viewport { position: relative; }
+.raw-arm__readout {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  background: rgba(18, 21, 27, 0.62);
+  color: rgba(245, 248, 252, 0.85);
+  font-size: 11px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  user-select: none;
+}
+.raw-arm__readout dl { margin: 3px 0 0; }
+.raw-arm__readout dl > div { display: flex; justify-content: space-between; gap: 10px; }
+.raw-arm__readout dd { margin: 0; }
+.raw-arm__axes-caption {
+  position: absolute;
+  right: 0;
+  bottom: 4px;
+  width: 128px;
+  text-align: center;
+  color: #cad2df;
+  font-size: 11px;
+  pointer-events: none;
+}
+.raw-arm__playback, .raw-arm__joint { display: grid; align-items: center; gap: 10px; }
+.raw-arm__playback { grid-template-columns: auto 1fr auto; margin: 10px 0; }
+.raw-arm__playback span, .raw-arm table, .raw-arm__joint > span { font-variant-numeric: tabular-nums; }
+.raw-arm table { border-collapse: collapse; width: 100%; text-align: right; }
+.raw-arm th, .raw-arm td { padding: 5px 7px; border-bottom: 1px solid #343944; font-size: 12px; }
+.raw-arm th:first-child { text-align: left; }
+.raw-arm__detail, .raw-arm__settings p { font-size: 12px; color: #abb3c0; line-height: 1.6; margin: 10px 0 0; }
+.raw-arm__joints { display: grid; gap: 6px; margin: 14px 0; }
+.raw-arm__joint { grid-template-columns: max-content minmax(52px, 1fr) minmax(120px, 144px) 48px; }
+.raw-arm__joint > span { color: #abb3c0; text-align: right; font-size: 12px; }
+.raw-arm__fields { margin: 10px 0 14px; }
+.raw-arm__fields .ant-input-number { width: 115px; }
+.raw-arm__gravity-scales { align-items: start; }
+.raw-arm__joint .ant-input-number { width: 100%; }
+.raw-arm__joint .ant-input-number-input { padding-inline-end: 32px; }
+.raw-arm__actions { margin: 12px 0 2px; }
+.raw-arm__table-scroll { overflow-x: auto; }
+.raw-arm__factory-reading { display: flex; flex-wrap: wrap; align-items: center; justify-content: end; gap: 5px 8px; overflow-wrap: anywhere; }
+.raw-arm__settings table .ant-input-number { width: 100%; min-width: 66px; max-width: 140px; }
+.raw-arm__settings p + button { margin-top: 8px; }
+@media (max-width: 950px) { .raw-arm__workspace { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 420px) {
+  .raw-arm__joint { grid-template-columns: 1fr minmax(120px, 144px) 48px; row-gap: 2px; }
+  .raw-arm__joint > label { grid-row: span 2; }
+  .raw-arm__joint .ant-slider { grid-column: span 2; }
+}

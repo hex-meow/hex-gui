@@ -20,6 +20,8 @@ import { SmartKnobPanel } from "./components/SmartKnobPanel";
 import RobotConsole from "./components/RobotConsole";
 import { ZenohPanel } from "./components/ZenohPanel";
 import { ArmPanel } from "./components/ArmPanel";
+import { RawArmPanel } from "./components/RawArmPanel";
+import { rawArm } from "./rawArm";
 import { LiftRobotPanel } from "./components/LiftRobotPanel";
 import { ControllerConfigPanel } from "./components/ControllerConfigPanel";
 import { CanAnalyzerPanel } from "./components/CanAnalyzerPanel";
@@ -40,6 +42,7 @@ type Tool =
   | "smartknob"
   | "zenoh"
   | "arm"
+  | "rawArm"
   | "liftApi"
   | "config"
   | "canalyzer"
@@ -57,8 +60,8 @@ const DEVICE_POLL_MS = 700;
 export default function App() {
   const { message } = AntdApp.useApp();
   const { t, lang } = useI18n();
-  // null = landing page (pick a tool before anything else).
   const [tool, setTool] = useState<Tool | null>(null);
+  const userPickedTool = useRef(false);
   const [connected, setConnected] = useState(false);
   const [devices, setDevices] = useState<MotorInfo[]>([]);
   const [selectedNid, setSelectedNid] = useState<number | null>(null);
@@ -76,6 +79,25 @@ export default function App() {
   const [damiaoBusy, setDamiaoBusy] = useState(false);
   const [calibrationBusy, setCalibrationBusy] = useState(false);
   const [calibrationUpdateBusy, setCalibrationUpdateBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    void rawArm.session().then(session => {
+      if (live && session && !userPickedTool.current) setTool("rawArm");
+    }).catch(() => {
+      // The tool picker is also used in a browser without the native backend.
+    });
+    return () => { live = false; };
+  }, []);
+
+  useEffect(() => {
+    const subscription = listen("raw-arm-close-active", () => {
+      setTool("rawArm");
+      message.info(lang === "zh" ? "机械臂仍在施加重力前馈。托住机械臂并手动失能后即可关闭窗口。" :
+        "The arm is providing gravity support. Support it and release the drives to close the window.");
+    }).catch(() => undefined);
+    return () => { void subscription.then(unlisten => unlisten?.()); };
+  }, [lang, message]);
 
   useEffect(() => {
     let disposed = false;
@@ -166,6 +188,8 @@ export default function App() {
     try {
       if (tool === "dfu") {
         await Promise.all([hpmDfuApi.leave(), canDfuApi.leave(), recoveryApi.leave()]);
+      } else if (tool === "rawArm") {
+        await rawArm.disconnect();
       } else {
         await api.disconnect();
       }
@@ -206,7 +230,10 @@ export default function App() {
     [message, t]
   );
 
-  if (tool == null) return <ToolPicker onPick={setTool} />;
+  if (tool == null) return <ToolPicker onPick={picked => {
+    userPickedTool.current = true;
+    setTool(picked);
+  }} />;
 
   const selected = devices.find((d) => d.node_id === selectedNid) ?? null;
   const toolMeta = {
@@ -217,6 +244,7 @@ export default function App() {
     smartknob: { title: t("toolSmartKnob"), desc: t("toolSmartKnobDesc") },
     zenoh: { title: t("toolBaseZenoh"), desc: t("toolBaseZenohDesc") },
     arm: { title: t("toolArmZenoh"), desc: t("toolArmZenohDesc") },
+    rawArm: { title: t("toolRawArm"), desc: t("toolRawArmDesc") },
     config: { title: t("toolConfig"), desc: t("toolConfigDesc") },
     canalyzer: { title: t("toolCanalyzer"), desc: t("toolCanalyzerDesc") },
     dfu: { title: t("toolDfu"), desc: t("toolDfuDesc") },
@@ -243,6 +271,7 @@ export default function App() {
   // hopea3 / smartknob / zenoh / arm / canalyzer 都是整屏面板;zenoh/arm 走 Zenoh,
   // canalyzer 自带总线连接,都不使用顶栏的电机 ConnectBar。
   const showSidebar =
+    tool !== "rawArm" &&
     tool !== "console" &&
     tool !== "hopea3" &&
     tool !== "lift" &&
@@ -260,6 +289,7 @@ export default function App() {
     tool !== "damiao" &&
     tool !== "rollercanControl";
   const showConnectBar =
+    tool !== "rawArm" &&
     tool !== "console" &&
     tool !== "zenoh" &&
     tool !== "arm" &&
@@ -348,6 +378,8 @@ export default function App() {
             <ZenohPanel />
           ) : tool === "arm" ? (
             <ArmPanel />
+          ) : tool === "rawArm" ? (
+            <RawArmPanel />
           ) : tool === "liftApi" ? (
             <LiftRobotPanel />
           ) : tool === "config" ? (
@@ -504,6 +536,13 @@ function ToolPicker({ onPick }: { onPick: (t: Tool) => void }) {
         </ToolSection>
 
         <ToolSection title={t("catRawCanApp")} hint={t("catRawCanAppHint")}>
+          <ToolCard
+            title={t("toolRawArm")}
+            desc={t("toolRawArmDesc")}
+            tag={t("tagManipulator")}
+            accent="pink"
+            onClick={() => onPick("rawArm")}
+          />
           <ToolCard
             title={t("toolSmartKnob")}
             desc={t("toolSmartKnobDesc")}
